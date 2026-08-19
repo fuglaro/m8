@@ -17,15 +17,11 @@ and starting scripts, as bundled manifests.
 ## Commands
 
 ```bash
-m8 @mathy "Tell me about the Riemann Sphere in detail."
+m8 @mathy "Tell me about the Riemann Sphere\nin detail."
 ```
 
 ```bash
-echo "🧑Tell me about the Riemann Sphere in detail." | m8 @mathy
-```
-
-```bash
-echo "🔔mathy\n🧑Tell me about the Riemann Sphere in detail." | m8
+echo "Tell me about the Riemann Sphere\nin detail." | m8 @mathy
 echo "==="
 cat ".m8/+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9"
 ```
@@ -34,29 +30,32 @@ cat ".m8/+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9"
 🧠+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9
 ===
 🔔mathy
-🧑Tell me about the Riemann Sphere in detail.
+🧑Tell me about the Riemann Sphere
+  in detail.
 🤖The Riemann Sphere is a ...
 🧠+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9
 ```
 
 ```bash
-m8 @+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9 "Tell me more."
+m8 🧠+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9 "Tell me more."
 echo "==="
 cat ".m8/+/E3C39A39-8ED3-4F4B-A7F1-32DA0DA0AF76"
 ```
 ```
-🤖Additionally, ...
+🤖Additionally,
+  ...
 🧠+/E3C39A39-8ED3-4F4B-A7F1-32DA0DA0AF76
 ===
 🔔+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9
 🧑Tell me more.
-🤖Additionally, ...
+🤖Additionally,
+  ...
 🧠+/E3C39A39-8ED3-4F4B-A7F1-32DA0DA0AF76
 ```
 
-* 🧠 Saves to the nearest existing m8 config folder.
+* @/🧠 References a save to the nearest existing m8 config folder.
 * If a tty is connected, iteractive mode is activated,
-  which steams tokens without buffering.
+  which streams tokens without buffering.
 
 ## Language and Schema
 
@@ -67,25 +66,25 @@ Agent definition:
 🔔Include Skill, Agent Name or Model
 🔧Allow Tool Name
 📐Tool Name🔹Tool Description
-📦Required Property Name🔹Type🔹Description
-🎁Optional Property Name🔹Type🔹Description
+  📦Required Property Name🔹Type🔹Description
+  🎁Optional Property Name🔹Type🔹Description
 📐Tool Name🔹Tool Description
-📦Property Name🔹Enum Val|...🔹Enums have |
-📦Property Name🔹Type[]🔹Arrays suffix []
-📦Parent Name🔹object🔹Mandatory Parent Def
-📦Parent Name.Property Name🔹Type🔹Nested
+  📦Property Name🔹Enum Val|...🔹Enums have |
+  📦Property Name🔹Type[]🔹Arrays suffix []
+  📦Parent Name🔹object🔹Mandatory Parent Def
+  📦Parent Name.Property Name🔹Type🔹Nested
 💻System Prompt
-The separators for this language consist of
-a newline immediately followed by a unicode
-character from the set exemplified here.
-Use a U+2063 (Invisible Separator) between
-the newline and any of the special unicode
-characters to escape.
-A 🔹 is used to separate fixed numbers of
-fields in structured lines, while being
-safely usable in the last field.
+  The separators for this language consist of
+  a newline immediately followed by a unicode
+  character from the set exemplified here.
+  Blocks can continue by adding a double
+  space after the newline,
+  which will be ignored.
+  A 🔹 is used to separate fixed numbers of
+  fields in structured lines, while being
+  safely usable in the last field.
 💻Included Agents inject Tools and System
-Prompts.
+  Prompts.
 🧠Saved as Agent Name
 ```
 
@@ -99,7 +98,7 @@ Query:
 🤖Assistant Content Text
 📞Tool Request Type🔹Call ID
 📞Tool Request Type🔹Call ID
-🧩Tool Property Name🔹Value encoded as string
+  📦Tool Property Name🔹Value encoded as string
 🚫Call ID🔹Error response
 📃Call ID🔹Text response
 ```
@@ -107,16 +106,13 @@ Query:
 Simple eample query with definition:
 
 ```m8
-📖local/Ternary-Bonsai-8B-mlx-2bit
+🔔local/Ternary-Bonsai-8B-mlx-2bit
 💻You are a mathematics expert that will answer questions,
-give insight, and advise on any relevant technique.
-Describe concepts with analogies and spacial models
-that can be imagined by a human and include how it relates
-to the components, equations, and relationships in
-the mathematical equations.
-🧠mathy
-
-🔔mathy
+  give insight, and advise on any relevant technique.
+  Describe concepts with analogies and spacial models
+  that can be imagined by a human and include how it relates
+  to the components, equations, and relationships in
+  the mathematical equations.
 🧑Tell me about the Riemann Sphere in detail.
 ```
 
@@ -199,3 +195,4 @@ will also be accessible.
 brew tap jundot/omlx https://github.com/jundot/omlx
 brew install jundot/omlx/omlx --with-custom-kernel --with-grammar
 ```
+

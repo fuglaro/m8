@@ -1,0 +1,7 @@
+.{
+    .name = .m8,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0xb988bf8b73553207,
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}

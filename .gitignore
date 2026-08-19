@@ -1,2 +1,3 @@
-pi/agent/sessions
 scratch
+.zig-cache
+zig-out
