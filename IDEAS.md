@@ -7,9 +7,9 @@ and can be composed into coding and agentic harnesses.
 It is fearcly opinionated on simplicity, modularity,
 composability, and separation so it can be utterly
 void of any opinion on model, prompt, tool,
-or agent structures. That it handed carfully to
+or agent structures. That is handed carfully to
 the user in structures that are easily crafted,
-generated, shared, and provided as defaults.
+generated, shared, and also provided as defaults.
 
 Buds compose entire collections of agents, skills,
 and starting scripts, as bundled manifests.
@@ -20,14 +20,51 @@ and starting scripts, as bundled manifests.
 m8 @mathy "Tell me about the Riemann Sphere in detail."
 ```
 
+```bash
+echo "🧑Tell me about the Riemann Sphere in detail." | m8 @mathy
+```
+
+```bash
+echo "🔔mathy\n🧑Tell me about the Riemann Sphere in detail." | m8
+echo "==="
+cat ".m8/+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9"
+```
+```
+🤖The Riemann Sphere is a ...
+🧠+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9
+===
+🔔mathy
+🧑Tell me about the Riemann Sphere in detail.
+🤖The Riemann Sphere is a ...
+🧠+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9
+```
+
+```bash
+m8 @+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9 "Tell me more."
+echo "==="
+cat ".m8/+/E3C39A39-8ED3-4F4B-A7F1-32DA0DA0AF76"
+```
+```
+🤖Additionally, ...
+🧠+/E3C39A39-8ED3-4F4B-A7F1-32DA0DA0AF76
+===
+🔔+/0A9C9680-6CC1-46F0-BFF8-50B02BA1D9B9
+🧑Tell me more.
+🤖Additionally, ...
+🧠+/E3C39A39-8ED3-4F4B-A7F1-32DA0DA0AF76
+```
+
+* 🧠 Saves to the nearest existing m8 config folder.
+* If a tty is connected, iteractive mode is activated,
+  which steams tokens without buffering.
+
 ## Language and Schema
 
 Agent definition:
 
 ```m8
-🧠Agent or Model
-📖Include Agent or Model
-📖Include Agent or Model
+🔔Include Skill, Agent Name or Model
+🔔Include Skill, Agent Name or Model
 🔧Allow Tool Name
 📐Tool Name🔹Tool Description
 📦Required Property Name🔹Type🔹Description
@@ -49,6 +86,7 @@ fields in structured lines, while being
 safely usable in the last field.
 💻Included Agents inject Tools and System
 Prompts.
+🧠Saved as Agent Name
 ```
 
 Query:
@@ -69,7 +107,6 @@ Query:
 Simple eample query with definition:
 
 ```m8
-🧠mathy
 📖local/Ternary-Bonsai-8B-mlx-2bit
 💻You are a mathematics expert that will answer questions,
 give insight, and advise on any relevant technique.
@@ -77,6 +114,7 @@ Describe concepts with analogies and spacial models
 that can be imagined by a human and include how it relates
 to the components, equations, and relationships in
 the mathematical equations.
+🧠mathy
 
 🔔mathy
 🧑Tell me about the Riemann Sphere in detail.
