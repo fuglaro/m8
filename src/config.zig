@@ -2,8 +2,10 @@
 //!
 //! Config directories are searched nearest first: every `.m8/` from the
 //! working directory upward, the way git finds `.git`, then the user's own.
-//! Nearest wins, key by key, so a project can override one provider without
-//! restating the rest.
+//!
+//! A file is taken from the nearest directory that has one. `providers.json`
+//! is the exception: those merge key by key, so a project can override a
+//! single provider without restating the rest.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

@@ -1,7 +1,7 @@
 //! `>cat` — parse a document and write it back.
 //!
 //! Pure filter, no terminal, no network. It earns its place as the thing that
-//! proves a document survives a round trip: line endings normalised, escapes
+//! proves a document survives a round trip: line endings normalised, indents
 //! reapplied, nothing else touched.
 
 const std = @import("std");

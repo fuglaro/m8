@@ -10,24 +10,19 @@ const std = @import("std");
 pub const range_lo: u21 = 0x1F300;
 pub const range_hi: u21 = 0x1FAFF;
 
-/// U+2063 INVISIBLE SEPARATOR. Escapes a content line that starts with a
-/// sigil. Not a sigil itself, so its width never enters sigil arithmetic.
-pub const escape = "\u{2063}";
-
 /// U+1F539 SMALL BLUE DIAMOND. Separates fields within a structured line.
 pub const field_sep = "\u{1F539}";
 
 pub const Sigil = enum {
-    // definition
+    // definition. `agent` names an agent — a skill, a model, or a parent turn
+    // is one too — and naming one is how you use it. Identity comes from the
+    // file, so nothing ever declares its own name.
     agent,
-    include,
     allow,
     tool,
     required,
     optional,
     system,
-    // query
-    address,
     user,
     thought,
     meta,
@@ -51,13 +46,11 @@ pub const Sigil = enum {
     pub fn bytes(s: Sigil) []const u8 {
         return switch (s) {
             .agent => "\u{1F9E0}",
-            .include => "\u{1F4D6}",
             .allow => "\u{1F527}",
             .tool => "\u{1F4D0}",
             .required => "\u{1F4E6}",
             .optional => "\u{1F381}",
             .system => "\u{1F4BB}",
-            .address => "\u{1F514}",
             .user => "\u{1F9D1}",
             .thought => "\u{1F4AD}",
             .meta => "\u{1F50F}",
@@ -105,8 +98,4 @@ test "every sigil is inside the reserved range" {
 test "the field separator is reserved but is not a sigil" {
     try std.testing.expect(inReservedRange(field_sep));
     try std.testing.expect(match(field_sep) == null);
-}
-
-test "the escape sits outside the range" {
-    try std.testing.expect(!inReservedRange(escape));
 }

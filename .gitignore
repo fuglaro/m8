@@ -1,3 +1,5 @@
 scratch
 .zig-cache
 zig-out
+.m8/+/
+.m8/=/
