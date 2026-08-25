@@ -1,0 +1,135 @@
+(version 1)
+
+;; This operates as a template where
+;; lines ending in ;;!! !with ... are added
+;; UNLESS the associated WITH feature is
+;; activated.
+
+;; Note that behavior defaults to full access!
+;; Use template flags to restrict.
+;; Things not restricted:
+;;  - environment variables (inherited in full),
+;;  - resource limits,
+;;  - process execution.
+
+;; TEMPLATE FLAGS
+;;
+;; Each flag REMOVES the lines tagged with it. Flags only ever
+;; subtract, so any combination is safe and order never matters.
+;;
+;; Filesystem reads
+;;   contain-reads   no reading outside cwd, TMP, system and
+;;                   tool dirs (/opt/homebrew, /usr/local, ...)
+;;   private         as above, and tool dirs go too; also revokes
+;;                   the blanket XPC lookup that system.sb grants
+;;
+;; Filesystem writes
+;;   contain-writes  writes confined to cwd and TMP
+;;   no-writes       nothing is writable, including TMP
+;;
+;; Network
+;;   airgap          no internet; loopback and unix sockets stay
+;;   no-loop         no loopback or unix sockets; internet stays
+;;
+;; Levels (compositions of the above)
+;;   sandbox         private + contain-writes + no-loop.
+;;                   Internet allowed; cwd and TMP writable.
+;;   jail            sandbox, and no internet either.
+;;
+;; Always allowed, in every mode:
+;;   reads of system dirs and the standard /dev nodes; reads of
+;;   cwd and TMP; stat of the cwd parent; process exec and fork.
+
+;; Must be exectuted with parameters.
+;; TMPDIR should be pre-created and set inside a safe area like:
+;;   private/var/tmp/m8call-UUID
+;; Example run command:
+;;  sandbox-exec -f resolved.sb \
+;;    -D CWD="$(pwd)" \
+;;    -D PARENTWD="$(dirname "$(pwd)")" \
+;;    -D TMP="$TMPDIR" \
+;;    date
+
+(debug deny)
+
+(deny default)
+(import "system.sb")
+;; system.sb re-grants blanket XPC lookup to (version 1) profiles as a
+;; backward-compat hatch. Deny it here, then re-allow below unless hardened.
+(deny mach-lookup (xpc-service-name-prefix ""))
+(deny mach-register (local-name-prefix ""))
+(allow mach-lookup (xpc-service-name-prefix ""))    ;;!! !private !sandbox !jail
+(allow mach-register (local-name-prefix ""))        ;;!! !private !sandbox !jail
+
+;; --- process bootstrap ---
+(allow process-exec)
+(allow process-fork)
+(allow signal (target self))
+(allow sysctl-read)
+
+;; --- executable essentials ---
+(allow file-read*
+  (subpath "/usr/lib")
+  (subpath "/usr/bin")
+  (subpath "/usr/sbin")
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/etc")
+  (subpath "/System/Library")
+  (subpath "/private/etc")
+  (subpath "/private/var/db/dyld")
+  (literal "/private/var/select/sh")
+)
+(allow file-read* file-write* file-ioctl
+  (literal "/dev/null")
+  (literal "/dev/zero")
+  (literal "/dev/urandom")
+  (literal "/dev/random")
+  (literal "/dev/tty")
+  (literal "/dev/ptmx")
+  (literal "/dev/stdin")
+  (literal "/dev/stdout")
+  (literal "/dev/stderr")
+  (regex #"^/dev/fd/[0-9]+$")
+  (regex #"^/dev/pty[a-z0-9]+$")
+  (regex #"^/dev/tty[a-z0-9]+$")
+)
+
+;; --- common executable areas allowed only with softer "contain-reads" ---
+(allow file-read*                     ;;!! !private !sandbox !jail
+  (subpath "/opt/homebrew/bin")       ;;!! !private !sandbox !jail
+  (subpath "/opt/homebrew/lib")       ;;!! !private !sandbox !jail
+  (subpath "/opt/homebrew/Cellar")    ;;!! !private !sandbox !jail
+  (subpath "/usr/local/bin")          ;;!! !private !sandbox !jail
+  (subpath "/usr/local/lib")          ;;!! !private !sandbox !jail
+  (subpath "/Library/Frameworks"))    ;;!! !private !sandbox !jail
+
+(allow file-read* (subpath "/"))      ;;!! !private !contain-reads !sandbox !jail
+(allow file-write* (subpath "/"))     ;;!! !contain-writes !no-writes !sandbox !jail
+
+;; --- the temp directory ---
+(allow file-read*
+  file-write*                         ;;!! !no-writes
+  (subpath (param "TMP")))
+
+;; --- the current working directory ---
+(allow file-read*
+  file-write*                         ;;!! !no-writes
+  (subpath (param "CWD")))
+;; --- stat of cwd parent ---
+(allow file-read-metadata
+  (literal (param "PARENTWD")))
+
+;; --- non-local internet access ---
+(allow network*)                      ;;!! !airgap !jail
+
+;; --- localhost access ---
+(deny network*                        ;; Deny before conditional allow.
+  (remote ip "localhost:*")
+  (local unix-socket)
+  (remote unix-socket))
+(allow network*                       ;;!! !no-loop !sandbox !jail
+  (remote ip "localhost:*")           ;;!! !no-loop !sandbox !jail
+  (local unix-socket)                 ;;!! !no-loop !sandbox !jail
+  (remote unix-socket))               ;;!! !no-loop !sandbox !jail
+

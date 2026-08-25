@@ -33,7 +33,7 @@ pub const Definition = struct {
     /// Every 💻 record, in the order reached. Includes come first, so an
     /// including agent's own words end up last.
     system: []const u8 = "",
-    /// 🧑 and 🤖 records gathered along the way, ancestors first. Empty for a
+    /// 🙋 and 🤖 records gathered along the way, ancestors first. Empty for a
     /// plain agent; a conversation for anything in `=`.
     turns: []const doc.Record = &.{},
     /// The agent this conversation is with — the first authored name in the
@@ -51,7 +51,7 @@ pub fn load(
 ) LoadError!Definition {
     if (depth > max_depth) return Error.IncludeTooDeep;
 
-    const file = try std.fmt.allocPrint(arena, "{s}.m8", .{name});
+    const file = try std.fmt.allocPrint(arena, "{s}.md", .{name});
     const src = (try config.read(arena, io, dirs, file)) orelse return Error.UnknownAgent;
 
     var diag: doc.Diagnostic = .{};
@@ -68,7 +68,7 @@ pub fn load(
 
     for (records) |r| switch (r.sigil) {
         .agent => {
-            const inner = try resolve(arena, io, dirs, r.body(), depth + 1);
+            const inner = try resolve(arena, io, dirs, r.value, depth + 1);
             switch (inner) {
                 .model => |m| {
                     if (def.model.len == 0) {
@@ -93,10 +93,10 @@ pub fn load(
 
         .system => {
             if (system.items.len > 0) try system.append(arena, '\n');
-            try system.appendSlice(arena, r.body());
+            try system.appendSlice(arena, r.content orelse "");
         },
 
-        .user, .assistant => try turns.append(arena, r),
+        .user, .bot => try turns.append(arena, r),
 
         else => {},
     };

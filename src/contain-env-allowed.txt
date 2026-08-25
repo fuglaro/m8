@@ -1,0 +1,48 @@
+# What survives contain-env. Everything not listed here is dropped.
+#
+# The model is the reverse of sudo's. There, an untrusted environment meets a
+# privileged process, so the danger is injection and the answer is to strip
+# LD_PRELOAD and its family. Here the environment is yours and the process is
+# not, and nothing under the sandbox is more privileged than the thing that
+# spawned it — so injection buys an attacker nothing, and the question is only
+# what a questionable tool may learn and reach.
+#
+# One name per line. A trailing * matches a prefix. Blank lines and lines
+# starting with # are ignored.
+#
+# HOME and TMPDIR are always replaced with the sandbox's own directory, so
+# listing them does nothing. A tool gets a real writable home that says
+# nothing about you.
+
+# --- finding and running things ---
+PATH
+
+# --- text handling. m8 is UTF-8 with emoji throughout, and a tool running
+#     under LC_ALL=C will mangle it on the way back ---
+LANG
+LC_*
+
+# --- terminal shape and colour ---
+TERM
+COLORTERM
+NO_COLOR
+CLICOLOR
+COLUMNS
+LINES
+
+# --- time ---
+TZ
+
+# --- macOS text encoding. Quietens a class of CoreFoundation warnings. Its
+#     first field is your uid in hex, so drop this line if you would rather
+#     not say even that ---
+__CF_USER_TEXT_ENCODING
+
+# Deliberately absent:
+#
+#   SSH_AUTH_SOCK        signs with your keys without ever holding one
+#   XPC_*  SECURITY*     session handles that reach outside the sandbox
+#   *_TOKEN  *_KEY       and everything else shaped like a secret
+#   USER  LOGNAME  SHELL identity, of no use to a filter
+#   PWD  OLDPWD  SHLVL   the shell sets these itself
+#

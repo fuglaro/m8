@@ -52,11 +52,11 @@ pub const Error = error{NoConfigDir};
 /// its own ancestor as soon as the alias moved on.
 pub fn deref(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []const u8) !?[]const u8 {
     if (!std.mem.startsWith(u8, name, alias ++ "/")) return null;
-    const file = try std.fmt.allocPrint(arena, "{s}.m8", .{name});
+    const file = try std.fmt.allocPrint(arena, "{s}.md", .{name});
     const src = (try config.read(arena, io, dirs, file)) orelse return null;
     var diag: doc.Diagnostic = .{};
     for (try doc.parse(arena, src, &diag)) |r| {
-        if (r.sigil == .agent) return r.body();
+        if (r.sigil == .agent) return r.value;
     }
     return null;
 }
@@ -71,7 +71,7 @@ pub fn setAlias(
 ) !void {
     const name = try std.fmt.allocPrint(arena, "{s}/{s}", .{ alias, of });
     try write(arena, io, dirs, name, &.{
-        .{ .sigil = .agent, .fields = &.{target} },
+        .{ .sigil = .agent, .value = target },
     });
 }
 
@@ -116,14 +116,15 @@ pub fn write(
 ) !void {
     if (dirs.len == 0) return Error.NoConfigDir;
 
-    const rel = try std.fmt.allocPrint(arena, "{s}.m8", .{name});
+    const rel = try std.fmt.allocPrint(arena, "{s}.md", .{name});
     const path = try std.fs.path.join(arena, &.{ dirs[0], rel });
 
     const cwd = std.Io.Dir.cwd();
     if (std.fs.path.dirname(path)) |parent| cwd.createDirPath(io, parent) catch {};
 
+    // A file is markdown. The rendered spelling is only ever for a terminal.
     var buf: std.Io.Writer.Allocating = .init(arena);
-    try doc.writeAll(&buf.writer, records);
+    try doc.writeAll(&buf.writer, .md, records);
     try cwd.writeFile(io, .{ .sub_path = path, .data = buf.written() });
 }
 

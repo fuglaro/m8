@@ -1,29 +1,32 @@
 //! m8 — a composable shell harness.
 //!
 //!     m8 [@AGENT|+CHAT] [-- PROMPT]
-//!     m8 >TOOL [args]
+//!     m8 COMMAND [args]
 //!
-//! `@` is the typeable spelling of 🧠; the sigil is what appears in files.
+//! `@` is how the command line names an agent; it is not part of the language.
 //! Every turn is saved as a new agent in `=` and its name printed,
 //! so a saved turn is addressed by name exactly like any other agent.
+//!
+//! A terminal is written the rendered spelling and everything else markdown,
+//! decided once here and carried into every writer.
 //!
 //! Everything the process does hangs off one arena. A run is short: read a
 //! document, transform it, write it, exit. Nothing outlives that, so nothing
 //! needs freeing individually.
 
 const std = @import("std");
-const tool = @import("tool.zig");
+const command = @import("command.zig");
 const config = @import("config.zig");
 const agent = @import("agent.zig");
 const provider = @import("provider.zig");
 const session = @import("session.zig");
-const sigil = @import("m8/sigil.zig");
 const doc = @import("m8/doc.zig");
 
 comptime {
     _ = @import("m8/sigil.zig");
     _ = @import("m8/doc.zig");
     _ = @import("session.zig");
+    _ = @import("sandbox.zig");
 }
 
 pub fn main(init: std.process.Init) !u8 {
@@ -39,10 +42,11 @@ pub fn main(init: std.process.Init) !u8 {
     var stderr = std.Io.File.stderr().writer(io, &err_buf);
 
     //     m8 [@AGENT|+CHAT] [-- PROMPT]
-    //     m8 >TOOL [args]
+    //     m8 COMMAND [args]
     //
-    // The first word is a name or nothing, and a prompt only ever follows
-    // `--`. Nothing is guessed, so a prompt may say whatever it likes.
+    // The first word names an agent, a chat, or a command, and a prompt only
+    // ever follows `--`. Nothing is guessed, so a prompt may say whatever it
+    // likes — including a word that happens to be a command's name.
     var rest = args;
     var name: []const u8 = session.latest;
 
@@ -50,16 +54,14 @@ pub fn main(init: std.process.Init) !u8 {
         const word = rest[0];
         rest = rest[1..];
 
-        if (std.mem.startsWith(u8, word, ">")) {
-            return runTool(init, io, arena, word[1..], rest, &stdout.interface, &stderr.interface);
-        } else if (std.mem.startsWith(u8, word, "@")) {
+        if (std.mem.startsWith(u8, word, "@")) {
             name = word[1..];
-        } else if (std.mem.startsWith(u8, word, sigil.Sigil.agent.bytes())) {
-            name = word[sigil.Sigil.agent.bytes().len..];
         } else if (std.mem.startsWith(u8, word, session.alias)) {
             name = try std.fmt.allocPrint(arena, "{s}/{s}", .{ session.alias, word[session.alias.len..] });
+        } else if (command.find(word)) |c| {
+            return runCommand(init, io, arena, c, rest, &stdout.interface, &stderr.interface);
         } else {
-            try stderr.interface.print("m8: '{s}' is not an agent or a chat\n", .{word});
+            try stderr.interface.print("m8: '{s}' is not an agent, a chat, or a command\n", .{word});
             try usage(&stderr.interface);
             return 1;
         }
@@ -112,14 +114,14 @@ fn runAgent(
     const p = try provider.find(providers, def.provider);
 
     var in_buf: [64 * 1024]u8 = undefined;
-    const piped = try readDocument(io, arena, &in_buf);
+    const piped = try command.api.readDocument(io, arena, &in_buf);
 
     // A document on stdin is context to splice in; anything else is what the
     // person wants to say.
     var spliced: []const doc.Record = &.{};
     var typed: []const u8 = "";
     if (piped.len > 0) {
-        if (sigil.match(piped) != null) {
+        if (doc.detect(piped) != null) {
             var diag: doc.Diagnostic = .{};
             spliced = try doc.parse(arena, piped, &diag);
         } else {
@@ -143,19 +145,24 @@ fn runAgent(
     // The name has to exist before the turn, because the turn records it.
     const saved_as = try session.newName(arena, io);
 
-    var body = try doc.BodyWriter.begin(out, .assistant, &.{});
+    // A terminal gets the rendered spelling, and is also the only reader that
+    // can see progress — down a pipe, flushing per token buys nothing and
+    // costs a syscall each time.
+    const tty = std.Io.File.stdout().isTty(io) catch false;
+    const mode: doc.Mode = if (tty) .m8 else .md;
+
+    var body = try doc.ContentWriter.begin(out, mode, .bot, "");
     var live: LiveReply = .{
         .body = &body,
         .out = out,
         .text = .empty,
         .arena = arena,
-        // Down a pipe the reader cannot see progress, so flushing per token
-        // buys nothing and costs a syscall each time.
-        .live = std.Io.File.stdout().isTty(io) catch false,
+        .live = tty,
     };
     try provider.completeStreaming(arena, io, p, def.model, messages.items, live.sink());
     try body.finish();
-    try doc.write(out, .{ .sigil = .agent, .fields = &.{saved_as} });
+    try out.writeByte('\n');
+    try doc.write(out, mode, .{ .sigil = .agent, .value = saved_as });
     try out.flush();
 
     // Lineage names the turn continued, never an alias to it: aliases move,
@@ -163,11 +170,11 @@ fn runAgent(
     const parent = (try session.deref(arena, io, dirs, name)) orelse name;
 
     var turn: std.ArrayList(doc.Record) = .empty;
-    try turn.append(arena, .{ .sigil = .agent, .fields = &.{parent} });
+    try turn.append(arena, .{ .sigil = .agent, .value = parent });
     try turn.appendSlice(arena, spliced);
     if (typed.len > 0)
-        try turn.append(arena, .{ .sigil = .user, .fields = &.{typed} });
-    try turn.append(arena, .{ .sigil = .assistant, .fields = &.{live.text.items} });
+        try turn.append(arena, .{ .sigil = .user, .content = typed });
+    try turn.append(arena, .{ .sigil = .bot, .content = live.text.items });
     try session.write(arena, io, dirs, saved_as, turn.items);
     try session.setAlias(arena, io, dirs, session.global, saved_as);
     if (def.origin.len > 0) try session.setAlias(arena, io, dirs, def.origin, saved_as);
@@ -179,8 +186,8 @@ fn appendTurn(
     r: doc.Record,
 ) !void {
     switch (r.sigil) {
-        .user => try messages.append(arena, .{ .role = "user", .content = r.body() }),
-        .assistant => try messages.append(arena, .{ .role = "assistant", .content = r.body() }),
+        .user => try messages.append(arena, .{ .role = "user", .content = r.content orelse "" }),
+        .bot => try messages.append(arena, .{ .role = "assistant", .content = r.content orelse "" }),
         else => {},
     }
 }
@@ -188,7 +195,7 @@ fn appendTurn(
 /// Bridges the provider's byte stream into the document, flushing each
 /// fragment so the text appears as it is generated rather than at the end.
 const LiveReply = struct {
-    body: *doc.BodyWriter,
+    body: *doc.ContentWriter,
     out: *std.Io.Writer,
     /// Kept as well as streamed, because the saved turn needs the whole reply.
     text: std.ArrayList(u8),
@@ -212,53 +219,43 @@ const LiveReply = struct {
 /// A terminal on stdin means there is no incoming document — nobody pipes a
 /// conversation in by hand — so it reads as empty. Waiting for an EOF the
 /// terminal will never send just hangs.
-/// Tools take their arguments verbatim; they parse their own.
-fn runTool(
+/// Commands take their arguments verbatim; they parse their own.
+fn runCommand(
     init: std.process.Init,
     io: std.Io,
     arena: std.mem.Allocator,
-    name: []const u8,
+    c: command.Command,
     args: []const [:0]const u8,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
 ) !u8 {
-    _ = init;
-    const t = tool.find(name) orelse {
-        try err.print("m8: no tool named '{s}'\n", .{name});
-        try usage(err);
-        return 1;
-    };
-
     var in_buf: [64 * 1024]u8 = undefined;
-    const input = try readDocument(io, arena, &in_buf);
+    const input = if (c.reads) try command.api.readDocument(io, arena, &in_buf) else "";
 
     var tty_storage: TtyFiles = undefined;
     const tty = openTty(io, &tty_storage);
 
-    t.run(.{
+    const status = c.run(.{
         .arena = arena,
         .io = io,
+        .mode = if (std.Io.File.stdout().isTty(io) catch false) .m8 else .md,
+        .env = init.environ_map,
         .args = @ptrCast(args),
         .in = input,
         .out = out,
+        .err = err,
         .tty = tty,
     }) catch |e| {
         try out.flush();
-        try err.print("m8 >{s}: {s}\n", .{ name, @errorName(e) });
+        if (tty) |t2| try t2.w.flush();
+        try err.print("m8 {s}: {s}\n", .{ c.name, @errorName(e) });
         try err.flush();
         return 1;
     };
 
     try out.flush();
     if (tty) |t2| try t2.w.flush();
-    return 0;
-}
-
-fn readDocument(io: std.Io, arena: std.mem.Allocator, buf: []u8) ![]const u8 {
-    const in = std.Io.File.stdin();
-    if (try in.isTty(io)) return "";
-    var r = in.readerStreaming(io, buf);
-    return r.interface.allocRemaining(arena, .unlimited);
+    return status;
 }
 
 const TtyFiles = struct {
@@ -269,9 +266,9 @@ const TtyFiles = struct {
     w_buf: [4096]u8,
 };
 
-/// Open the terminal as its own channel. Absent under a pipe, which tools
+/// Open the terminal as its own channel. Absent under a pipe, which commands
 /// read as "run non-interactively" rather than as a failure.
-fn openTty(io: std.Io, storage: *TtyFiles) ?tool.Tty {
+fn openTty(io: std.Io, storage: *TtyFiles) ?command.Tty {
     const f = std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write }) catch return null;
     storage.file = f;
     storage.r = f.readerStreaming(io, &storage.r_buf);
@@ -284,7 +281,7 @@ fn usage(w: *std.Io.Writer) !void {
         \\m8 — a composable shell harness
         \\
         \\  m8 [@AGENT|+CHAT] [-- PROMPT]
-        \\  m8 >TOOL [args]
+        \\  m8 COMMAND [args]
         \\
         \\@mathy starts a chat named +mathy. Carry it on with +mathy, or
         \\with a plain m8, which continues whichever chat came last.
@@ -294,9 +291,9 @@ fn usage(w: *std.Io.Writer) !void {
         \\  m8 +mathy -- "Tell me more."
         \\  m8 -- "And in one sentence?"
         \\
-        \\tools:
+        \\commands:
         \\
     );
-    for (tool.all) |t| try w.print("  >{s: <6} {s}\n", .{ t.name, t.summary });
+    for (command.all) |c| try w.print("  {s: <6} {s}\n", .{ c.name, c.summary });
     try w.flush();
 }
