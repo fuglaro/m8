@@ -1,4 +1,94 @@
 
+==== DONE
+
+```
+# Shell accessible m8 parser that expands whole chats ledgers.
+m8 +mathy encode m8
+m8 +mathy encode m8 >full-ledger-copy.md # raw when not tty
+m8 decode m8 # null operation
+
+# Shell accessible api conversion.
+# Can be lossy as it can forget the target model through an encode/decode.
+m8 +mathy encode openai
+m8 encode openai-completions <full-ledger-copy.md >openai.json
+m8 decode openai-completions <openai.json # reverses operation
+
+# Shell accessible redirect to provider interaction.
+m8 decode openai-completions <openai.json | m8 send [PROVIDER/MODEL]
+```
+
+Command line inclusions like +mathy and what comes after -- are appended to any stdin.
+Providers api entry should change from openai to openai-completions.
+  It makes the api field and the codec name the same namespace.
+  The codec should own the URL suffix too.
+  Allow models to override the provider api key with their own api key.
+m8 is always a ledger: retain record order, shift any reordering/combining to model apis,
+  because every api encoding are projections of it.
+m8 is truth: avoid dropping things from the history.
+Fix: "Tool calls are dropped from history" - tool calls should stay in m8.
+  Calls that have already been responded to are not called again.
+
+
+==== DONE
+
+`m8 [-l LOCKS] [@AGENT|+CHAT] [COMMAND [ARGS]] [-- PROMPT]` -> sorry, is confusing things.
+I need to separate some concepts so I'm not asking for spaghetti:
+```
+  m8 [-l LOCKS] [[@AGENT|+CHAT] MSG_CMD|RUN_CMD] [ARGS]
+
+msg_cmds:
+  --     consults an agent...
+  cat    ...
+  encode ...
+  send   ...
+
+  Respects stdin as m8 or raw prompt and assembles a ledger and prompt.
+
+
+run_cmds:
+  call   ...
+  ... 
+```
+And maybe we should just move ask as a native inbuilt inder the call cmd:
+```
+m8 call ask ...
+```
+
+Assembly of ledger (with `STDIN | m8 [@/+NAME] -- PROMPT`):
+ - no STDIN: assembles `NAME(fallback to last chat) → -- prompt`
+ - detected m8 STDIN: assembles `NAME(no fallback) → STDIN → [-- prompt](runs even without)`
+ - other STDIN: assembles `NAME(no fallback) → [-- prompt](runs even without) + STDIN appended to prompt`
+We detect on initial ligature, so the detected m8 STDIN can still error on malformed.
+
+==== DONE
+
+can't run, and it reports that honestly rather than silently.
+The one real loss. openai → m8 → openai is byte-identical except max_tokens, which came from your provider config and isn't on the wire.
+
+
+
+* New model only form starts with @/: `@/local/Ternary-Bonsai-1.7B-mlx-2bit,context:32768,max_tokens:8192`
+* Parameters are expected to be the provider api's form.
+* Considered an unnammed agent so not chat is automatically made.
+* No longer falls back to a model if an agent isn't found with the old form.
+* Models can no longer have their own api defined, it can only be defined at a provider level.
+* Multiple providers can be defined each with a different api to give access to multi-api-providers.
+* Users can always make agents with matching names that simply reference the
+  model so an agent form is accessible `@Ternary-Bonsai-1.7B-mlx-2bit` or even
+  like it was by making a mob `@local/Ternary-Bonsai-1.7B-mlx-2bit`.
+* providers.json no longer supports the models entry. Much simpler and everything moves into m8.
+* Chamge to `m8 send PROVIDER` since we don't need to specify the model anymore.
+* When doing this migrate .m8-st8 and make the agent aliases
+  like `@local/Ternary-Bonsai-1.7B-mlx-2bit` for compatibility.
+
+====
+
+Consider:
+m8 → openai → m8 also loses 🔌 — so a decoded tool
+
+====
+
+Support custom api converters with plugin commands in m8-st8?
 
 ====
 ```
@@ -11,88 +101,48 @@
 -- [QUERY] ... - supply user prompt
 ```
 
-====
-
-```
-.m8/@/[MOB]/AGENT.m8
-.m8/@/+/CHAT.m8
-.m8/@/=/REF.m8
-```
-
-Agents search for peers by relative reference going outwards up mob levels.
+user calling a tool at a chat?
 
 ====
 
-# Integrate restrictions
+```
+.m8-st8/@/=/REF.m8
+.m8-st8/@/+/CHAT.m8
+.m8-st8/@/[MOB]/AGENT.m8
 
-* rename call -w and --with to -l and --lock and move it directly under m8.
-  * this is cumulative with top level locks.
-  * it moves up and out of just being under call,
-    so all the 🔌 templates change to ["m8", "{{lock:-l}}", "call", …]
-* add support to define locks inside toolbox definitions:
-  * 🔒 :lock:
-  * value: comma separated list
-  * "lock" becomes an inbuilt/restricted property that can't be defined as one supplied.
-* add support for locks at the top m8 level:
-  * behavior: cumulative on lineage of top level locks
-    and only the last toobox definition for that tool name.
+.m8-st8/@/+/[SESSION]/CHAT.m8
+```
 
-# Standard restrictions improvements and refactor
+Agent definitions search for peers by relative reference going outwards up mob levels.
 
-* only reply-side sigils are ever honoured from a model's output — 🤖, 💭, 🔏, 📲 and its 📦,
-  while definition side sigils are always filtered from the reply.
-* change the location of the m8 config folder to be:
-  * .m8-st8 in relative paths,
-  * m8-st8 in HOME or XDG_CONFIG_HOME.
-* Respect a top level only (core is top level only) m8-st8/core/mac-sandbox.sb config override file.
-* Ensure the mac-sandbox.sb rules deny write to `(deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))`
-  (untagged with any ;;!!) so core is always protected
-  from agent manipulaton even if no-edit-m8-st8 is omitted.
-* Move our src/contain-env-allowed.txt and src/mac-sandbox.sb under src/core/.
-  These should be compiled into the output binary.
 
-# Close restrictions
+Note that in the future we may implement persistant chats ongoing between
+agents using send_message to each other by referencing
 
-* add no-edit-git (included in sandbox and jail):
-  * ```(deny file-write* (regex #"(^|/)\.git($|/)"))```
-* add freeze-toolbox (included in sandbox and jail):
-  * reject as a hard error any tool calls that emit 🧰, 🔓, 🧠 or 📚.
-* add no-edit-m8-st8 (included in sandbox and jail):
-  * ```(deny file-write* (regex #"(^|/)\.?m8-st8($|/)"))```
-  * add test so can't hack with move from a staging area into a .m8-st8
-  * add test so can't hack with symlink to .m8-st8.
-* add `agent-check=<agent>` that asks that agent if something looks safe to run.
-  * the checker agent is expected to have a system prompt such that it ends up saying:
-    * `allow` - if it deems execution reasonably safe.
-    * anything else should be raw (non-m8) text which will be included in an error response:
-      `Failed agentic check: <response>`.
-  * ensure top level locks are passed through to the call to the sub agent.
-  * the checker agent never gets it's output included in the receipt.
-* add contain-env (included in sandbox and jail; update comment that it's addressed)
-  * respect a m8-st8/core/contain-env-allowed.txt config override file,
-  * otherwise respect the bundled src/core/.
-* add ask (prompts user to run any tool).
-  * when there is no tty, this operates like a full deny.
-* add deny (blocks any tool use)
-* make call output m8, unless a --raw flag is specifically added:
-  * stdout becomes receipt text.
-  * stdout is captured and becomes error text if return code is not 0.
-* ensure no agent can escape it's responses in such a way that it can define it's own toolbox,
-   unless it has already got access to tools without freeze-toolbox, sandbox, and jail.
-
-# Clear and concise documentation
-
-* A ## Locks section, in the README's voice:
-  * The subtraction invariant, stated once and made to cover everything: a lock only ever removes, so any combination is safe and order never matters.
-  * Where a lock can be written — top level, 🧰, -l on the command line — and how they compose: top-level cumulative over lineage, per-tool last-wins, effective set is the union of the floor and the tool's own.
-  * lock as a reserved property, and why: so the model can't choose its own.
-  * The categorisation of enforcement location (not a table), for each lock, what it removes and where it's enforced — kernel or m8 — with one line on what that means when a tool spawns something. Including rationale how m8 level restrictions are ratioalised:
-    * deny is self-enforcing — no tools means no child process, so there's nothing to inherit to.
-    * ask gates the decision at the point the decision is made. Anything downstream runs because the user already said yes to something that could do it.
-    * freeze-toolbox applies to each m8's parse of its own model's reply, which is where it belongs, at every depth independently.
-  * A worked pair: one agent that can't widen, one that defines its own tools, so the two setups from your question are readable side by side.
-  * The checker's position in the trust path, as guidance rather than mechanism: it reads attacker-influenced text, so give it what it needs and no more — and here's the jailed-validator pattern, because that's the good use.
-  * A list of considerations and recommendations for thinking through setting up a trust framework.
+?? How shoud send_message (to another agent) work?
+Do we set up persistent chats under a mob?
 
 
 
+====
+
+# default "inbuilt" provider
+
+```
+{
+  "inbuilt": {
+    "api": "inbuilt",
+    "models": {
+      "echo": {},
+      "elisa":  {},
+      "adventure":  {},
+    }
+  }
+}
+```
+
+```
+m8 @inbuilt/echo
+m8 @inbuilt/elisa
+m8 @inbuilt/text-adventure-some-mit-flavour-one
+```

@@ -1,0 +1,7 @@
+{
+  "local": {
+    "url": "http://127.0.0.1:11337/v1",
+    "key": "sed -n 's/.*\"api_key\" *: *\"\\([^\"]*\\)\".*/\\1/p' ~/.omlx/settings.json",
+    "api": "openai-completions"
+  }
+}

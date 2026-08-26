@@ -1,47 +1,103 @@
-//! Resolving the macOS sandbox profile.
+//! Locks: the sandbox profile, and the environment a child is given.
 //!
-//! `mac-sandbox.sb` grants everything and then tags the lines that each
-//! restriction takes away. A flag only ever subtracts, so any combination is
-//! safe and the order never matters — which is why `-w` can be repeated
-//! without a precedence rule to remember.
+//! `core/mac-sandbox.sb` grants everything and then tags the lines that each
+//! lock takes away. A lock only ever subtracts, so any combination is safe and
+//! the order never matters — which is why `-l` can be repeated without a
+//! precedence rule to remember. Where a lock needs to *deny* something, the
+//! profile denies it unconditionally and tags a conditional allow instead, so
+//! the invariant holds even for those.
 //!
 //! A line ending in `;;!! !a !b` is dropped when `a` or `b` is active. Levels
-//! like `sandbox` are not expanded into the flags they compose; they carry
+//! like `sandbox` are not expanded into the locks they compose; they carry
 //! their own tags, so resolving stays a single pass with no lookup table.
+//!
+//! Both files may be overridden from `core/` in the user's own config, and
+//! only from there: a project directory arrives with `git clone`, and these
+//! two files decide what a lock means rather than what runs under it.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const config = @import("config.zig");
 
-pub const template = @embedFile("mac-sandbox.sb");
+pub const template = @embedFile("core/mac-sandbox.sb");
+pub const env_allowed = @embedFile("core/contain-env-allowed.txt");
 
 const marker = ";;!!";
 
 pub const Restriction = struct {
     name: []const u8,
     summary: []const u8,
+    kernel: bool = false,
 };
 
-/// Every `-w` value, in the order the help should list them.
+/// Every `-l` value, in the order the help should list them.
+///
+/// `kernel` says the sandbox profile enforces it, so every descendant of a
+/// locked process inherits it. The rest are enforced by m8 itself, at the
+/// point it acts.
 pub const all = [_]Restriction{
-    .{ .name = "contain-reads", .summary = "no reading outside cwd, TMP, system and tool dirs" },
-    .{ .name = "private", .summary = "as above, and tool dirs go too" },
-    .{ .name = "contain-writes", .summary = "writes confined to cwd and TMP" },
-    .{ .name = "no-writes", .summary = "nothing is writable, including TMP" },
-    .{ .name = "airgap", .summary = "no internet; loopback and unix sockets stay" },
-    .{ .name = "no-loop", .summary = "no loopback or unix sockets; internet stays" },
-    .{ .name = "sandbox", .summary = "private + contain-writes + no-loop" },
-    .{ .name = "jail", .summary = "sandbox, and no internet either" },
+    .{ .name = "contain-reads", .kernel = true, .summary = "no reading outside cwd, TMP, system and tool dirs" },
+    .{ .name = "private", .kernel = true, .summary = "as above, and tool dirs go too" },
+    .{ .name = "contain-writes", .kernel = true, .summary = "writes confined to cwd and TMP" },
+    .{ .name = "no-writes", .kernel = true, .summary = "nothing is writable, including TMP" },
+    .{ .name = "airgap", .kernel = true, .summary = "no internet; loopback and unix sockets stay" },
+    .{ .name = "no-loop", .kernel = true, .summary = "no loopback or unix sockets; internet stays" },
+    .{ .name = "no-edit-git", .kernel = true, .summary = "no writing to a .git anywhere" },
+    .{ .name = "no-edit-m8-st8", .kernel = true, .summary = "no writing to a config directory anywhere" },
+    .{ .name = "contain-env", .summary = "the environment is rebuilt, not inherited" },
+    .{ .name = "deny", .summary = "no tool use at all" },
+    .{ .name = "ask", .summary = "every tool is put to you first; no tty means no" },
+    .{ .name = "freeze-toolbox", .summary = "a tool may not hand back 🧰 🔓 🧠 or 📚" },
+    .{ .name = "sandbox", .kernel = true, .summary = "private + contain-writes + no-loop + no-edit-* + contain-env" },
+    .{ .name = "jail", .kernel = true, .summary = "sandbox, and no internet either" },
+    // Last, and carries a value. `find` returns this entry for any
+    // `agent-check=<agent>`, so it must stay at the end.
+    .{ .name = check_prefix, .summary = "<agent> is asked whether a call looks safe" },
 };
+
+/// Locks the sandbox profile cannot express, and that m8 applies itself.
+pub fn isKernel(name: []const u8) bool {
+    return if (find(name)) |r| r.kernel else false;
+}
+
+/// True when `active` calls for the child's environment to be rebuilt.
+pub fn containsEnv(active: []const []const u8) bool {
+    for (active) |a| {
+        if (std.mem.eql(u8, a, "contain-env")) return true;
+        if (std.mem.eql(u8, a, "sandbox")) return true;
+        if (std.mem.eql(u8, a, "jail")) return true;
+    }
+    return false;
+}
+
+/// The one lock that carries a value: `agent-check=reviewer`.
+pub const check_prefix = "agent-check=";
+
+/// The agent a lock set defers to, if any. The last one named wins, which
+/// only matters when a lineage names two — and asking both would still be
+/// subtraction, so this is a simplification rather than a loosening.
+pub fn checker(locks: []const []const u8) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    for (locks) |l| {
+        if (std.mem.startsWith(u8, l, check_prefix)) found = l[check_prefix.len..];
+    }
+    return found;
+}
 
 pub fn find(name: []const u8) ?Restriction {
+    if (std.mem.startsWith(u8, name, check_prefix)) {
+        // An agent has to be named, or there is nothing to ask.
+        return if (name.len > check_prefix.len) all[all.len - 1] else null;
+    }
     for (all) |r| if (std.mem.eql(u8, r.name, name)) return r;
     return null;
 }
 
-/// The profile with every line the active restrictions take away removed.
-pub fn resolve(arena: Allocator, active: []const []const u8) Allocator.Error![]const u8 {
+/// The profile with every line the active locks take away removed. `src` is
+/// the profile text, so a caller may pass an override from `core/`.
+pub fn resolve(arena: Allocator, src: []const u8, active: []const []const u8) Allocator.Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    var it = std.mem.splitScalar(u8, template, '\n');
+    var it = std.mem.splitScalar(u8, src, '\n');
     var first = true;
     while (it.next()) |line| {
         if (dropped(line, active)) continue;
@@ -62,51 +118,254 @@ fn dropped(line: []const u8, active: []const []const u8) bool {
     return false;
 }
 
+/// The profile to use: `core/mac-sandbox.sb` from the user's config if there
+/// is one, otherwise the copy compiled in.
+pub fn profile(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
+    return (try config.core(arena, io, env, "mac-sandbox.sb")) orelse template;
+}
+
+/// Likewise for the environment allowlist. An override replaces the bundled
+/// list rather than extending it, so what a lock permits is always readable
+/// from one file.
+pub fn envAllowed(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
+    return (try config.core(arena, io, env, "contain-env-allowed.txt")) orelse env_allowed;
+}
+
+/// True when `name` is passed through by the allowlist in `src`. One name per
+/// line, a trailing `*` matches a prefix, `#` comments and blank lines are
+/// ignored.
+pub fn envPasses(src: []const u8, name: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, src, '\n');
+    while (lines.next()) |raw| {
+        const rule = std.mem.trim(u8, raw, " \t\r");
+        if (rule.len == 0 or rule[0] == '#') continue;
+        if (rule[rule.len - 1] == '*') {
+            if (std.mem.startsWith(u8, name, rule[0 .. rule.len - 1])) return true;
+        } else if (std.mem.eql(u8, rule, name)) return true;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
 
-test "every documented restriction is tagged somewhere in the profile" {
+fn res(arena: Allocator, active: []const []const u8) ![]const u8 {
+    return resolve(arena, template, active);
+}
+
+test "every kernel lock is tagged somewhere in the profile" {
     for (all) |r| {
+        if (!r.kernel) continue;
         const tag = try std.fmt.allocPrint(testing.allocator, "!{s}", .{r.name});
         defer testing.allocator.free(tag);
         try testing.expect(std.mem.indexOf(u8, template, tag) != null);
     }
 }
 
-test "no restrictions leaves the profile alone" {
+test "no locks leaves the profile alone" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    try testing.expectEqualStrings(template, try resolve(a.allocator(), &.{}));
+    try testing.expectEqualStrings(template, try res(a.allocator(), &.{}));
 }
 
-test "a restriction takes away only the lines it is tagged on" {
+test "a lock takes away only the lines it is tagged on" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    const out = try resolve(a.allocator(), &.{"airgap"});
-
-    // The one line tagged !airgap is the blanket network grant.
+    const out = try res(a.allocator(), &.{"airgap"});
     try testing.expect(std.mem.indexOf(u8, out, "(allow network*)") == null);
-    // Untagged lines survive, including the deny that makes the grant matter.
     try testing.expect(std.mem.indexOf(u8, out, "(deny default)") != null);
     try testing.expect(std.mem.indexOf(u8, out, "(allow process-exec)") != null);
 }
 
-test "flags only subtract, so combining them commutes" {
+test "locks only subtract, so combining them commutes" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    const one = try resolve(arena, &.{ "private", "airgap" });
-    const other = try resolve(arena, &.{ "airgap", "private" });
+    const one = try res(arena, &.{ "private", "airgap" });
+    const other = try res(arena, &.{ "airgap", "private" });
     try testing.expectEqualStrings(one, other);
     try testing.expect(one.len < template.len);
 }
 
-test "a level subtracts at least as much as the flags it composes" {
+test "a level subtracts at least as much as the locks it composes" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    const jail = try resolve(arena, &.{"jail"});
-    const parts = try resolve(arena, &.{ "private", "contain-writes", "no-loop", "airgap" });
+    const jail = try res(arena, &.{"jail"});
+    const parts = try res(arena, &.{
+        "private",     "contain-writes", "no-loop",
+        "airgap",      "no-edit-git",    "no-edit-m8-st8",
+    });
     try testing.expectEqualStrings(parts, jail);
+}
+
+test "a tampering lock removes the allow, never the deny" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const git = "(^|/)\\.git($|/)";
+
+    const off = try res(arena, &.{});
+    try testing.expect(std.mem.indexOf(u8, off, git) != null);
+    // Both the deny and the allow that follows it.
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, off, git));
+
+    const on = try res(arena, &.{"no-edit-git"});
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, on, git));
+    try testing.expect(std.mem.indexOf(u8, on, "(deny file-write* (regex #\"" ++ "(^|/)\\.git($|/)") != null);
+}
+
+test "the core deny survives every lock, and comes last" {
+    const core_rule = "m8-st8/core($|/)";
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    for ([_][]const []const u8{
+        &.{},
+        &.{"jail"},
+        &.{"no-edit-m8-st8"},
+        &.{ "no-writes", "private", "airgap" },
+    }) |active| {
+        const out = try res(arena, active);
+        const at = std.mem.indexOf(u8, out, core_rule) orelse return error.CoreRuleMissing;
+        // Last matching rule wins, so it must follow the allow it overrides.
+        if (std.mem.lastIndexOf(u8, out, "(allow file-write* (regex")) |allow| {
+            try testing.expect(at > allow);
+        }
+    }
+}
+
+test "the env allowlist passes what it names and nothing else" {
+    try testing.expect(envPasses(env_allowed, "PATH"));
+    try testing.expect(envPasses(env_allowed, "LANG"));
+    try testing.expect(envPasses(env_allowed, "LC_ALL")); // trailing *
+    try testing.expect(envPasses(env_allowed, "LC_CTYPE"));
+    try testing.expect(!envPasses(env_allowed, "SSH_AUTH_SOCK"));
+    try testing.expect(!envPasses(env_allowed, "HOME")); // substituted, not passed
+    try testing.expect(!envPasses(env_allowed, "TMPDIR"));
+    try testing.expect(!envPasses(env_allowed, "AWS_SECRET_ACCESS_KEY"));
+    // A comment naming a variable must not act as a rule.
+    try testing.expect(!envPasses(env_allowed, "XPC_FLAGS"));
+}
+
+test "contain-env is implied by the levels that include it" {
+    try testing.expect(containsEnv(&.{"contain-env"}));
+    try testing.expect(containsEnv(&.{"sandbox"}));
+    try testing.expect(containsEnv(&.{"jail"}));
+    try testing.expect(!containsEnv(&.{"airgap"}));
+    try testing.expect(!containsEnv(&.{}));
+}
+
+// The tampering rules are worth exercising against the real sandbox: the
+// component anchor in them broke twice under hand testing before it was
+// right, and nothing about the regex text says whether it holds.
+
+fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, locks: []const []const u8, script: []const u8) !bool {
+    var a: std.heap.ArenaAllocator = .init(gpa);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const path = try std.fs.path.join(arena, &.{ dir, "resolved.sb" });
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = path,
+        .data = try resolve(arena, template, locks),
+    });
+
+    var child = try std.process.spawn(io, .{
+        .argv = &.{
+            "sandbox-exec",                                            "-f",
+            path,                                                      "-D",
+            try std.fmt.allocPrint(arena, "CWD={s}", .{dir}),          "-D",
+            try std.fmt.allocPrint(arena, "PARENTWD={s}", .{std.fs.path.dirname(dir) orelse "/"}), "-D",
+            try std.fmt.allocPrint(arena, "TMP={s}", .{dir}),
+            "/bin/sh",                                                 "-c",
+            script,
+        },
+        .cwd = .{ .path = dir },
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    return switch (try child.wait(io)) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+/// The CWD parameter has to be a *resolved* path. macOS matches the profile
+/// against resolved paths, and /tmp is a symlink to /private/tmp — so a cwd
+/// given as /tmp/x never matches (subpath (param "CWD")) and contain-writes
+/// denies the working directory itself. `currentPath` resolves, so this only
+/// bites somewhere like here, where the path is built by hand.
+fn scratch(gpa: Allocator, io: std.Io, name: []const u8) ![]const u8 {
+    const base = try std.fs.path.join(gpa, &.{ "/private/tmp", name });
+    std.Io.Dir.cwd().deleteTree(io, base) catch {};
+    try std.Io.Dir.cwd().createDirPath(io, base);
+    return base;
+}
+
+test "a config directory cannot be staged elsewhere and renamed in" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const dir = try scratch(testing.allocator, io, "m8-lock-rename");
+    defer testing.allocator.free(dir);
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    // Staging outside the target name is fine; landing it is not. A rename
+    // carries a whole subtree with no per-entry check, so the destination
+    // path is the only thing standing in the way.
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
+        "mkdir -p staging && echo x > staging/evil.md"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
+        "mv staging .m8-st8"));
+    // And the same for core, with a lock that never mentions it.
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"},
+        "mkdir -p .m8-st8 2>/dev/null; mv staging .m8-st8/core"));
+}
+
+test "a config directory cannot be reached through a symlink" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const dir = try scratch(testing.allocator, io, "m8-lock-symlink");
+    defer testing.allocator.free(dir);
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
+        "mkdir -p elsewhere"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
+        "ln -s elsewhere .m8-st8"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"},
+        "mkdir -p .m8-st8 2>/dev/null; ln -s elsewhere .m8-st8/core"));
+}
+
+test "a lock leaves ordinary work alone" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const dir = try scratch(testing.allocator, io, "m8-lock-control");
+    defer testing.allocator.free(dir);
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"jail"},
+        "mkdir -p sub && echo hi > sub/notes.txt && cat sub/notes.txt"));
+}
+
+test "agent-check is found only when it names an agent" {
+    try testing.expect(find("agent-check=reviewer") != null);
+    try testing.expect(find("agent-check=") == null);
+    try testing.expect(find("agent-check") == null);
+    try testing.expectEqualStrings("reviewer", checker(&.{"agent-check=reviewer"}).?);
+    try testing.expect(checker(&.{"jail"}) == null);
+}
+
+test "a parameterised lock is not a kernel lock" {
+    try testing.expect(!isKernel("agent-check=reviewer"));
 }

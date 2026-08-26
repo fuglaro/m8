@@ -1,12 +1,19 @@
 //! Talking to a provider.
 //!
-//! m8 holds no opinion about what a provider is beyond four fields. `key` is
-//! a shell command rather than a secret, so the config can commit safely and
-//! reach a keychain, a password manager, or another tool's settings file
-//! without m8 knowing any of those exist.
+//! A provider is a url, an api, and a way to get a key. That is all of it —
+//! which models it serves, and what to ask them for, is the ledger's business
+//! and is written on the 🧠 that names one. A provider speaking two apis is
+//! two providers pointing at one url, rather than a second kind of override.
+//!
+//! `key` is a shell command rather than a secret, so the config can commit
+//! safely and reach a keychain, a password manager, or another tool's
+//! settings file without m8 knowing any of those exist.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const codec = @import("codec.zig");
+const doc = @import("m8/doc.zig");
+const toolbox = @import("toolbox.zig");
 
 pub const Error = error{
     UnknownProvider,
@@ -21,26 +28,6 @@ pub const Provider = struct {
     url: []const u8,
     api: []const u8,
     key_cmd: ?[]const u8,
-    models: ?std.json.ObjectMap,
-
-    /// The name to put on the wire. `use` when the entry names one, otherwise
-    /// the entry's own key. Models absent from the config still resolve —
-    /// providers may serve more than the config lists.
-    pub fn wireName(p: Provider, model: []const u8) []const u8 {
-        const models = p.models orelse return model;
-        const entry = models.get(model) orelse return model;
-        if (entry != .object) return model;
-        const use = entry.object.get("use") orelse return model;
-        return if (use == .string) use.string else model;
-    }
-
-    pub fn maxOutput(p: Provider, model: []const u8) ?i64 {
-        const models = p.models orelse return null;
-        const entry = models.get(model) orelse return null;
-        if (entry != .object) return null;
-        const out = entry.object.get("output") orelse return null;
-        return if (out == .integer) out.integer else null;
-    }
 };
 
 pub fn find(providers: std.json.ObjectMap, name: []const u8) !Provider {
@@ -50,9 +37,8 @@ pub fn find(providers: std.json.ObjectMap, name: []const u8) !Provider {
     return .{
         .name = name,
         .url = if (o.get("url")) |u| (if (u == .string) u.string else "") else "",
-        .api = if (o.get("api")) |a| (if (a == .string) a.string else "openai") else "openai",
+        .api = if (o.get("api")) |a| (if (a == .string) a.string else codec.default) else codec.default,
         .key_cmd = if (o.get("key")) |k| (if (k == .string) k.string else null) else null,
-        .models = if (o.get("models")) |m| (if (m == .object) m.object else null) else null,
     };
 }
 
@@ -89,47 +75,39 @@ pub const Sink = struct {
     write: *const fn (ctx: *anyopaque, bytes: []const u8) anyerror!void,
 };
 
-pub const Message = struct {
-    role: []const u8,
-    content: []const u8,
+/// A tool call, whether coming back from a model or going out again as part
+/// of the conversation so far.
+pub const Call = struct {
+    id: []const u8,
+    name: []const u8,
+    /// The arguments as the model wrote them, still JSON.
+    arguments: []const u8,
 };
 
-/// One completion. Returns the assistant's text.
+/// The codec this model speaks, which is also what says where it lives. A
+/// codec with no suffix is not a wire format — `m8` is one of those — and
+/// there is nowhere to post it.
+fn wire(p: Provider) !codec.Codec {
+    const c = codec.find(p.api) orelse return Error.UnsupportedApi;
+    if (c.suffix.len == 0) return Error.UnsupportedApi;
+    return c;
+}
+
+/// One completion, waited for whole. Returns the assistant's text.
 pub fn complete(
     arena: Allocator,
     io: std.Io,
     p: Provider,
-    model: []const u8,
-    messages: []const Message,
+    target: codec.Target,
+    records: []const doc.Record,
 ) ![]const u8 {
-    if (!std.mem.eql(u8, p.api, "openai")) return Error.UnsupportedApi;
-
-    var body: std.Io.Writer.Allocating = .init(arena);
-    var s: std.json.Stringify = .{ .writer = &body.writer };
-    try s.beginObject();
-    try s.objectField("model");
-    try s.write(p.wireName(model));
-    if (p.maxOutput(model)) |n| {
-        try s.objectField("max_tokens");
-        try s.write(n);
-    }
-    try s.objectField("messages");
-    try s.beginArray();
-    for (messages) |m| {
-        try s.beginObject();
-        try s.objectField("role");
-        try s.write(m.role);
-        try s.objectField("content");
-        try s.write(m.content);
-        try s.endObject();
-    }
-    try s.endArray();
-    try s.endObject();
+    const c = try wire(p);
+    const body = try c.encode(arena, records, target);
 
     var client: std.http.Client = .{ .allocator = arena, .io = io };
     defer client.deinit();
 
-    const url = try std.fmt.allocPrint(arena, "{s}/chat/completions", .{trimSlash(p.url)});
+    const url = try std.fmt.allocPrint(arena, "{s}{s}", .{ trimSlash(p.url), c.suffix });
     var extra: std.ArrayList(std.http.Header) = .empty;
     if (try resolveKey(arena, io, p)) |key| {
         try extra.append(arena, .{
@@ -142,7 +120,7 @@ pub fn complete(
     const res = client.fetch(.{
         .location = .{ .url = url },
         .method = .POST,
-        .payload = body.written(),
+        .payload = body,
         .headers = .{ .content_type = .{ .override = "application/json" } },
         .extra_headers = extra.items,
         .response_writer = &resp.writer,
@@ -180,18 +158,17 @@ pub fn completeStreaming(
     arena: Allocator,
     io: std.Io,
     p: Provider,
-    model: []const u8,
-    messages: []const Message,
+    target: codec.Target,
+    records: []const doc.Record,
     sink: Sink,
-) !void {
-    if (!std.mem.eql(u8, p.api, "openai")) return Error.UnsupportedApi;
-
-    const body = try buildRequest(arena, p, model, messages, true);
+) ![]const Call {
+    const wire_format = try wire(p);
+    const body = try wire_format.encode(arena, records, target);
 
     var client: std.http.Client = .{ .allocator = arena, .io = io };
     defer client.deinit();
 
-    const url = try std.fmt.allocPrint(arena, "{s}/chat/completions", .{trimSlash(p.url)});
+    const url = try std.fmt.allocPrint(arena, "{s}{s}", .{ trimSlash(p.url), wire_format.suffix });
     const uri = std.Uri.parse(url) catch return Error.RequestFailed;
 
     var extra: std.ArrayList(std.http.Header) = .empty;
@@ -209,7 +186,9 @@ pub fn completeStreaming(
     defer req.deinit();
 
     req.transfer_encoding = .{ .content_length = body.len };
-    req.sendBodyComplete(body) catch return Error.RequestFailed;
+    // The writer wants bytes it could scribble on; the body is ours and this
+    // is the last thing done with it.
+    req.sendBodyComplete(@constCast(body)) catch return Error.RequestFailed;
 
     var redirect_buf: [8192]u8 = undefined;
     var response = req.receiveHead(&redirect_buf) catch return Error.RequestFailed;
@@ -218,6 +197,7 @@ pub fn completeStreaming(
     var transfer_buf: [64 * 1024]u8 = undefined;
     const r = response.reader(&transfer_buf);
 
+    var calls: std.ArrayList(Building) = .empty;
     while (true) {
         // Inclusive: the exclusive form leaves the delimiter unconsumed, so a
         // second call returns an empty line and never advances.
@@ -234,7 +214,63 @@ pub fn completeStreaming(
         if (extractDelta(parsed)) |text| {
             if (text.len > 0) sink.write(sink.ctx, text) catch return Error.RequestFailed;
         }
+        try gatherCalls(arena, &calls, parsed);
     }
+
+    var out: std.ArrayList(Call) = .empty;
+    for (calls.items) |c| try out.append(arena, .{
+        .id = c.id.items,
+        .name = c.name.items,
+        .arguments = if (c.arguments.items.len == 0) "{}" else c.arguments.items,
+    });
+    return out.items;
+}
+
+/// A call arrives in pieces across events, addressed by index: the id and
+/// name once, then the arguments a fragment at a time. Nothing is complete
+/// until the stream ends, so each piece is appended where it belongs.
+const Building = struct {
+    id: std.ArrayList(u8) = .empty,
+    name: std.ArrayList(u8) = .empty,
+    arguments: std.ArrayList(u8) = .empty,
+};
+
+fn gatherCalls(arena: Allocator, calls: *std.ArrayList(Building), v: std.json.Value) !void {
+    const delta = deltaOf(v) orelse return;
+    const list = delta.object.get("tool_calls") orelse return;
+    if (list != .array) return;
+
+    for (list.array.items) |item| {
+        if (item != .object) continue;
+        const index: usize = if (item.object.get("index")) |i|
+            (if (i == .integer) @intCast(i.integer) else 0)
+        else
+            0;
+        while (calls.items.len <= index) try calls.append(arena, .{});
+        const into = &calls.items[index];
+
+        if (item.object.get("id")) |x| {
+            if (x == .string) try into.id.appendSlice(arena, x.string);
+        }
+        const f = item.object.get("function") orelse continue;
+        if (f != .object) continue;
+        if (f.object.get("name")) |x| {
+            if (x == .string) try into.name.appendSlice(arena, x.string);
+        }
+        if (f.object.get("arguments")) |x| {
+            if (x == .string) try into.arguments.appendSlice(arena, x.string);
+        }
+    }
+}
+
+fn deltaOf(v: std.json.Value) ?std.json.Value {
+    if (v != .object) return null;
+    const choices = v.object.get("choices") orelse return null;
+    if (choices != .array or choices.array.items.len == 0) return null;
+    const first = choices.array.items[0];
+    if (first != .object) return null;
+    const delta = first.object.get("delta") orelse return null;
+    return if (delta == .object) delta else null;
 }
 
 fn extractDelta(v: std.json.Value) ?[]const u8 {
@@ -249,37 +285,58 @@ fn extractDelta(v: std.json.Value) ?[]const u8 {
     return if (content == .string) content.string else null;
 }
 
-fn buildRequest(
-    arena: Allocator,
-    p: Provider,
-    model: []const u8,
-    messages: []const Message,
-    stream: bool,
-) ![]u8 {
-    var body: std.Io.Writer.Allocating = .init(arena);
-    var s: std.json.Stringify = .{ .writer = &body.writer };
-    try s.beginObject();
-    try s.objectField("model");
-    try s.write(p.wireName(model));
-    if (stream) {
-        try s.objectField("stream");
-        try s.write(true);
-    }
-    if (p.maxOutput(model)) |n| {
-        try s.objectField("max_tokens");
-        try s.write(n);
-    }
-    try s.objectField("messages");
-    try s.beginArray();
-    for (messages) |m| {
-        try s.beginObject();
-        try s.objectField("role");
-        try s.write(m.role);
-        try s.objectField("content");
-        try s.write(m.content);
-        try s.endObject();
-    }
-    try s.endArray();
-    try s.endObject();
-    return body.written();
+// ---------------------------------------------------------------- tests
+
+const testing = std.testing;
+
+fn providersFrom(arena: Allocator, json: []const u8) !std.json.ObjectMap {
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{});
+    return v.object;
+}
+
+test "a provider is a url, an api and a way to get a key" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const ps = try providersFrom(arena,
+        \\{
+        \\  "local":   {"url": "http://x/v1/"},
+        \\  "local-r": {"url": "http://x/v1", "api": "some-other-api", "key": "cat k"}
+        \\}
+    );
+
+    // Nothing said, so the default — and it is a name a codec answers to.
+    const p = try find(ps, "local");
+    try testing.expectEqualStrings(codec.default, p.api);
+    try testing.expect(codec.find(p.api) != null);
+    try testing.expect(p.key_cmd == null);
+
+    // One url, two apis, two providers. No second kind of override.
+    const q = try find(ps, "local-r");
+    try testing.expectEqualStrings("some-other-api", q.api);
+    try testing.expectEqualStrings(trimSlash(p.url), q.url);
+    try testing.expectEqualStrings("cat k", q.key_cmd.?);
+
+    try testing.expectError(Error.UnknownProvider, find(ps, "nosuch"));
+}
+
+test "the codec decides where the request goes" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const ps = try providersFrom(arena,
+        \\{
+        \\  "local": {"url": "http://x/v1/"},
+        \\  "odd":   {"url": "http://x", "api": "m8"},
+        \\  "gone":  {"url": "http://x", "api": "nosuch"}
+        \\}
+    );
+
+    try testing.expectEqualStrings("/chat/completions", (try wire(try find(ps, "local"))).suffix);
+    // `m8` is a codec but not a wire format, so it has nowhere to be posted,
+    // and a name no codec answers to is refused rather than guessed at.
+    try testing.expectError(Error.UnsupportedApi, wire(try find(ps, "odd")));
+    try testing.expectError(Error.UnsupportedApi, wire(try find(ps, "gone")));
 }

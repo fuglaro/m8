@@ -1,11 +1,23 @@
 //! m8 — a composable shell harness.
 //!
-//!     m8 [@AGENT|+CHAT] [-- PROMPT]
-//!     m8 COMMAND [args]
+//!     m8 [-l LOCKS] [[@AGENT|+CHAT] MSG_CMD|RUN_CMD] [ARGS]
 //!
 //! `@` is how the command line names an agent; it is not part of the language.
-//! Every turn is saved as a new agent in `=` and its name printed,
-//! so a saved turn is addressed by name exactly like any other agent.
+//! Every turn is saved as a new agent in `=` and its name printed, so a saved
+//! turn is addressed by name exactly like any other agent.
+//!
+//! The command line is a way of assembling a ledger and nothing more: a name,
+//! whatever was piped in, and a prompt, in that order. A message command is
+//! handed that ledger; a run command takes no name and is handed stdin, or
+//! nothing at all.
+//!
+//! `--` is a message command, so there is no separator anywhere in this and
+//! nothing has to decide whose arguments are whose. A bare `m8` runs it, which
+//! is why consulting an agent and running a filter are one path.
+//!
+//! A name is appended as the 🧠 it is, not as what it expands to. Expanding
+//! happens in whichever command needs it, which is what keeps a saved turn
+//! naming its parent rather than copying it.
 //!
 //! A terminal is written the rendered spelling and everything else markdown,
 //! decided once here and carried into every writer.
@@ -17,16 +29,26 @@
 const std = @import("std");
 const command = @import("command.zig");
 const config = @import("config.zig");
-const agent = @import("agent.zig");
-const provider = @import("provider.zig");
+const assembly = @import("assembly.zig");
+const ledger = @import("ledger.zig");
 const session = @import("session.zig");
+const sandbox = @import("sandbox.zig");
 const doc = @import("m8/doc.zig");
 
 comptime {
     _ = @import("m8/sigil.zig");
     _ = @import("m8/doc.zig");
+    _ = @import("m8/model.zig");
     _ = @import("session.zig");
     _ = @import("sandbox.zig");
+    _ = @import("toolbox.zig");
+    _ = @import("provider.zig");
+    _ = @import("agent.zig");
+    _ = @import("ledger.zig");
+    _ = @import("assembly.zig");
+    _ = @import("codec.zig");
+    _ = @import("config.zig");
+    _ = @import("command.zig");
 }
 
 pub fn main(init: std.process.Init) !u8 {
@@ -40,185 +62,141 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout = std.Io.File.stdout().writer(io, &out_buf);
     var err_buf: [4 * 1024]u8 = undefined;
     var stderr = std.Io.File.stderr().writer(io, &err_buf);
+    const out = &stdout.interface;
+    const err = &stderr.interface;
 
-    //     m8 [@AGENT|+CHAT] [-- PROMPT]
-    //     m8 COMMAND [args]
-    //
-    // The first word names an agent, a chat, or a command, and a prompt only
-    // ever follows `--`. Nothing is guessed, so a prompt may say whatever it
-    // likes — including a word that happens to be a command's name.
     var rest = args;
-    var name: []const u8 = session.latest;
 
-    if (rest.len > 0 and !std.mem.eql(u8, rest[0], "--")) {
+    // `-l` sits before the name because it covers the whole run, not one
+    // command. It adds to whatever an agent already carries and can never
+    // take away, since a lock only ever removes.
+    //
+    // One lock per flag, repeated — which is what a 🔒 array expands to
+    // through `{{lock:-l}}`, and what any other argv would do. The comma list
+    // belongs to the sigil value, where `,` is the field separator; argv has
+    // its own idiom and this is it.
+    var locks: std.ArrayList([]const u8) = .empty;
+    while (rest.len >= 2 and (std.mem.eql(u8, rest[0], "-l") or std.mem.eql(u8, rest[0], "--lock"))) {
+        const lock = rest[1];
+        if (sandbox.find(lock) == null) {
+            try err.print("m8: no lock named '{s}'\n", .{lock});
+            if (std.mem.indexOfScalar(u8, lock, ',') != null)
+                try err.writeAll("m8: one lock per -l, repeat the flag\n");
+            try err.flush();
+            return 1;
+        }
+        try locks.append(arena, lock);
+        rest = rest[2..];
+    }
+
+    // A name, then a command, then that command's arguments. Nothing is
+    // guessed: a name is written `@x` or `+x`, and everything after a command
+    // belongs to it — including a prompt, since `--` is a command too.
+    var name: []const u8 = "";
+    var named = false;
+    if (rest.len > 0) {
         const word = rest[0];
-        rest = rest[1..];
-
         if (std.mem.startsWith(u8, word, "@")) {
             name = word[1..];
+            named = true;
+            rest = rest[1..];
         } else if (std.mem.startsWith(u8, word, session.alias)) {
-            name = try std.fmt.allocPrint(arena, "{s}/{s}", .{ session.alias, word[session.alias.len..] });
-        } else if (command.find(word)) |c| {
-            return runCommand(init, io, arena, c, rest, &stdout.interface, &stderr.interface);
-        } else {
-            try stderr.interface.print("m8: '{s}' is not an agent, a chat, or a command\n", .{word});
-            try usage(&stderr.interface);
-            return 1;
+            name = try std.fmt.allocPrint(arena, "{s}/{s}", .{
+                session.alias,
+                word[session.alias.len..],
+            });
+            named = true;
+            rest = rest[1..];
         }
     }
 
+    // A name with nothing after it is still a consultation; so is a bare `m8`.
+    var cmd = command.find(command.consult).?;
+    var cmd_args: []const [:0]const u8 = &.{};
     if (rest.len > 0) {
-        if (!std.mem.eql(u8, rest[0], "--")) {
-            try stderr.interface.print("m8: put -- before what you want to say\n", .{});
-            try usage(&stderr.interface);
+        cmd = command.find(rest[0]) orelse {
+            try err.print("m8: '{s}' is not an agent, a chat, or a command\n", .{rest[0]});
+            try usage(err);
             return 1;
-        }
-        rest = rest[1..];
+        };
+        cmd_args = rest[1..];
     }
-    const text = rest;
 
-    runAgent(init, io, arena, name, text, &stdout.interface) catch |e| {
-        try stdout.interface.flush();
+    // A run command takes no name, because there is no ledger for one to go
+    // into. Saying so beats quietly dropping what was typed.
+    if (named and !cmd.takes.isMessage()) {
+        try err.print(
+            "m8 {s}: takes stdin as it is, so there is nowhere to put a name\n",
+            .{cmd.name},
+        );
+        try err.flush();
+        return 1;
+    }
+
+    // One command's arguments are prose. It is read here rather than there
+    // because a prompt goes into the ledger, and the ledger is assembled here.
+    var prompt: []const u8 = "";
+    if (cmd.prompts) {
+        prompt = try std.mem.join(arena, " ", @as([]const []const u8, @ptrCast(cmd_args)));
+        cmd_args = &.{};
+    }
+
+    const dirs = try config.discover(arena, io, init.environ_map);
+
+    const assembled = gather(io, arena, dirs, name, named, prompt, cmd.takes) catch |e| {
         switch (e) {
-            error.NothingToSay => try usage(&stderr.interface),
-            error.UnknownAgent => try stderr.interface.print(
+            // Only the command line's own name reaches here; anything inside a
+            // ledger is the command's business.
+            error.UnknownAgent => try err.print(
                 "m8: no agent named '{s}'\n",
-                .{name},
+                .{if (named) name else session.latest},
             ),
-            else => try stderr.interface.print("m8 {s}: {s}\n", .{ name, @errorName(e) }),
+            else => try err.print("m8: {s}\n", .{@errorName(e)}),
         }
-        try stderr.interface.flush();
+        try err.flush();
         return 1;
     };
-    try stdout.interface.flush();
-    return 0;
+
+    // Nothing piped and nothing said is somebody finding out what m8 is.
+    if (cmd.prompts and assembled.said_nothing) {
+        try usage(err);
+        return 1;
+    }
+
+    return runCommand(init, io, arena, cmd, cmd_args, locks.items, assembled.document, out, err);
 }
 
-/// Address an agent.
-///
-/// Everything behind the name — its model, its system prompt, and any turns it
-/// carries — comes from resolving 🧠 recursively, so continuing a conversation
-/// and invoking an agent are one code path. The turn is saved as a new agent in
-/// `=` and its name printed, which is what the person types back.
-fn runAgent(
-    init: std.process.Init,
+/// Read what this kind of command is handed.
+fn gather(
     io: std.Io,
     arena: std.mem.Allocator,
+    dirs: []const []const u8,
     name: []const u8,
-    args: []const [:0]const u8,
-    out: *std.Io.Writer,
-) !void {
-    const dirs = try config.discover(arena, io, init.environ_map);
-    const def = try agent.load(arena, io, dirs, name, 0);
-    const providers = try config.providers(arena, io, dirs);
-    const p = try provider.find(providers, def.provider);
-
+    named: bool,
+    prompt: []const u8,
+    takes: command.Takes,
+) !assembly.Assembled {
     var in_buf: [64 * 1024]u8 = undefined;
-    const piped = try command.api.readDocument(io, arena, &in_buf);
-
-    // A document on stdin is context to splice in; anything else is what the
-    // person wants to say.
-    var spliced: []const doc.Record = &.{};
-    var typed: []const u8 = "";
-    if (piped.len > 0) {
-        if (doc.detect(piped) != null) {
-            var diag: doc.Diagnostic = .{};
-            spliced = try doc.parse(arena, piped, &diag);
-        } else {
-            typed = std.mem.trim(u8, piped, " \t\r\n");
-        }
-    }
-    if (args.len > 0) {
-        typed = try std.mem.join(arena, " ", @as([]const []const u8, @ptrCast(args)));
-    }
-
-    if (typed.len == 0 and spliced.len == 0) return error.NothingToSay;
-
-    var messages: std.ArrayList(provider.Message) = .empty;
-    if (def.system.len > 0)
-        try messages.append(arena, .{ .role = "system", .content = def.system });
-    for (def.turns) |r| try appendTurn(arena, &messages, r);
-    for (spliced) |r| try appendTurn(arena, &messages, r);
-    if (typed.len > 0)
-        try messages.append(arena, .{ .role = "user", .content = typed });
-
-    // The name has to exist before the turn, because the turn records it.
-    const saved_as = try session.newName(arena, io);
-
-    // A terminal gets the rendered spelling, and is also the only reader that
-    // can see progress — down a pipe, flushing per token buys nothing and
-    // costs a syscall each time.
-    const tty = std.Io.File.stdout().isTty(io) catch false;
-    const mode: doc.Mode = if (tty) .m8 else .md;
-
-    var body = try doc.ContentWriter.begin(out, mode, .bot, "");
-    var live: LiveReply = .{
-        .body = &body,
-        .out = out,
-        .text = .empty,
-        .arena = arena,
-        .live = tty,
+    return switch (takes) {
+        // Stdin belongs to whatever the command hands it to.
+        .nothing => .{},
+        // Handed on untouched: it is not m8 yet.
+        .stdin => .{
+            .document = try command.api.readDocument(io, arena, &in_buf),
+            .said_nothing = false,
+        },
+        .ledger => try assembly.assemble(
+            arena,
+            io,
+            dirs,
+            name,
+            named,
+            prompt,
+            try command.api.readDocument(io, arena, &in_buf),
+        ),
     };
-    try provider.completeStreaming(arena, io, p, def.model, messages.items, live.sink());
-    try body.finish();
-    try out.writeByte('\n');
-    try doc.write(out, mode, .{ .sigil = .agent, .value = saved_as });
-    try out.flush();
-
-    // Lineage names the turn continued, never an alias to it: aliases move,
-    // and a turn that named one would become its own ancestor.
-    const parent = (try session.deref(arena, io, dirs, name)) orelse name;
-
-    var turn: std.ArrayList(doc.Record) = .empty;
-    try turn.append(arena, .{ .sigil = .agent, .value = parent });
-    try turn.appendSlice(arena, spliced);
-    if (typed.len > 0)
-        try turn.append(arena, .{ .sigil = .user, .content = typed });
-    try turn.append(arena, .{ .sigil = .bot, .content = live.text.items });
-    try session.write(arena, io, dirs, saved_as, turn.items);
-    try session.setAlias(arena, io, dirs, session.global, saved_as);
-    if (def.origin.len > 0) try session.setAlias(arena, io, dirs, def.origin, saved_as);
 }
 
-fn appendTurn(
-    arena: std.mem.Allocator,
-    messages: *std.ArrayList(provider.Message),
-    r: doc.Record,
-) !void {
-    switch (r.sigil) {
-        .user => try messages.append(arena, .{ .role = "user", .content = r.content orelse "" }),
-        .bot => try messages.append(arena, .{ .role = "assistant", .content = r.content orelse "" }),
-        else => {},
-    }
-}
-
-/// Bridges the provider's byte stream into the document, flushing each
-/// fragment so the text appears as it is generated rather than at the end.
-const LiveReply = struct {
-    body: *doc.ContentWriter,
-    out: *std.Io.Writer,
-    /// Kept as well as streamed, because the saved turn needs the whole reply.
-    text: std.ArrayList(u8),
-    arena: std.mem.Allocator,
-    live: bool,
-
-    fn sink(self: *LiveReply) provider.Sink {
-        return .{ .ctx = self, .write = writeFn };
-    }
-
-    fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
-        const self: *LiveReply = @ptrCast(@alignCast(ctx));
-        try self.text.appendSlice(self.arena, bytes);
-        try self.body.write(bytes);
-        if (self.live) try self.out.flush();
-    }
-};
-
-/// Read the incoming document.
-///
-/// A terminal on stdin means there is no incoming document — nobody pipes a
-/// conversation in by hand — so it reads as empty. Waiting for an EOF the
-/// terminal will never send just hangs.
 /// Commands take their arguments verbatim; they parse their own.
 fn runCommand(
     init: std.process.Init,
@@ -226,20 +204,20 @@ fn runCommand(
     arena: std.mem.Allocator,
     c: command.Command,
     args: []const [:0]const u8,
+    locks: []const []const u8,
+    input: []const u8,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
 ) !u8 {
-    var in_buf: [64 * 1024]u8 = undefined;
-    const input = if (c.reads) try command.api.readDocument(io, arena, &in_buf) else "";
-
-    var tty_storage: TtyFiles = undefined;
-    const tty = openTty(io, &tty_storage);
+    var tty_storage: command.api.TtyFiles = undefined;
+    const tty = command.api.openTty(io, &tty_storage);
 
     const status = c.run(.{
         .arena = arena,
         .io = io,
         .mode = if (std.Io.File.stdout().isTty(io) catch false) .m8 else .md,
         .env = init.environ_map,
+        .locks = locks,
         .args = @ptrCast(args),
         .in = input,
         .out = out,
@@ -247,41 +225,30 @@ fn runCommand(
         .tty = tty,
     }) catch |e| {
         try out.flush();
-        if (tty) |t2| try t2.w.flush();
-        try err.print("m8 {s}: {s}\n", .{ c.name, @errorName(e) });
+        if (tty) |t| try t.w.flush();
+        switch (e) {
+            error.UnknownAgent => try err.writeAll("m8: that ledger names an agent that is not there\n"),
+            error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
+            error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),
+            error.NoProvider => try err.writeAll(
+                "m8: that ledger names a model but not whose; say which, as `m8 send PROVIDER`\n",
+            ),
+            else => try err.print("m8 {s}: {s}\n", .{ c.name, @errorName(e) }),
+        }
         try err.flush();
         return 1;
     };
 
     try out.flush();
-    if (tty) |t2| try t2.w.flush();
+    if (tty) |t| try t.w.flush();
     return status;
-}
-
-const TtyFiles = struct {
-    file: std.Io.File,
-    r: std.Io.File.Reader,
-    w: std.Io.File.Writer,
-    r_buf: [4096]u8,
-    w_buf: [4096]u8,
-};
-
-/// Open the terminal as its own channel. Absent under a pipe, which commands
-/// read as "run non-interactively" rather than as a failure.
-fn openTty(io: std.Io, storage: *TtyFiles) ?command.Tty {
-    const f = std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write }) catch return null;
-    storage.file = f;
-    storage.r = f.readerStreaming(io, &storage.r_buf);
-    storage.w = f.writerStreaming(io, &storage.w_buf);
-    return .{ .r = &storage.r.interface, .w = &storage.w.interface };
 }
 
 fn usage(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 — a composable shell harness
         \\
-        \\  m8 [@AGENT|+CHAT] [-- PROMPT]
-        \\  m8 COMMAND [args]
+        \\  m8 [-l LOCKS] [[@AGENT|+CHAT] MSG_CMD|RUN_CMD] [ARGS]
         \\
         \\@mathy starts a chat named +mathy. Carry it on with +mathy, or
         \\with a plain m8, which continues whichever chat came last.
@@ -291,9 +258,26 @@ fn usage(w: *std.Io.Writer) !void {
         \\  m8 +mathy -- "Tell me more."
         \\  m8 -- "And in one sentence?"
         \\
-        \\commands:
+        \\A message command is handed a ledger assembled from the name, what
+        \\was piped in, and the prompt. `--` is one of them, so everything
+        \\after it is what you want to say. A run command takes no name and
+        \\is handed stdin as it arrived.
+        \\
+        \\  m8 +mathy encode m8 >ledger.md
+        \\  m8 encode openai-completions <ledger.md >request.json
+        \\  m8 decode openai-completions <request.json | m8 send local
         \\
     );
-    for (command.all) |c| try w.print("  {s: <6} {s}\n", .{ c.name, c.summary });
+    try list(w, "message commands", true);
+    try list(w, "run commands", false);
+    try w.writeAll("\nm8 call NAME reaches m8's own filters and its inbuilt tools.\n");
     try w.flush();
+}
+
+fn list(w: *std.Io.Writer, heading: []const u8, message: bool) !void {
+    try w.print("\n{s}:\n\n", .{heading});
+    for (command.all) |c| {
+        if (c.takes.isMessage() != message) continue;
+        try w.print("  {s: <7} {s}\n", .{ c.name, c.summary });
+    }
 }

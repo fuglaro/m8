@@ -1,40 +1,55 @@
-//! `call` — run a command, optionally with the world taken away.
+//! `call` — run a command under whatever locks are in force.
 //!
-//!     m8 call [-w R]... NAME [ARGS]      an m8 command
-//!     m8 call [-w R]... -- PROG [ARGS]   a program from the environment
+//!     m8 [-l LOCKS] call NAME [ARGS]      an m8 command
+//!     m8 [-l LOCKS] call -- PROG [ARGS]   a program from the environment
 //!
-//! `-w` names a restriction from the sandbox profile. Each one only ever
-//! subtracts, so they may be repeated in any order. With none given there is
-//! nothing to enforce and the program is spawned directly, rather than through
-//! a sandbox that grants everything.
+//! `-l` belongs to m8 rather than to `call`, so a lock covers everything a run
+//! does and not just the one command. It is cumulative with the locks an agent
+//! already carries; nothing said here can loosen those.
+//!
+//! With no kernel lock there is nothing for the sandbox to enforce, so the
+//! program is spawned directly rather than through a profile that grants
+//! everything.
+//!
+//! Output is m8: the child's stdout becomes a 🧾 receipt. A non-zero exit is a
+//! 🚫 naming the code, with the child's stderr after it when there was any —
+//! a failure with no reason in it tells a model only that something broke.
+//! `--raw` hands stdout straight through instead — which also hands
+//! over the descriptor, so a child under `--raw` can seek and truncate
+//! whatever the caller redirected to. Capturing is the default for that
+//! reason as much as for the format.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const api = @import("api.zig");
+const doc = @import("../m8/doc.zig");
 const sandbox = @import("../sandbox.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "call",
-    .summary = "run a command, optionally restricted",
+    .summary = "run a command under the locks in force",
     // A spawned program owns stdin. Reading it here would take the bytes it
     // is waiting for; an m8 command that wants the document gets it below.
-    .reads = false,
+    .takes = .nothing,
     .run = run,
 };
 
 pub const Error = error{
-    UnknownRestriction,
     UnknownCommand,
     NothingToRun,
-    /// `-w` needs a sandbox, and only macOS has one here.
-    RestrictionsUnsupported,
+    /// A kernel lock was asked for on a platform with no sandbox.
+    LocksUnsupported,
+    /// `deny` was in force.
+    ToolUseDenied,
+    /// `ask` was in force and the answer was no, or there was nobody to ask.
+    Refused,
 };
 
 fn run(ctx: Ctx) !u8 {
-    var with: std.ArrayList([]const u8) = .empty;
     var rest: []const []const u8 = ctx.args;
     var env_program = false;
+    var raw = false;
 
     while (rest.len > 0) {
         const word = rest[0];
@@ -43,56 +58,147 @@ fn run(ctx: Ctx) !u8 {
             env_program = true;
             break;
         }
-        if (std.mem.eql(u8, word, "-w")) {
-            if (rest.len < 2) {
-                try ctx.err.writeAll("m8 call: -w needs a restriction\n");
-                return usage(ctx, Error.UnknownRestriction);
-            }
-            if (sandbox.find(rest[1]) == null) {
-                try ctx.err.print("m8 call: no restriction named '{s}'\n", .{rest[1]});
-                return usage(ctx, Error.UnknownRestriction);
-            }
-            try with.append(ctx.arena, rest[1]);
-            rest = rest[2..];
+        if (std.mem.eql(u8, word, "--raw")) {
+            raw = true;
+            rest = rest[1..];
             continue;
         }
         if (std.mem.eql(u8, word, "--help") or std.mem.eql(u8, word, "-h")) return help(ctx);
+        // `-l` used to live here. It covers the whole run now, so it belongs
+        // before the command rather than after it.
+        if (std.mem.eql(u8, word, "-l") or std.mem.eql(u8, word, "--lock")) {
+            try ctx.err.writeAll("m8 call: put -l before call, it covers the whole run\n");
+            return usage(ctx, Error.NothingToRun);
+        }
         break;
     }
 
     if (rest.len == 0) {
-        // Nothing named at all is the help case; `--` with nothing after it
-        // is a mistake worth naming.
-        if (!env_program and with.items.len == 0) return help(ctx);
+        if (!env_program) return help(ctx);
+        try ctx.err.writeAll("m8 call: nothing after --\n");
         return usage(ctx, Error.NothingToRun);
     }
 
     if (!env_program) {
-        const inner = @import("../command.zig").findFilter(rest[0]) orelse {
+        // Gate locks apply to an m8 command too; `execute` covers the
+        // spawning path below.
+        if (has(ctx.locks, "deny")) {
+            try ctx.err.writeAll("m8 call: tool use is denied by a lock\n");
+            return Error.ToolUseDenied;
+        }
+        if (has(ctx.locks, "ask") and !try permitted(ctx, rest)) return Error.Refused;
+
+        const inner = @import("../command.zig").findCallable(rest[0]) orelse {
             try ctx.err.print("m8 call: no command named '{s}'\n", .{rest[0]});
             return usage(ctx, Error.UnknownCommand);
         };
-        // An m8 command runs in this process, so there is nothing to sandbox.
-        if (with.items.len > 0) return usage(ctx, Error.RestrictionsUnsupported);
         var sub = ctx;
         sub.args = rest[1..];
         var in_buf: [64 * 1024]u8 = undefined;
-        if (inner.reads) sub.in = try api.readDocument(ctx.io, ctx.arena, &in_buf);
+        // Whatever the inner command wants, it gets stdin: a tool is a filter
+        // in somebody else's pipeline, and there is no command line here to
+        // assemble a ledger from.
+        if (inner.takes != .nothing) sub.in = try api.readDocument(ctx.io, ctx.arena, &in_buf);
         return inner.run(sub);
     }
 
-    if (with.items.len == 0) return spawn(ctx, rest, null);
-    if (builtin.os.tag != .macos) return usage(ctx, Error.RestrictionsUnsupported);
-    return spawnRestricted(ctx, rest, with.items);
+    return execute(ctx, rest, raw);
 }
 
-/// Straight through: same stdio, same environment, our exit status is theirs.
-fn spawn(ctx: Ctx, argv: []const []const u8, env: ?*const std.process.Environ.Map) !u8 {
-    var child = try std.process.spawn(ctx.io, .{
-        .argv = argv,
-        .environ_map = env,
+/// Run an already-built command line.
+///
+/// This is what a 🔌 expansion reaches: the template is a whole command line
+/// already, and asks for the sandbox itself by naming `m8 -l ... call --`.
+/// The gate locks still apply here, because they gate the decision to run
+/// anything at all rather than what it may do once running.
+pub fn execute(ctx: Ctx, argv: []const []const u8, raw: bool) !u8 {
+    if (argv.len == 0) return Error.NothingToRun;
+    if (has(ctx.locks, "deny")) {
+        try ctx.err.writeAll("m8 call: tool use is denied by a lock\n");
+        return Error.ToolUseDenied;
+    }
+    if (has(ctx.locks, "ask") and !try permitted(ctx, argv)) return Error.Refused;
+    return spawn(ctx, argv, raw);
+}
+
+fn has(locks: []const []const u8, name: []const u8) bool {
+    for (locks) |l| if (std.mem.eql(u8, l, name)) return true;
+    return false;
+}
+
+/// `ask` with nobody to ask is a no. A pipe or a cron job must not be a way
+/// of skipping the question.
+fn permitted(ctx: Ctx, argv: []const []const u8) !bool {
+    const t = ctx.tty orelse {
+        try ctx.err.writeAll("m8 call: 'ask' is in force and there is no terminal\n");
+        return false;
+    };
+    try t.prompt("run: {s} ? [y/N] ", .{try std.mem.join(ctx.arena, " ", argv)});
+    const line = (try t.line()) orelse return false;
+    const answer = std.mem.trim(u8, line, " \t");
+    return std.mem.eql(u8, answer, "y") or std.mem.eql(u8, answer, "Y");
+}
+
+fn spawn(ctx: Ctx, argv: []const []const u8, raw: bool) !u8 {
+    var kernel: std.ArrayList([]const u8) = .empty;
+    for (ctx.locks) |l| if (sandbox.isKernel(l)) try kernel.append(ctx.arena, l);
+
+    var full = argv;
+    var environ: ?*const std.process.Environ.Map = null;
+    var tmp: []const u8 = "";
+
+    if (kernel.items.len > 0) {
+        if (builtin.os.tag != .macos) {
+            try ctx.err.writeAll("m8 call: kernel locks need sandbox-exec, which is macOS only\n");
+            return Error.LocksUnsupported;
+        }
+        tmp = try makeTmp(ctx);
+        full = try wrap(ctx, argv, kernel.items, tmp);
+    }
+
+    if (sandbox.containsEnv(ctx.locks)) {
+        environ = try contained(ctx, tmp);
+    } else if (tmp.len > 0) {
+        var m = try ctx.env.clone(ctx.arena);
+        try m.put("TMPDIR", tmp);
+        const boxed = try ctx.arena.create(std.process.Environ.Map);
+        boxed.* = m;
+        environ = boxed;
+    }
+
+    if (raw) {
+        var child = try std.process.spawn(ctx.io, .{ .argv = full, .environ_map = environ });
+        return status(try child.wait(ctx.io));
+    }
+
+    // `run` drains both pipes at once. Reading one and then the other
+    // deadlocks as soon as a tool fills the pipe nobody is reading.
+    const r = try std.process.run(ctx.arena, ctx.io, .{
+        .argv = full,
+        .environ_map = environ,
     });
-    return switch (try child.wait(ctx.io)) {
+    const code = status(r.term);
+
+    const content = if (code == 0)
+        std.mem.trimEnd(u8, r.stdout, "\n")
+    else blk: {
+        const why = std.mem.trimEnd(u8, r.stderr, "\n");
+        break :blk if (why.len > 0)
+            try std.fmt.allocPrint(ctx.arena, "Failed with exit code {d}: {s}", .{ code, why })
+        else
+            try std.fmt.allocPrint(ctx.arena, "Failed with exit code {d}", .{code});
+    };
+
+    try doc.write(ctx.out, ctx.mode, .{
+        .sigil = if (code == 0) .result else .failed,
+        .value = ctx.call_id,
+        .content = content,
+    });
+    return code;
+}
+
+fn status(term: std.process.Child.Term) u8 {
+    return switch (term) {
         .exited => |code| code,
         // A signalled child is not an exit status; report it the way a shell
         // does rather than pretending it returned something.
@@ -101,53 +207,66 @@ fn spawn(ctx: Ctx, argv: []const []const u8, env: ?*const std.process.Environ.Ma
     };
 }
 
-fn spawnRestricted(ctx: Ctx, argv: []const []const u8, with: []const []const u8) !u8 {
-    const cwd = try currentPath(ctx);
+/// The environment rebuilt from the allowlist. HOME and TMPDIR are always the
+/// sandbox's own directory: a tool gets somewhere real to write that says
+/// nothing about whose machine this is.
+fn contained(ctx: Ctx, tmp: []const u8) !*const std.process.Environ.Map {
+    const rules = try sandbox.envAllowed(ctx.arena, ctx.io, ctx.env);
+    var m: std.process.Environ.Map = .init(ctx.arena);
+    var it = ctx.env.iterator();
+    while (it.next()) |e| {
+        if (sandbox.envPasses(rules, e.key_ptr.*)) try m.put(e.key_ptr.*, e.value_ptr.*);
+    }
+    if (tmp.len > 0) {
+        try m.put("TMPDIR", tmp);
+        try m.put("HOME", tmp);
+    }
+    const boxed = try ctx.arena.create(std.process.Environ.Map);
+    boxed.* = m;
+    return boxed;
+}
+
+fn makeTmp(ctx: Ctx) ![]const u8 {
+    const base = ctx.env.get("TMPDIR") orelse "/tmp";
+    var word: [8]u8 = undefined;
+    ctx.io.random(&word);
+    var hex: [16]u8 = undefined;
+    _ = std.fmt.bufPrint(&hex, "{x}", .{&word}) catch unreachable;
+    const tmp = try std.fs.path.join(ctx.arena, &.{
+        base, try std.fmt.allocPrint(ctx.arena, "m8call-{s}", .{&hex}),
+    });
+    try std.Io.Dir.cwd().createDirPath(ctx.io, tmp);
+    return tmp;
+}
+
+/// `sandbox-exec -f <resolved> -D ... -- argv`
+fn wrap(ctx: Ctx, argv: []const []const u8, locks: []const []const u8, tmp: []const u8) ![]const []const u8 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try std.process.currentPath(ctx.io, &buf);
+    const cwd = try ctx.arena.dupe(u8, buf[0..len]);
     const parent = std.fs.path.dirname(cwd) orelse "/";
 
-    // TMPDIR has to exist before the profile names it, and has to be somewhere
-    // the profile will still allow once the restrictions bite.
-    const base = ctx.env.get("TMPDIR") orelse "/tmp";
-    const tmp = try std.fs.path.join(ctx.arena, &.{ base, try tmpName(ctx) });
-    const dir = std.Io.Dir.cwd();
-    try dir.createDirPath(ctx.io, tmp);
-
-    const profile = try std.fs.path.join(ctx.arena, &.{ tmp, "resolved.sb" });
-    try dir.writeFile(ctx.io, .{
-        .sub_path = profile,
-        .data = try sandbox.resolve(ctx.arena, with),
+    const src = try sandbox.profile(ctx.arena, ctx.io, ctx.env);
+    const path = try std.fs.path.join(ctx.arena, &.{ tmp, "resolved.sb" });
+    try std.Io.Dir.cwd().writeFile(ctx.io, .{
+        .sub_path = path,
+        .data = try sandbox.resolve(ctx.arena, src, locks),
     });
 
     var full: std.ArrayList([]const u8) = .empty;
     try full.appendSlice(ctx.arena, &.{
-        "sandbox-exec",                                              "-f",
-        profile,                                                     "-D",
-        try std.fmt.allocPrint(ctx.arena, "CWD={s}", .{cwd}),        "-D",
-        try std.fmt.allocPrint(ctx.arena, "PARENTWD={s}", .{parent}), "-D",
+        "sandbox-exec",
+        "-f",
+        path,
+        "-D",
+        try std.fmt.allocPrint(ctx.arena, "CWD={s}", .{cwd}),
+        "-D",
+        try std.fmt.allocPrint(ctx.arena, "PARENTWD={s}", .{parent}),
+        "-D",
         try std.fmt.allocPrint(ctx.arena, "TMP={s}", .{tmp}),
     });
     try full.appendSlice(ctx.arena, argv);
-
-    // The child's own TMPDIR must be the one the profile allows, or it writes
-    // where it is denied and fails in a way nothing explains.
-    var env = try ctx.env.clone(ctx.arena);
-    try env.put("TMPDIR", tmp);
-
-    return spawn(ctx, full.items, &env);
-}
-
-fn currentPath(ctx: Ctx) ![]const u8 {
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const len = try std.process.currentPath(ctx.io, &buf);
-    return ctx.arena.dupe(u8, buf[0..len]);
-}
-
-fn tmpName(ctx: Ctx) ![]const u8 {
-    var raw: [8]u8 = undefined;
-    ctx.io.random(&raw);
-    var hex: [16]u8 = undefined;
-    _ = std.fmt.bufPrint(&hex, "{x}", .{&raw}) catch unreachable;
-    return std.fmt.allocPrint(ctx.arena, "m8call-{s}", .{&hex});
+    return full.items;
 }
 
 fn usage(ctx: Ctx, e: Error) !u8 {
@@ -160,20 +279,32 @@ fn help(ctx: Ctx) !u8 {
     // still there when the terminal is not.
     const w = ctx.err;
     try w.writeAll(
-        \\m8 call — run a command, optionally restricted
+        \\m8 call — run a command under the locks in force
         \\
-        \\  m8 call [-w R]... NAME [ARGS]     an m8 command
-        \\  m8 call [-w R]... -- PROG [ARGS]  a program from the environment
+        \\  m8 [-l LOCKS] call NAME [ARGS]     an m8 command
+        \\  m8 [-l LOCKS] call -- PROG [ARGS]  a program from the environment
         \\
-        \\-w takes the world away. Each only subtracts, so any combination
-        \\is safe and the order never matters.
+        \\  --raw   hand stdout through instead of writing a receipt
+        \\
+        \\A lock only ever removes, so any combination is safe and the order
+        \\never matters. -l adds to whatever the agent already carries.
         \\
         \\
     );
-    for (sandbox.all) |r| try w.print("  {s: <15} {s}\n", .{ r.name, r.summary });
+    for (sandbox.all) |r| {
+        try w.print("  {s: <15} {s}{s}\n", .{
+            r.name,
+            r.summary,
+            if (r.kernel) "" else "  (m8)",
+        });
+    }
+    // What `call` accepts, asked rather than restated, so this cannot come to
+    // advertise something it would refuse.
+    const cmd = @import("../command.zig");
     try w.writeAll("\ncommands:\n\n");
-    for (@import("../command.zig").all) |c| {
-        if (std.mem.eql(u8, c.name, "call")) continue;
+    for (cmd.native) |c| try w.print("  {s: <15} {s}\n", .{ c.name, c.summary });
+    for (cmd.all) |c| {
+        if (!cmd.callable(c)) continue;
         try w.print("  {s: <15} {s}\n", .{ c.name, c.summary });
     }
     try w.flush();

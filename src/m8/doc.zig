@@ -26,7 +26,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sigil = @import("sigil.zig");
-const Sigil = sigil.Sigil;
+pub const Sigil = sigil.Sigil;
 
 pub const Mode = sigil.Mode;
 

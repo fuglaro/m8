@@ -42,7 +42,11 @@ pub const Sigil = enum {
     skill,
     system,
     allow,
+    // 🔓 says a tool is available here; 🔒 says what it may not do.
+    lock,
     tool,
+    // 🔌 is how a tool is run: the argv template it plugs into.
+    command,
 
     pub fn emoji(s: Sigil) []const u8 {
         return switch (s) {
@@ -59,7 +63,9 @@ pub const Sigil = enum {
             .skill => "\u{1F4DA}", // 📚
             .system => "\u{1F4BB}", // 💻
             .allow => "\u{1F513}", // 🔓
+            .lock => "\u{1F512}", // 🔒
             .tool => "\u{1F9F0}", // 🧰
+            .command => "\u{1F50C}", // 🔌
         };
     }
 
@@ -80,7 +86,9 @@ pub const Sigil = enum {
             .skill => ":books:",
             .system => ":computer:",
             .allow => ":unlock:",
+            .lock => ":lock:",
             .tool => ":toolbox:",
+            .command => ":electric_plug:",
         };
     }
 
@@ -102,7 +110,7 @@ pub const Sigil = enum {
     /// Whether a quoted block may follow.
     pub fn takesContent(s: Sigil) bool {
         return switch (s) {
-            .agent, .skill, .allow, .signature => false,
+            .agent, .skill, .allow, .signature, .lock, .command => false,
             else => true,
         };
     }

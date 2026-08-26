@@ -31,14 +31,32 @@
 ;;   airgap          no internet; loopback and unix sockets stay
 ;;   no-loop         no loopback or unix sockets; internet stays
 ;;
+;; Tampering
+;;   no-edit-git     no writing to a .git anywhere
+;;   no-edit-m8-st8  no writing to a config directory anywhere
+;;
+;; Not a template flag, because it is not enforced here:
+;;   contain-env     the child's environment is rebuilt from
+;;                   core/contain-env-allowed.txt rather than
+;;                   inherited. See sandbox.zig.
+;;
 ;; Levels (compositions of the above)
-;;   sandbox         private + contain-writes + no-loop.
+;;   sandbox         private + contain-writes + no-loop +
+;;                   no-edit-git + no-edit-m8-st8 + contain-env.
 ;;                   Internet allowed; cwd and TMP writable.
 ;;   jail            sandbox, and no internet either.
 ;;
 ;; Always allowed, in every mode:
 ;;   reads of system dirs and the standard /dev nodes; reads of
 ;;   cwd and TMP; stat of the cwd parent; process exec and fork.
+;;
+;; Always denied, in every mode:
+;;   writing to core/ in a config directory. That rule carries no
+;;   tag, so no combination of flags can subtract it. It is what
+;;   makes this file safe to override from config: you may edit
+;;   core/ with an editor, since none of this applies to you, but
+;;   nothing running under the sandbox can reach it — including a
+;;   process trying to widen the profile it is already inside.
 
 ;; Must be exectuted with parameters.
 ;; TMPDIR should be pre-created and set inside a safe area like:
@@ -119,6 +137,27 @@
 ;; --- stat of cwd parent ---
 (allow file-read-metadata
   (literal (param "PARENTWD")))
+
+;; --- tampering ---
+;; Deny, then allow back conditionally, the same shape as localhost below.
+;; A flag removes the allow rather than adding the deny, so flags still only
+;; ever subtract and any combination stays safe.
+;;
+;; The component anchor ($|/) matches the directory itself as well as
+;; everything under it, which is what stops the three ways in: creating it,
+;; renaming something else onto it, and pointing a symlink at it. Without the
+;; $ the directory path never matches, a rename carries a whole subtree past
+;; the check, and the contents arrive already inside.
+(deny file-write* (regex #"(^|/)\.git($|/)"))
+(allow file-write* (regex #"(^|/)\.git($|/)"))          ;;!! !no-edit-git !sandbox !jail
+
+(deny file-write* (regex #"(^|/)\.?m8-st8($|/)"))
+(allow file-write* (regex #"(^|/)\.?m8-st8($|/)"))      ;;!! !no-edit-m8-st8 !sandbox !jail
+
+;; Last, so it wins over the allow above, and untagged, so nothing can
+;; subtract it. core/ decides what a lock means, which is what makes this
+;; file safe to override from config.
+(deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))
 
 ;; --- non-local internet access ---
 (allow network*)                      ;;!! !airgap !jail

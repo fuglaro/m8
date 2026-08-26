@@ -22,6 +22,13 @@ pub const Ctx = struct {
     mode: doc.Mode,
     /// The environment, for a command that spawns something.
     env: *const std.process.Environ.Map,
+    /// Every lock in force: `-l` on the command line, plus whatever the agent
+    /// carries. Cumulative, and nothing here can loosen what an agent already
+    /// has — a lock only ever removes.
+    locks: []const []const u8 = &.{},
+    /// The call this is answering, which names the 🧾 or 🚫 written back.
+    /// Empty when a command was run straight from the shell.
+    call_id: []const u8 = "",
     /// Arguments after the command name.
     args: []const []const u8,
     /// The incoming document. Empty when nothing was piped in.
@@ -60,16 +67,58 @@ pub const Tty = struct {
     }
 };
 
+/// What a command is, which is also what it is handed on `in`.
+///
+/// A **message command** may be preceded by an `@AGENT` or `+CHAT`. The name,
+/// stdin and the prompt are assembled into a ledger, and that ledger is what
+/// it gets. `--`, `cat`, `encode` and `send` are these.
+///
+/// A **run command** takes no name, because there is no ledger for one to go
+/// into. It either reads stdin as it arrives — which is how `decode` gets to
+/// be the way in to the language — or hands it on untouched, which is what
+/// `call` must do or it would swallow the bytes a child is waiting for.
+pub const Takes = enum {
+    ledger,
+    stdin,
+    nothing,
+
+    /// Whether a name may come before this command.
+    pub fn isMessage(t: Takes) bool {
+        return t == .ledger;
+    }
+};
+
 pub const Command = struct {
     name: []const u8,
     summary: []const u8,
-    /// Whether `in` is filled before the command runs. False for anything that
-    /// hands stdin to something else: reading it here would swallow the very
-    /// bytes the child is waiting for.
-    reads: bool = true,
+    /// What `in` is filled with, and so what kind of command this is.
+    takes: Takes = .ledger,
+    /// Whether this command's arguments are a prompt, appended to the ledger
+    /// as a 🙋 rather than read by the command. Only `--` is: it is the one
+    /// whose arguments are prose.
+    prompts: bool = false,
     /// The exit status. A filter returns 0; `call` returns whatever it ran.
     run: *const fn (Ctx) anyerror!u8,
 };
+
+/// The terminal, opened as its own channel.
+pub const TtyFiles = struct {
+    file: std.Io.File,
+    r: std.Io.File.Reader,
+    w: std.Io.File.Writer,
+    r_buf: [4096]u8,
+    w_buf: [4096]u8,
+};
+
+/// Open the terminal as its own channel. Absent under a pipe, which commands
+/// read as "run non-interactively" rather than as a failure.
+pub fn openTty(io: std.Io, storage: *TtyFiles) ?Tty {
+    const f = std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write }) catch return null;
+    storage.file = f;
+    storage.r = f.readerStreaming(io, &storage.r_buf);
+    storage.w = f.writerStreaming(io, &storage.w_buf);
+    return .{ .r = &storage.r.interface, .w = &storage.w.interface };
+}
 
 /// Read the incoming document.
 ///
