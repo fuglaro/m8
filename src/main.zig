@@ -19,6 +19,11 @@
 //! happens in whichever command needs it, which is what keeps a saved turn
 //! naming its parent rather than copying it.
 //!
+//! `--help` is read here rather than by whichever command was named, so no
+//! command has to remember to answer it and no two answer it differently. It
+//! names the `help` command, which is why `m8 send --help` and `m8 help send`
+//! are one page. The exception is `--`, whose arguments are prose.
+//!
 //! A terminal is written the rendered spelling and everything else markdown,
 //! decided once here and carried into every writer.
 //!
@@ -35,6 +40,7 @@ const provider = @import("provider.zig");
 const session = @import("session.zig");
 const sandbox = @import("sandbox.zig");
 const doc = @import("m8/doc.zig");
+const help = @import("command/help.zig");
 
 comptime {
     _ = @import("m8/sigil.zig");
@@ -68,10 +74,15 @@ pub fn main(init: std.process.Init) !u8 {
         if (argv.len > 0) argv[0] else "m8",
     );
 
+    // Streaming, so writing is `write` from wherever the descriptor already
+    // is rather than a position this process is keeping. A run inherits a
+    // redirect that others are writing to as well — `m8 ... >>log.md` twice,
+    // or two runs in one `{ }` — and a position of its own would start each
+    // of them at nought and overwrite what the last one said.
     var out_buf: [64 * 1024]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(io, &out_buf);
+    var stdout = std.Io.File.stdout().writerStreaming(io, &out_buf);
     var err_buf: [4 * 1024]u8 = undefined;
-    var stderr = std.Io.File.stderr().writer(io, &err_buf);
+    var stderr = std.Io.File.stderr().writerStreaming(io, &err_buf);
     const out = &stdout.interface;
     const err = &stderr.interface;
 
@@ -121,33 +132,55 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     // A name with nothing after it is still a consultation; so is a bare `m8`.
+    const helper = command.find(help.name).?;
     var cmd = command.find(command.consult).?;
-    var cmd_args: []const [:0]const u8 = &.{};
+    var cmd_args: []const []const u8 = &.{};
+    var asked_for_help = false;
     if (rest.len > 0) {
-        cmd = command.find(rest[0]) orelse {
-            try err.print("m8: '{s}' is not an agent, a chat, or a command\n", .{rest[0]});
-            try usage(err);
-            return 1;
-        };
-        cmd_args = rest[1..];
+        // `m8 --help [COMMAND]` is `m8 help [COMMAND]`. The flag is a way of
+        // naming the command rather than a command's own argument.
+        if (command.api.wantsHelp(@ptrCast(rest))) {
+            cmd = helper;
+            cmd_args = @ptrCast(rest[1..]);
+            asked_for_help = true;
+        } else {
+            cmd = command.find(rest[0]) orelse {
+                try err.print("m8: '{s}' is not an agent, a chat, or a command\n", .{rest[0]});
+                try help.overview(err);
+                try err.flush();
+                return 1;
+            };
+            cmd_args = @ptrCast(rest[1..]);
+        }
     }
 
     // A run command takes no name, because there is no ledger for one to go
     // into. Saying so beats quietly dropping what was typed.
     if (named and !cmd.takes.isMessage()) {
-        try err.print(
-            "m8 {s}: takes stdin as it is, so there is nowhere to put a name\n",
-            .{cmd.name},
-        );
+        try err.print("m8 {s}: {s}, so there is nowhere to put a name\n", .{
+            cmd.name,
+            if (cmd.takes == .stdin) "takes stdin as it is" else "is handed no ledger",
+        });
         try err.flush();
         return 1;
+    }
+
+    // `m8 COMMAND --help` is `m8 help COMMAND` too, read here so that no
+    // command has to parse the flag and no two answer it differently. Not for
+    // `--`, whose arguments are prose: there it is something somebody said.
+    if (!asked_for_help and !cmd.prompts and command.api.wantsHelp(cmd_args)) {
+        var words: std.ArrayList([]const u8) = .empty;
+        try words.append(arena, cmd.name);
+        try words.appendSlice(arena, cmd_args[1..]);
+        cmd = helper;
+        cmd_args = words.items;
     }
 
     // One command's arguments are prose. It is read here rather than there
     // because a prompt goes into the ledger, and the ledger is assembled here.
     var prompt: []const u8 = "";
     if (cmd.prompts) {
-        prompt = try std.mem.join(arena, " ", @as([]const []const u8, @ptrCast(cmd_args)));
+        prompt = try std.mem.join(arena, " ", cmd_args);
         cmd_args = &.{};
     }
 
@@ -169,7 +202,8 @@ pub fn main(init: std.process.Init) !u8 {
 
     // Nothing piped and nothing said is somebody finding out what m8 is.
     if (cmd.prompts and assembled.said_nothing) {
-        try usage(err);
+        try help.overview(err);
+        try err.flush();
         return 1;
     }
 
@@ -213,7 +247,7 @@ fn runCommand(
     io: std.Io,
     arena: std.mem.Allocator,
     c: command.Command,
-    args: []const [:0]const u8,
+    args: []const []const u8,
     locks: []const []const u8,
     input: []const u8,
     self: []const u8,
@@ -230,7 +264,7 @@ fn runCommand(
         .env = init.environ_map,
         .self = self,
         .locks = locks,
-        .args = @ptrCast(args),
+        .args = args,
         .in = input,
         .out = out,
         .err = err,
@@ -240,6 +274,12 @@ fn runCommand(
         if (tty) |t| try t.w.flush();
         switch (e) {
             error.UnknownAgent => try err.writeAll("m8: that ledger names an agent that is not there\n"),
+            error.IncludeLoops => try err.writeAll(
+                "m8: an agent includes one that leads back to it\n",
+            ),
+            error.LineageLoops => try err.writeAll(
+                "m8: a turn in that chat names one that leads back to it\n",
+            ),
             error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
             error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),
             error.NoProvider => try err.writeAll(
@@ -254,42 +294,4 @@ fn runCommand(
     try out.flush();
     if (tty) |t| try t.w.flush();
     return status;
-}
-
-fn usage(w: *std.Io.Writer) !void {
-    try w.writeAll(
-        \\m8 — a composable shell harness
-        \\
-        \\  m8 [-l LOCKS] [[@AGENT|+CHAT] MSG_CMD|RUN_CMD] [ARGS]
-        \\
-        \\@mathy starts a chat named +mathy. Carry it on with +mathy, or
-        \\with a plain m8, which continues whichever chat came last.
-        \\Talking to @mathy again starts that chat over.
-        \\
-        \\  m8 @mathy -- "Tell me about the Riemann Sphere."
-        \\  m8 +mathy -- "Tell me more."
-        \\  m8 -- "And in one sentence?"
-        \\
-        \\A message command is handed a ledger assembled from the name, what
-        \\was piped in, and the prompt. `--` is one of them, so everything
-        \\after it is what you want to say. A run command takes no name and
-        \\is handed stdin as it arrived.
-        \\
-        \\  m8 +mathy encode m8 >ledger.md
-        \\  m8 encode openai-completions <ledger.md >request.json
-        \\  m8 decode openai-completions <request.json | m8 send local
-        \\
-    );
-    try list(w, "message commands", true);
-    try list(w, "run commands", false);
-    try w.writeAll("\nm8 call NAME reaches m8's own filters and its inbuilt tools.\n");
-    try w.flush();
-}
-
-fn list(w: *std.Io.Writer, heading: []const u8, message: bool) !void {
-    try w.print("\n{s}:\n\n", .{heading});
-    for (command.all) |c| {
-        if (c.takes.isMessage() != message) continue;
-        try w.print("  {s: <9} {s}\n", .{ c.name, c.summary });
-    }
 }

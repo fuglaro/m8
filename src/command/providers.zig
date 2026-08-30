@@ -10,8 +10,14 @@
 //!
 //! Each is named from `core/providers.json` as `["m8", "providers", NAME]`,
 //! and reads the entry's other arguments from `M8_PROVIDER_*`.
+//!
+//! Both tables here — the commands, and the models `inbuilt` serves — are what
+//! the pages list and what the dispatch reads, so what is advertised and what
+//! answers cannot come apart.
 
 const std = @import("std");
+const config = @import("../config.zig");
+const eliza = @import("providers/eliza.zig");
 const provider = @import("../provider.zig");
 const doc = @import("../m8/doc.zig");
 const ledger = @import("../ledger.zig");
@@ -26,29 +32,233 @@ pub const command: api.Command = .{
     // out, so nothing here wants a ledger assembled for it.
     .takes = .nothing,
     .run = run,
+    .help = help,
 };
 
-fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len == 0) return usage(ctx);
-    const which = ctx.args[0];
-    if (std.mem.eql(u8, which, "url")) return url(ctx);
-    if (std.mem.eql(u8, which, "inbuilt")) return inbuilt(ctx);
-    try ctx.err.print("m8 providers: no provider command named '{s}'\n", .{which});
-    return usage(ctx);
+/// One provider command. `page` is what it says about itself; `answer` is what
+/// it does with a request.
+const Sub = struct {
+    name: []const u8,
+    summary: []const u8,
+    answer: *const fn (Ctx) anyerror!u8,
+    page: *const fn (Ctx, *std.Io.Writer) anyerror!void,
+};
+
+const subs = [_]Sub{
+    .{
+        .name = "url",
+        .summary = "post the request to $M8_PROVIDER_URL",
+        .answer = url,
+        .page = urlPage,
+    },
+    .{
+        .name = "inbuilt",
+        .summary = "answer it here, with no network",
+        .answer = inbuilt,
+        .page = inbuiltPage,
+    },
+};
+
+fn find(name: []const u8) ?Sub {
+    for (subs) |s| if (std.mem.eql(u8, s.name, name)) return s;
+    return null;
 }
 
-fn usage(ctx: Ctx) !u8 {
-    try ctx.err.writeAll(
-        \\m8 providers — read a request on stdin, write that api's response
+fn run(ctx: Ctx) !u8 {
+    // Naming none is somebody finding out what is here, which is a page they
+    // asked for rather than a mistake.
+    if (ctx.args.len == 0) {
+        try help(ctx, ctx.out);
+        try ctx.out.flush();
+        return 0;
+    }
+
+    const which = ctx.args[0];
+    const sub = find(which) orelse {
+        try ctx.err.print("m8 providers: no provider command named '{s}'\n", .{which});
+        try help(ctx, ctx.err);
+        try ctx.err.flush();
+        return 1;
+    };
+
+    if (api.wantsHelp(ctx.args[1..])) {
+        try sub.page(ctx, ctx.out);
+        try ctx.out.flush();
+        return 0;
+    }
+
+    // A request arrives on stdin, and m8 runs a provider with a pipe there. A
+    // terminal is nobody piping one, so what was wanted is the page rather
+    // than a provider left waiting for an end of file that is not coming.
+    if (std.Io.File.stdin().isTty(ctx.io) catch false) {
+        try ctx.err.print("m8 providers {s}: no request on stdin\n", .{sub.name});
+        try sub.page(ctx, ctx.err);
+        try ctx.err.flush();
+        return 1;
+    }
+
+    return sub.answer(ctx);
+}
+
+// ------------------------------------------------------------------- pages
+
+fn help(ctx: Ctx, w: *std.Io.Writer) !void {
+    // Whatever is left names one of them: `m8 help providers url` and
+    // `m8 providers url --help` are the same page.
+    if (ctx.args.len > 0) {
+        if (find(ctx.args[0])) |s| return s.page(ctx, w);
+    }
+    try w.writeAll(
+        \\m8 providers — the provider commands m8 ships with
         \\
-        \\  m8 providers url       post it to $M8_PROVIDER_URL
-        \\  m8 providers inbuilt   answer it here
+        \\  ... | m8 providers COMMAND      a request in, that api's response out
+        \\  m8 providers COMMAND --help     what one reads, and what it answers
         \\
-        \\Named from core/providers.json as ["m8", "providers", NAME].
+        \\A provider is a command. It reads an api-formatted request on stdin
+        \\and writes that api's response on stdout — the same shape a tool has,
+        \\a filter that stays in a pipeline. Reaching a url is one such command
+        \\rather than the privileged path, so anything you can write a program
+        \\for is a provider.
+        \\
+        \\commands:
+        \\
         \\
     );
-    try ctx.err.flush();
-    return 1;
+    for (subs) |s| try w.print("  {s: <10} {s}\n", .{ s.name, s.summary });
+    try w.writeAll(
+        \\
+        \\An entry in core/providers.json names one as ["m8", "providers", NAME]
+        \\and `api` says which codec writes the request and reads the answer.
+        \\
+    );
+    try configured(ctx, w);
+    try w.writeAll(
+        \\
+        \\environment:
+        \\
+        \\  M8_PROVIDER_API   the codec the entry named, openai-completions
+        \\                    when it named none
+        \\  M8_PROVIDER_*     every other string the entry said: `url` arrives
+        \\                    as M8_PROVIDER_URL, `api-version` as
+        \\                    M8_PROVIDER_API_VERSION. Only lowercase-and-hyphen
+        \\                    keys go, because only those have a name to take,
+        \\                    and `cmd` stays behind — the command already knows
+        \\                    what it is.
+        \\
+    );
+}
+
+/// The providers this machine is configured with: what `m8 send` takes, and
+/// what a 🧠 is reached through.
+///
+/// Which models any of them serves is not here and is not missing. That is the
+/// ledger's business, written on the 🧠 that names one, so nothing in a config
+/// has to be kept in step with what a provider offers. `inbuilt` is the one
+/// exception, because its models are m8's own — see `m8 help providers
+/// inbuilt`.
+pub fn configured(ctx: Ctx, w: *std.Io.Writer) !void {
+    const from = try config.coreFile(ctx.arena, ctx.io, ctx.env, "providers.json");
+    try w.print("\nproviders ({s}):\n\n", .{from orelse "the copy m8 ships with"});
+
+    const entries = config.providers(ctx.arena, ctx.io, ctx.env) catch {
+        try w.writeAll("  (providers.json could not be read)\n");
+        return;
+    };
+    if (entries.count() == 0) {
+        try w.writeAll("  (none: providers.json names no provider)\n");
+        return;
+    }
+
+    var it = entries.iterator();
+    while (it.next()) |e| {
+        const name = e.key_ptr.*;
+        const p = provider.read(ctx.arena, entries, name) catch |why| {
+            try w.print("  {s: <12} ({s})\n", .{ name, @errorName(why) });
+            continue;
+        };
+        try w.print("  {s: <12} {s: <34} api: {s}\n", .{
+            name,
+            try std.mem.join(ctx.arena, " ", p.cmd),
+            p.api,
+        });
+    }
+}
+
+fn urlPage(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
+    try w.writeAll(
+        \\m8 providers url — post the request, hand the answer back
+        \\
+        \\  ... | m8 providers url
+        \\
+        \\Posts what arrives on stdin to $M8_PROVIDER_URL and writes the
+        \\response back as it arrives, in whatever size it arrives in — so a
+        \\provider that streams reaches whatever is next in the pipe while the
+        \\model is still saying it.
+        \\
+        \\There is no path m8 appends. Which api lives where is a fact about a
+        \\provider rather than about a format, so the whole endpoint is the url.
+        \\
+        \\environment:
+        \\
+        \\  M8_PROVIDER_URL   the whole endpoint. Required.
+        \\  M8_PROVIDER_KEY   a shell command, whose output is the bearer
+        \\                    token. Optional, and nothing at all when it is
+        \\                    empty or fails.
+        \\
+        \\The key is a command rather than a key so a config can commit safely
+        \\and still reach a keychain. That is this command's convention rather
+        \\than m8's — everything else the entry said arrives here too, under its
+        \\own M8_PROVIDER_ name, and means whatever you make of it.
+        \\
+        \\An entry that names it:
+        \\
+        \\  "local": {
+        \\    "cmd": ["m8", "providers", "url"],
+        \\    "api": "openai-completions",
+        \\    "url": "http://127.0.0.1:11337/v1/chat/completions",
+        \\    "key": "security find-generic-password -s omlx -w"
+        \\  }
+        \\
+    );
+}
+
+fn inbuiltPage(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
+    try w.writeAll(
+        \\m8 providers inbuilt — answer the request here, with no network
+        \\
+        \\  ... | m8 providers inbuilt
+        \\
+        \\Speaks m8, so the request is the ledger itself and the answer is the
+        \\records it adds to one. It answers without a network, which is what
+        \\makes the loop, tool calling, and picking up a call that was never
+        \\answered testable rather than only demonstrable.
+        \\
+        \\models:
+        \\
+        \\
+    );
+    for (models) |m| try w.print("  /inbuilt/{s: <10} {s}\n", .{ m.name, m.summary });
+    try w.writeAll(
+        \\
+        \\  m8 @/inbuilt/echo -- hello
+        \\  m8 @/inbuilt/you-are -- anything
+        \\  m8 @/inbuilt/runner -- 'RUN;;;say;;;text=hi'
+        \\  m8 @/inbuilt/eliza -- "I am not sleeping well."
+        \\
+        \\A 🧠 written with a leading / names a model, and what it says before
+        \\its first / is the provider it is asked of. These are the only models
+        \\m8 has of its own; every other one is whatever the provider you
+        \\reached offers.
+        \\
+        \\The entry, which m8 ships with:
+        \\
+        \\  "inbuilt": { "cmd": ["m8", "providers", "inbuilt"], "api": "m8" }
+        \\
+        \\It reads nothing from the environment.
+        \\
+    );
 }
 
 // -------------------------------------------------------------------- url
@@ -161,6 +371,37 @@ fn bearer(ctx: Ctx) !?[]const u8 {
 
 // ---------------------------------------------------------------- inbuilt
 
+/// One model `inbuilt` serves. There are three, they are m8's own, and they
+/// exist so that the loop can be run without a network.
+const Model = struct {
+    name: []const u8,
+    summary: []const u8,
+    answer: *const fn (Ctx, doc.Mode, []const doc.Record) anyerror!u8,
+};
+
+const models = [_]Model{
+    .{
+        .name = "echo",
+        .summary = "says the last thing anybody said, back",
+        .answer = echo,
+    },
+    .{
+        .name = "you-are",
+        .summary = "\"I know you are but what am I?\", whatever you say",
+        .answer = youAre,
+    },
+    .{
+        .name = "runner",
+        .summary = "calls a tool per RUN;;;tool;;;property=value line",
+        .answer = runner,
+    },
+    .{
+        .name = "eliza",
+        .summary = "Weizenbaum's doctor, 1966: your own words, turned around",
+        .answer = doctor,
+    },
+};
+
 /// Answer the request here. `api: "m8"`, so the request is a ledger and the
 /// response is the records it adds to one.
 ///
@@ -181,13 +422,36 @@ fn inbuilt(ctx: Ctx) !u8 {
         return 1;
     };
 
-    if (std.mem.eql(u8, m.name, "echo")) return say(ctx, mode, lastSaid(records));
-    if (std.mem.eql(u8, m.name, "you-are"))
-        return say(ctx, mode, "I know you are but what am I?");
-    if (std.mem.eql(u8, m.name, "runner")) return runner(ctx, mode, records);
+    for (models) |candidate| {
+        if (std.mem.eql(u8, candidate.name, m.name))
+            return candidate.answer(ctx, mode, records);
+    }
 
     try ctx.err.print("m8 providers inbuilt: no model named '{s}'\n", .{m.name});
+    for (models) |candidate| try ctx.err.print("  /inbuilt/{s}\n", .{candidate.name});
     return 1;
+}
+
+fn echo(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
+    return say(ctx, mode, lastSaid(records));
+}
+
+fn youAre(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
+    _ = records;
+    return say(ctx, mode, "I know you are but what am I?");
+}
+
+/// ELIZA. What she says back is decided by the last thing the person said and
+/// by how many times they have spoken, both of which the ledger already holds
+/// — so she keeps nothing, and a conversation with her replays exactly.
+fn doctor(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
+    var said: []const u8 = "";
+    var spoken: usize = 0;
+    for (records) |r| if (r.sigil == .user) {
+        said = r.content orelse "";
+        spoken += 1;
+    };
+    return say(ctx, mode, try eliza.reply(ctx.arena, said, spoken -| 1));
 }
 
 fn say(ctx: Ctx, mode: doc.Mode, what: []const u8) !u8 {
@@ -267,4 +531,66 @@ fn runner(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
 
     try doc.writeAll(ctx.out, mode, out.items);
     return 0;
+}
+
+// ---------------------------------------------------------------- tests
+
+const testing = std.testing;
+
+test "every provider command and model is named once and says what it is" {
+    for (subs) |s| {
+        try testing.expect(s.name.len > 0);
+        try testing.expect(s.summary.len > 0);
+        try testing.expect(find(s.name) != null);
+    }
+    try testing.expect(find("nosuch") == null);
+
+    for (models) |m| {
+        try testing.expect(m.name.len > 0);
+        try testing.expect(m.summary.len > 0);
+    }
+    for (models, 0..) |a, i| for (models[i + 1 ..]) |b| {
+        try testing.expect(!std.mem.eql(u8, a.name, b.name));
+    };
+}
+
+test "the page for a provider command lists what it reads" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // Nothing to find a config with, so what is listed is the copy compiled
+    // in rather than whatever is on the machine running the tests.
+    var env: std.process.Environ.Map = .init(arena);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = threaded.io(),
+        .mode = .md,
+        .env = &env,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &out.writer,
+        .tty = null,
+    };
+
+    try help(ctx, &out.writer);
+    for (subs) |s| try testing.expect(std.mem.indexOf(u8, out.written(), s.name) != null);
+    // The providers that are actually configured, which is what `send` takes.
+    try testing.expect(std.mem.indexOf(u8, out.written(), "inbuilt") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_") != null);
+
+    var url_page: std.Io.Writer.Allocating = .init(arena);
+    try urlPage(ctx, &url_page.writer);
+    try testing.expect(std.mem.indexOf(u8, url_page.written(), "M8_PROVIDER_URL") != null);
+    try testing.expect(std.mem.indexOf(u8, url_page.written(), "M8_PROVIDER_KEY") != null);
+
+    // Every model it serves is on the page for the command that serves them.
+    var inbuilt_page: std.Io.Writer.Allocating = .init(arena);
+    try inbuiltPage(ctx, &inbuilt_page.writer);
+    for (models) |m|
+        try testing.expect(std.mem.indexOf(u8, inbuilt_page.written(), m.name) != null);
 }

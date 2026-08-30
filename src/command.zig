@@ -32,6 +32,7 @@ pub const all = [_]Command{
     @import("command/send.zig").command,
     @import("command/call.zig").command,
     @import("command/providers.zig").command,
+    @import("command/help.zig").command,
 };
 
 /// Inbuilt tools. Reached as `m8 call NAME`, never typed as a command.
@@ -41,6 +42,15 @@ pub const native = [_]Command{
 
 pub fn find(name: []const u8) ?Command {
     for (all) |c| if (std.mem.eql(u8, c.name, name)) return c;
+    return null;
+}
+
+/// Every command there is, including the inbuilt tools. What `help` looks in,
+/// because a page for something that exists is worth having wherever it is
+/// reached from.
+pub fn findAny(name: []const u8) ?Command {
+    if (find(name)) |c| return c;
+    for (native) |c| if (std.mem.eql(u8, c.name, name)) return c;
     return null;
 }
 
@@ -98,6 +108,12 @@ test "every command has a name and a summary" {
         // Names are typed at a shell, so nothing that needs quoting.
         for (c.name) |ch| try testing.expect(std.ascii.isLower(ch) or ch == '-');
     }
+}
+
+test "every command has a page of its own" {
+    // The fallback in `help` prints a summary, which is better than nothing
+    // and is not good enough for a command that ships.
+    for (all ++ native) |c| try testing.expect(c.help != null);
 }
 
 test "no two commands share a name" {

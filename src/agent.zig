@@ -46,9 +46,8 @@ pub fn load(
     io: std.Io,
     dirs: []const []const u8,
     name: []const u8,
-    depth: u8,
 ) LoadError!Definition {
-    const l = try ledger.expand(arena, io, dirs, name, depth);
+    const l = try ledger.expand(arena, io, dirs, name);
     var def = try project(arena, l.records);
     if (def.model.len == 0) return Error.NoModel;
     def.name = name;
@@ -180,7 +179,7 @@ test "a definition yields its model, locks and tools" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const d = try load(arena, f.io, &dirs, "mathy", 0);
+    const d = try load(arena, f.io, &dirs, "mathy");
     try testing.expectEqualStrings("local", d.provider);
     try testing.expectEqualStrings("tiny", d.model);
     try testing.expectEqualStrings("mathy", d.origin);
@@ -211,7 +210,7 @@ test "locks are the union over the lineage, so including cannot widen" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const d = try load(arena, f.io, &dirs, "outer", 0);
+    const d = try load(arena, f.io, &dirs, "outer");
     try testing.expect(hasLock(d, "no-edit-git"));
     try testing.expect(hasLock(d, "airgap"));
     // A repeat is still one lock.
@@ -243,7 +242,7 @@ test "a later definition of a tool name is the one offered" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const d = try load(arena, f.io, &dirs, "outer", 0);
+    const d = try load(arena, f.io, &dirs, "outer");
     const offered = try offer(arena, d);
     try testing.expectEqual(@as(usize, 1), offered.len);
     try testing.expectEqualStrings("[\"echo\", \"outer\"]", offered[0].command);
@@ -261,6 +260,6 @@ test "an unknown agent and a missing model are told apart" {
     try f.agent(arena, "bare.md", "# :computer:\n> No model here.\n");
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(ledger.Error.UnknownAgent, load(arena, f.io, &dirs, "nosuch", 0));
-    try testing.expectError(Error.NoModel, load(arena, f.io, &dirs, "bare", 0));
+    try testing.expectError(ledger.Error.UnknownAgent, load(arena, f.io, &dirs, "nosuch"));
+    try testing.expectError(Error.NoModel, load(arena, f.io, &dirs, "bare"));
 }

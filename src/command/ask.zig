@@ -14,7 +14,26 @@ pub const command: api.Command = .{
     .name = "ask",
     .summary = "ask the person something and append it as a user record",
     .run = run,
+    .help = help,
 };
+
+fn help(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
+    try w.writeAll(
+        \\m8 call ask — ask the person something, and append what they said
+        \\
+        \\  ... | m8 call ask [QUESTION] | ...
+        \\
+        \\An inbuilt tool, so it is reached through `call` and never typed as a
+        \\command of its own. It writes the document through unchanged and adds
+        \\one 🙋 holding the answer, so the next command in the pipe sees it.
+        \\
+        \\The question goes to the terminal rather than to stdout, which is
+        \\what keeps an interactive tool a legal member of a pipeline. With no
+        \\terminal there is nobody to ask, and the document is left as it was.
+        \\
+    );
+}
 
 fn run(ctx: Ctx) !u8 {
     var diag: doc.Diagnostic = .{};

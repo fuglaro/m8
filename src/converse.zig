@@ -45,7 +45,6 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
         dirs,
         given,
         doc.detect(ctx.in) orelse .md,
-        0,
     );
 
     var records: std.ArrayList(doc.Record) = .empty;
@@ -90,15 +89,16 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
     // them. What it already asked for and never got is owed before anything
     // new is said, and nothing already answered is run a second time.
     for (try ledger.outstanding(arena, records.items)) |asked| {
-        const record = try answer(ctx, dirs, locks.items, offered, .{
+        for (try answer(ctx, dirs, locks.items, offered, .{
             .id = ledger.callId(asked.value),
             .name = ledger.callName(asked.value),
             .arguments = try toolbox.parseArgs(arena, .md, asked.content orelse ""),
-        });
-        try show(arena, out, mode, &written, record);
+        })) |record| {
+            try show(arena, out, mode, &written, record);
+            try records.append(arena, record);
+            try turn.append(arena, record);
+        }
         try out.flush();
-        try records.append(arena, record);
-        try turn.append(arena, record);
     }
 
     // No cap. A model that keeps calling tools is doing what it was given
@@ -155,13 +155,14 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
             try keep(arena, &records, asked);
             try turn.append(arena, asked);
 
-            const record = try answer(ctx, dirs, locks.items, offered, c);
-            try show(arena, out, mode, &written, record);
-            try out.flush();
             // The answer comes from the tool, not the model, and was already
             // checked against what a tool may say.
-            try records.append(arena, record);
-            try turn.append(arena, record);
+            for (try answer(ctx, dirs, locks.items, offered, c)) |record| {
+                try show(arena, out, mode, &written, record);
+                try records.append(arena, record);
+                try turn.append(arena, record);
+            }
+            try out.flush();
         }
     }
 
@@ -200,7 +201,12 @@ fn settled(
     return out.items;
 }
 
-/// Run one call and hand back the record that answers it.
+/// Run one call and hand back the records that answer it.
+///
+/// A tool writes what it says as it says it and then how it went, so an answer
+/// is a 🧾 and a verdict rather than one record — and a tool that hands back
+/// definitions as well is answering with those too. All of it is kept, which
+/// is the ledger's rule and not this function's.
 ///
 /// A failure is a 🚫 with the reason in it, never an error out of the run: the
 /// model asked for something, and being told what went wrong is how it gets to
@@ -211,7 +217,7 @@ fn answer(
     locks: []const []const u8,
     tools: []const toolbox.Tool,
     c: codec.Call,
-) !doc.Record {
+) ![]const doc.Record {
     const arena = ctx.arena;
     const io = ctx.io;
 
@@ -286,7 +292,7 @@ fn answer(
         if (!policy.fromTool(r.sigil, frozen))
             return failure(arena, c.id, "a tool may not hand back {s}", .{r.sigil.word()});
     }
-    return records[records.len - 1];
+    return records;
 }
 
 /// Put a candidate command line to an agent. Null when it answered `allow`,
@@ -304,7 +310,7 @@ fn agentCheck(
     argv: []const []const u8,
 ) !?[]const u8 {
     const arena = ctx.arena;
-    const l = try ledger.expand(arena, ctx.io, dirs, who, 0);
+    const l = try ledger.expand(arena, ctx.io, dirs, who);
     const def = try agent.project(arena, l.records);
     if (def.model.len == 0) return agent.Error.NoModel;
     if (def.provider.len == 0) return agent.Error.NoProvider;
@@ -364,17 +370,22 @@ const Quiet = struct {
     fn writeFn(_: *anyopaque, _: []const u8) anyerror!void {}
 };
 
+/// The one record that says a call could not be run. A slice, because that is
+/// what answering a call is now, and one that never got as far as the tool has
+/// nothing to put above it.
 fn failure(
     arena: Allocator,
     id: []const u8,
     comptime fmt: []const u8,
     args: anytype,
-) !doc.Record {
-    return .{
+) ![]const doc.Record {
+    const one = try arena.alloc(doc.Record, 1);
+    one[0] = .{
         .sigil = .failed,
         .value = id,
         .content = try std.fmt.allocPrint(arena, fmt, args),
     };
+    return one;
 }
 
 /// Append a record that came from the model.

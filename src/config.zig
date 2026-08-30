@@ -72,6 +72,21 @@ pub fn core(
     return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file)) catch null;
 }
 
+/// Where a `core/` file is read from, when there is one to read. Null when
+/// nothing is there and the copy compiled in is what is used — which is what
+/// a help page says instead of naming a file that does not exist.
+pub fn coreFile(
+    arena: Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+    name: []const u8,
+) !?[]const u8 {
+    const base = (try coreDir(arena, env)) orelse return null;
+    const path = try std.fs.path.join(arena, &.{ base, name });
+    _ = std.Io.Dir.cwd().statFile(io, path, .{}) catch return null;
+    return path;
+}
+
 fn exists(io: std.Io, path: []const u8) bool {
     var d = std.Io.Dir.cwd().openDir(io, path, .{}) catch return false;
     d.close(io);

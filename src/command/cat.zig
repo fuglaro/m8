@@ -14,7 +14,30 @@ pub const command: api.Command = .{
     .name = "cat",
     .summary = "parse a document and write it back out",
     .run = run,
+    .help = help,
 };
+
+fn help(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
+    try w.writeAll(
+        \\m8 cat — parse a document and write it back out
+        \\
+        \\  m8 [@AGENT|+CHAT] cat
+        \\
+        \\A pure filter: no terminal, no network, no arguments. It renders,
+        \\since a terminal is written the emoji spelling and everything else
+        \\markdown, and it is the thing that proves a document survives a round
+        \\trip — line endings normalised, quotes reapplied, nothing else
+        \\touched.
+        \\
+        \\  m8 +mathy cat
+        \\  m8 cat <ledger.md >same.md
+        \\
+        \\A document that does not parse is an error naming the line, rather
+        \\than something half written out.
+        \\
+    );
+}
 
 fn run(ctx: Ctx) !u8 {
     var diag: doc.Diagnostic = .{};

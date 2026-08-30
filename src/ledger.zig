@@ -8,6 +8,21 @@
 //! Nothing is dropped and nothing is reordered. That is the whole contract.
 //! The facts a request needs, and a provider's wire format, are both taken
 //! from this, and only such a projection may lose anything.
+//!
+//! Two different things are written that same way. A 🧠 naming an authored
+//! agent is a mob reaching into a mob; a 🧠 naming a generated one is lineage,
+//! the turn this turn continues. Both can be as deep as they are: nine mobs is
+//! nine mobs and a thousand turns is a thousand turns, and neither is a fault.
+//!
+//! The one fault either can have is a loop, and a loop is not a depth. It is a
+//! name met twice on the way to itself — so that is what is looked for, and
+//! the answer to one is to say which name closed it rather than to refuse the
+//! ninth include or the ten thousandth turn. Nothing here has a number in it.
+//!
+//! So the walk is a loop over an explicit stack, and everything it reads is
+//! appended to the one list being built. Neither a link nor a turn costs a
+//! call, and nothing is copied twice: reading a conversation is one pass and
+//! the memory of one copy of it, however long it has been going on.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -17,14 +32,17 @@ const model = @import("m8/model.zig");
 const session = @import("session.zig");
 const toolbox = @import("toolbox.zig");
 
-pub const max_depth = 8;
-
 pub const Error = error{
     UnknownAgent,
-    IncludeTooDeep,
+    /// An agent includes one that leads back to it. A mob may include a mob
+    /// nobody has read, so this is the one that happens by accident.
+    IncludeLoops,
+    /// A turn names one that already leads back to it. Only a hand-edited
+    /// file can be shaped like that, since m8 writes a parent that existed
+    /// before its child did.
+    LineageLoops,
 };
 
-/// Stated explicitly because `expand` recurses through itself.
 pub const ExpandError = Error || doc.ParseError || toolbox.Error || std.Io.Writer.Error;
 
 pub const Ledger = struct {
@@ -61,35 +79,36 @@ pub fn names(
     return (try source(arena, io, dirs, name)) != null;
 }
 
+/// One document part-read: what it holds, how far through it the walk has
+/// got, and what it has settled on.
+const Frame = struct {
+    records: []const doc.Record,
+    at: usize = 0,
+    /// The spelling it arrived in.
+    mode: doc.Mode,
+    /// The name it came from, which is also its entry on the path. Empty for
+    /// records handed straight in: they were never a document, so nothing can
+    /// name them again and they are nobody's origin.
+    name: []const u8 = "",
+    /// The first origin anything under it settled on.
+    origin: []const u8 = "",
+};
+
 /// Expand `name` into its records.
 pub fn expand(
     arena: Allocator,
     io: std.Io,
     dirs: []const []const u8,
     name: []const u8,
-    depth: u8,
 ) ExpandError!Ledger {
-    if (depth > max_depth) return Error.IncludeTooDeep;
     const src = (try source(arena, io, dirs, name)) orelse return Error.UnknownAgent;
-    return expandSource(arena, io, dirs, name, src, depth);
-}
 
-fn expandSource(
-    arena: Allocator,
-    io: std.Io,
-    dirs: []const []const u8,
-    name: []const u8,
-    src: []const u8,
-    depth: u8,
-) ExpandError!Ledger {
     var diag: doc.Diagnostic = .{};
-    const records = try doc.parse(arena, src, &diag);
-
-    var l = try expandRecords(arena, io, dirs, records, doc.detect(src) orelse .md, depth);
-    // An authored name is its own origin and never inherits one; a generated
-    // name takes the origin of whatever it continues.
-    if (!session.isGenerated(name)) l.origin = name;
-    return l;
+    return walk(arena, io, dirs, .{
+        .records = try doc.parse(arena, src, &diag),
+        .mode = doc.detect(src) orelse .md,
+        .name = name,
+    });
 }
 
 /// Expand the 🧠 references inside records that are already in hand.
@@ -104,28 +123,96 @@ pub fn expandRecords(
     dirs: []const []const u8,
     records: []const doc.Record,
     mode: doc.Mode,
-    depth: u8,
 ) ExpandError!Ledger {
-    if (depth > max_depth) return Error.IncludeTooDeep;
+    return walk(arena, io, dirs, .{ .records = records, .mode = mode });
+}
 
+/// Read a document and everything it names, in order.
+///
+/// One loop over an explicit stack rather than a call per link. A chat is a
+/// link per turn and there is no reason a long one should be a deep one: what
+/// this costs is a frame, which is a slice and two numbers, and what it bounds
+/// is memory rather than anything m8 has an opinion about.
+///
+/// That stack is also the path, so what is on it is exactly what a name may
+/// not name again. That is the whole of it: no count, no ceiling, and nothing
+/// to choose a number for. `on_path` is pushed and popped with the frames
+/// rather than remembering everywhere the walk has been, because a name met
+/// twice side by side is a document used twice — met twice along one path it
+/// is a loop, and a loop is the only thing that has no end.
+fn walk(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    root: Frame,
+) ExpandError!Ledger {
     var out: std.ArrayList(doc.Record) = .empty;
-    var origin: []const u8 = "";
+    var stack: std.ArrayList(Frame) = .empty;
+    var on_path: std.StringHashMapUnmanaged(void) = .empty;
 
-    for (records) |r| {
+    try stack.append(arena, root);
+    if (root.name.len > 0) try on_path.put(arena, root.name, {});
+
+    var origin: []const u8 = "";
+    while (stack.items.len > 0) {
+        const top = &stack.items[stack.items.len - 1];
+
+        // Read to the end of a document: settle what it was with, hand that
+        // up, and take it off the path.
+        if (top.at == top.records.len) {
+            // An authored name is its own origin and never inherits one; a
+            // generated name takes the origin of whatever it continues.
+            const settled = if (top.name.len > 0 and !session.isGenerated(top.name))
+                top.name
+            else
+                top.origin;
+            if (top.name.len > 0) _ = on_path.remove(top.name);
+            stack.items.len -= 1;
+
+            if (stack.items.len == 0) {
+                origin = settled;
+            } else {
+                const up = &stack.items[stack.items.len - 1];
+                if (up.origin.len == 0) up.origin = settled;
+            }
+            continue;
+        }
+
+        const r = top.records[top.at];
+        top.at += 1;
+
         // A 🧠 written with the mark names a model and is kept as it is.
         // Anything else names an agent, and only an agent — nothing is looked
         // up to decide which, so a name that is not there is a missing agent
         // rather than a model nobody configured.
-        if (r.sigil == .agent and !model.is(r.value)) {
-            if (depth + 1 > max_depth) return Error.IncludeTooDeep;
-            const src = (try source(arena, io, dirs, r.value)) orelse return Error.UnknownAgent;
-            const inner = try expandSource(arena, io, dirs, r.value, src, depth + 1);
-            if (origin.len == 0) origin = inner.origin;
-            try out.appendSlice(arena, inner.records);
+        if (r.sigil != .agent or model.is(r.value)) {
+            try out.append(arena, try canonical(arena, top.mode, r));
             continue;
         }
-        try out.append(arena, try canonical(arena, mode, r));
+
+        // Already on the way here, so following it would be following it
+        // again. Which kind it is decides only what to call it: lineage is
+        // the turn this one continues, and an inclusion is a mob reaching
+        // into a mob.
+        if (on_path.contains(r.value)) return if (session.isGenerated(r.value))
+            Error.LineageLoops
+        else
+            Error.IncludeLoops;
+
+        const src = (try source(arena, io, dirs, r.value)) orelse return Error.UnknownAgent;
+        var diag: doc.Diagnostic = .{};
+        const next: Frame = .{
+            .records = try doc.parse(arena, src, &diag),
+            .mode = doc.detect(src) orelse .md,
+            .name = r.value,
+        };
+
+        // Nothing above is read again after this: appending may move the
+        // frames, and `top` is a pointer into them.
+        try on_path.put(arena, next.name, {});
+        try stack.append(arena, next);
     }
+
     return .{ .records = out.items, .origin = origin };
 }
 
@@ -202,14 +289,20 @@ pub fn callName(value: []const u8) []const u8 {
 
 /// The 📲 records nothing has answered yet.
 ///
-/// A call and its answer are two records, so a ledger can end between them —
-/// a run that was interrupted, or one handed over mid-turn. Those are the
-/// calls still owed, and they are what a run picks up before it says anything
-/// else. Everything already answered is history and is never run twice.
+/// A call and its answer are separate records, so a ledger can end between
+/// them — a run that was interrupted, or one handed over mid-turn. Those are
+/// the calls still owed, and they are what a run picks up before it says
+/// anything else. Everything already answered is history and is never run
+/// twice.
+///
+/// Anything the tool wrote counts as answering, verdict or not. A 🧾 with no
+/// 🟢 or 🚫 under it is a tool that spoke and was cut off, and running it again
+/// to find out how it would have ended would do whatever it does a second
+/// time. What happened is in the ledger either way, which is the point of it.
 pub fn outstanding(arena: Allocator, records: []const doc.Record) ![]const doc.Record {
     var answered: std.ArrayList([]const u8) = .empty;
     for (records) |r| switch (r.sigil) {
-        .result, .failed => try answered.append(arena, std.mem.trim(u8, r.value, " \t")),
+        .result, .ok, .failed => try answered.append(arena, std.mem.trim(u8, r.value, " \t")),
         else => {},
     };
 
@@ -279,7 +372,7 @@ test "an inclusion lands where it was written, not at the front" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "outer", 0);
+    const l = try expand(arena, f.io, &dirs, "outer");
 
     // 🧠local/tiny stays, and the include sits between the two 💻 it was
     // written between.
@@ -307,7 +400,7 @@ test "a chat expands through its turns to the agent it began with" {
     try f.agent(arena, "+/mathy.md", "# :brain:=/two\n");
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "+/mathy", 0);
+    const l = try expand(arena, f.io, &dirs, "+/mathy");
 
     const want = [_]doc.Sigil{ .agent, .system, .user, .bot, .user, .bot };
     try testing.expectEqual(want.len, l.records.len);
@@ -341,7 +434,7 @@ test "tool calls stay, and only an unanswered one is still owed" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "=/t", 0);
+    const l = try expand(arena, f.io, &dirs, "=/t");
 
     // Four records, the calls among them.
     try testing.expectEqual(@as(usize, 4), l.records.len);
@@ -354,7 +447,96 @@ test "tool calls stay, and only an unanswered one is still owed" {
     try testing.expectEqualStrings("say", callName(owed[0].value));
 }
 
-test "a cycle stops at the depth cap" {
+test "a conversation is as long as it is, whatever the include cap says" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-long");
+    defer f.deinit(arena);
+    try f.agent(arena, "mathy.md", "# :brain:/local/tiny\n\n# :computer:\n> Be brief.\n");
+
+    // Every run writes one link, so a chat this long is a chain this deep.
+    // Far past the cap on how far one agent may include another, and far
+    // past what a call per link would have left of the stack — which is what
+    // this length is for. Anything less would pass either way.
+    const turns = 5000;
+    var parent: []const u8 = "mathy";
+    for (0..turns) |i| {
+        const name = try std.fmt.allocPrint(arena, "=/t{d}", .{i});
+        try f.agent(
+            arena,
+            try std.fmt.allocPrint(arena, "{s}.md", .{name}),
+            try std.fmt.allocPrint(
+                arena,
+                "# :brain:{s}\n\n# :raising_hand:\n> {d}\n\n# :robot:\n> ok\n",
+                .{ parent, i },
+            ),
+        );
+        parent = name;
+    }
+    try f.agent(arena, "+/mathy.md", try std.fmt.allocPrint(arena, "# :brain:{s}\n", .{parent}));
+
+    const dirs = [_][]const u8{f.dir};
+    const l = try expand(arena, f.io, &dirs, "+/mathy");
+
+    // 🧠 and 💻 from the agent, then a 🙋 and a 🤖 per turn, in the order they
+    // happened — oldest first, since a turn's parent stands where it was named.
+    try testing.expectEqual(@as(usize, 2 + turns * 2), l.records.len);
+    try testing.expectEqualStrings("mathy", l.origin);
+    try testing.expectEqualStrings("0", l.records[2].content.?);
+    try testing.expectEqualStrings(
+        try std.fmt.allocPrint(arena, "{d}", .{turns - 1}),
+        l.records[l.records.len - 2].content.?,
+    );
+}
+
+test "lineage that closes on itself says so, rather than running out of depth" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-lineage-cycle");
+    defer f.deinit(arena);
+    // m8 never writes this: a turn names one that existed before it did. Only
+    // an edited file is shaped like this, and it is still worth naming.
+    try f.agent(arena, "=/a.md", "# :brain:=/b\n\n# :raising_hand:\n> one\n");
+    try f.agent(arena, "=/b.md", "# :brain:=/a\n\n# :raising_hand:\n> two\n");
+
+    const dirs = [_][]const u8{f.dir};
+    try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "=/a"));
+
+    // A turn naming itself is the same fault, one link shorter.
+    try f.agent(arena, "=/self.md", "# :brain:=/self\n");
+    try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "=/self"));
+}
+
+test "an agent met twice is not a cycle" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-twice");
+    defer f.deinit(arena);
+    try f.agent(arena, "helper.md", "# :computer:\n> Helper.\n");
+    try f.agent(arena, "outer.md", "# :brain:/local/tiny\n\n# :brain:helper\n\n# :brain:helper\n");
+
+    // Twice along one path is a cycle; twice side by side is a mob used
+    // twice, and both copies stand where they were named.
+    const dirs = [_][]const u8{f.dir};
+    const l = try expand(arena, f.io, &dirs, "outer");
+    try testing.expectEqual(@as(usize, 3), l.records.len);
+    try testing.expectEqualStrings("Helper.", l.records[1].content.?);
+    try testing.expectEqualStrings("Helper.", l.records[2].content.?);
+}
+
+test "an agent that includes one leading back to it says so" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -365,10 +547,56 @@ test "a cycle stops at the depth cap" {
     defer f.deinit(arena);
     try f.agent(arena, "ping.md", "# :brain:pong\n");
     try f.agent(arena, "pong.md", "# :brain:ping\n");
+    try f.agent(arena, "selfy.md", "# :brain:selfy\n");
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.IncludeTooDeep, expand(arena, f.io, &dirs, "ping", 0));
-    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "nosuch", 0));
+    try testing.expectError(Error.IncludeLoops, expand(arena, f.io, &dirs, "ping"));
+    try testing.expectError(Error.IncludeLoops, expand(arena, f.io, &dirs, "selfy"));
+    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "nosuch"));
+}
+
+test "a mob may be as deep as it is, since depth is not the fault" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-deep-include");
+    defer f.deinit(arena);
+
+    // Well past the eight this used to stop at. Nine mobs is nine mobs, and
+    // the only thing wrong with a chain is the one that closes.
+    const links = 100;
+    try f.agent(arena, "tail.md", "# :brain:/local/tiny\n");
+    var below: []const u8 = "tail";
+    for (0..links) |i| {
+        const name = try std.fmt.allocPrint(arena, "mob{d}", .{i});
+        try f.agent(
+            arena,
+            try std.fmt.allocPrint(arena, "{s}.md", .{name}),
+            try std.fmt.allocPrint(
+                arena,
+                "# :computer:\n> {d}\n\n# :brain:{s}\n",
+                .{ i, below },
+            ),
+        );
+        below = name;
+    }
+
+    const dirs = [_][]const u8{f.dir};
+    const l = try expand(arena, f.io, &dirs, below);
+
+    // One 💻 per link, outermost first, and the model at the bottom.
+    try testing.expectEqual(@as(usize, links + 1), l.records.len);
+    try testing.expectEqualStrings(
+        try std.fmt.allocPrint(arena, "{d}", .{links - 1}),
+        l.records[0].content.?,
+    );
+    try testing.expectEqualStrings("0", l.records[links - 1].content.?);
+    try testing.expectEqualStrings("/local/tiny", l.records[links].value);
+    // The outermost authored name is what the chat would be with.
+    try testing.expectEqualStrings(below, l.origin);
 }
 
 test "nested content is kept in one spelling and restated for the reader" {
@@ -411,14 +639,12 @@ test "a name with no mark is an agent, and a missing one is missing" {
     try f.agent(arena, "marked.md", "# :brain:/team/gone,max_tokens:16\n");
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "outer", 0));
-    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "slashed", 0));
+    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "outer"));
+    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "slashed"));
 
     // Marked, it is a model, and nothing is looked up at all.
-    const m = (try runsOn(arena, (try expand(arena, f.io, &dirs, "marked", 0)).records)).?;
+    const m = (try runsOn(arena, (try expand(arena, f.io, &dirs, "marked")).records)).?;
     try testing.expectEqualStrings("team", m.provider);
     try testing.expectEqualStrings("gone", m.name);
     try testing.expectEqualStrings("16", m.get("max_tokens").?);
 }
-
-

@@ -37,7 +37,11 @@ pub const Sigil = enum {
     // under a call. Which one it is comes from the sigil above it.
     package,
     optional,
+    // A call is answered by its output as it arrives, and then by how it
+    // went. 🧾 is what the tool said; 🟢 and 🚫 are the verdict, which is only
+    // known once it has stopped saying it.
     result,
+    ok,
     failed,
     skill,
     system,
@@ -59,6 +63,7 @@ pub const Sigil = enum {
             .package => "\u{1F4E6}", // 📦
             .optional => "\u{1F381}", // 🎁
             .result => "\u{1F9FE}", // 🧾
+            .ok => "\u{1F7E2}", // 🟢
             .failed => "\u{1F6AB}", // 🚫
             .skill => "\u{1F4DA}", // 📚
             .system => "\u{1F4BB}", // 💻
@@ -82,6 +87,7 @@ pub const Sigil = enum {
             .package => ":package:",
             .optional => ":gift:",
             .result => ":receipt:",
+            .ok => ":green_circle:",
             .failed => ":no_entry_sign:",
             .skill => ":books:",
             .system => ":computer:",
@@ -110,7 +116,7 @@ pub const Sigil = enum {
     /// Whether a quoted block may follow.
     pub fn takesContent(s: Sigil) bool {
         return switch (s) {
-            .agent, .skill, .allow, .signature, .lock, .command => false,
+            .agent, .skill, .allow, .signature, .lock, .command, .ok => false,
             else => true,
         };
     }

@@ -24,14 +24,15 @@ pub fn fromModel(s: Sigil) bool {
 
 /// Honoured from a tool's response.
 ///
-/// A tool answers with 🧾 or 🚫. It may also hand back definitions — that is
+/// A tool answers with 🧾 as it speaks and 🟢 or 🚫 when it stops. It may also
+/// hand back definitions — that is
 /// how a toolmaker works — and `freeze-toolbox` is what closes that door.
 /// Including an agent or a skill *is* a way to acquire a toolbox, so 🧠 and 📚
 /// are on the same side of it as 🧰 and 🔓 rather than being resolved to see
 /// whether they happen to carry one.
 pub fn fromTool(s: Sigil, is_frozen: bool) bool {
     return switch (s) {
-        .result, .failed => true,
+        .result, .ok, .failed => true,
         .tool, .allow, .agent, .skill => !is_frozen,
         else => false,
     };
@@ -64,7 +65,7 @@ test "a model may not produce a definition, whatever the locks" {
 }
 
 test "a tool answers freely, and hands back definitions only when not frozen" {
-    for ([_]Sigil{ .result, .failed }) |s| {
+    for ([_]Sigil{ .result, .ok, .failed }) |s| {
         try testing.expect(fromTool(s, false));
         try testing.expect(fromTool(s, true));
     }

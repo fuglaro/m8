@@ -102,7 +102,30 @@ pub const Command = struct {
     prompts: bool = false,
     /// The exit status. A filter returns 0; `call` returns whatever it ran.
     run: *const fn (Ctx) anyerror!u8,
+    /// This command at length: what it takes, what it answers with, and
+    /// whatever is under it.
+    ///
+    /// The writer is handed in rather than taken from `Ctx`, because which
+    /// channel a page belongs on is the caller's business: a page somebody
+    /// asked for goes to stdout where it can be paged and piped, and a page
+    /// handed back instead of what they asked for goes to stderr where it
+    /// cannot become part of a document.
+    ///
+    /// `ctx.args` are the words after the command's own name, so a command
+    /// with subcommands under it can hand out the page for one of them.
+    help: ?*const fn (Ctx, *std.Io.Writer) anyerror!void = null,
 };
+
+/// Whether the next word is asking for a page rather than naming anything.
+///
+/// Asked once, here, so no command has to remember to answer `--help` and no
+/// two answer it differently. m8 reads it before a command sees its arguments;
+/// the exception is `--`, whose arguments are prose, where it is something
+/// somebody said.
+pub fn wantsHelp(args: []const []const u8) bool {
+    if (args.len == 0) return false;
+    return std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h");
+}
 
 /// The terminal, opened as its own channel.
 pub const TtyFiles = struct {

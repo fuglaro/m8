@@ -109,6 +109,15 @@ pub fn find(name: []const u8) ?Codec {
 /// The api a provider gets when it names none.
 pub const default = "openai-completions";
 
+/// Every format there is, for whichever page is asking. The table itself
+/// rather than a copy of it, so nothing can come to be listed that `find`
+/// would not return.
+pub fn list(w: *std.Io.Writer) !void {
+    try w.writeAll("\nformats:\n\n");
+    for (all) |c| try w.print("  {s: <20} {s}\n", .{ c.name, c.summary });
+    try w.print("\nA provider that names none is sent {s}.\n", .{default});
+}
+
 /// The next line, or null at the end.
 ///
 /// A stream that stops without a final newline still gives up what it had. A

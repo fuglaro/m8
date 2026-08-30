@@ -112,7 +112,7 @@ fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
             .call => i = try run(arena, s, records, i, "", claimed),
             // An answer whose call was never written still names what it
             // answers, and is left where the ledger put it.
-            .result, .failed => {
+            .result, .ok, .failed => {
                 if (!claimed[i])
                     try simple(s, "tool", r.content orelse "", std.mem.trim(u8, r.value, " \t"));
                 i += 1;
@@ -135,7 +135,7 @@ fn run(
     var end = start;
     while (end < records.len) : (end += 1) {
         switch (records[end].sigil) {
-            .call, .result, .failed => {},
+            .call, .result, .ok, .failed => {},
             else => break,
         }
     }
@@ -168,17 +168,15 @@ fn run(
 
     for (records[start..end]) |r| {
         if (r.sigil != .call) continue;
-        if (answerTo(records, claimed, start, callId(r.value))) |at| {
-            claimed[at] = true;
-            try simple(s, "tool", records[at].content orelse "", callId(r.value));
-        }
+        if (try answerTo(arena, records, claimed, start, callId(r.value))) |back|
+            try simple(s, "tool", back, callId(r.value));
     }
 
     // Anything in the run that answered no call of this run belongs here all
     // the same; the ledger is what says so.
     for (records[start..end], start..) |r, idx| {
         switch (r.sigil) {
-            .result, .failed => {},
+            .result, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
@@ -188,18 +186,47 @@ fn run(
     return end;
 }
 
-/// Where the answer to `id` is, from `from` onward. Null when nothing
-/// answered it, which is a call still owed.
-fn answerTo(records: []const doc.Record, claimed: []const bool, from: usize, id: []const u8) ?usize {
+/// What answered `id`, from `from` onward, as the one message this api has
+/// room for. Null when nothing answered it, which is a call still owed.
+///
+/// A call is answered by what the tool said and then by how it went, and chat
+/// completions has one message per call to say both in. So they are joined:
+/// the output, and the reason underneath it when there was a failure. 🟢 adds
+/// nothing to say — that a tool worked is the ordinary case, and this api has
+/// no way to mark it either.
+///
+/// This is the projection losing something, which is what a projection does.
+/// Reading it back cannot tell a 🚫 from a 🧾 and never could.
+fn answerTo(
+    arena: Allocator,
+    records: []const doc.Record,
+    claimed: []bool,
+    from: usize,
+    id: []const u8,
+) !?[]const u8 {
+    var said: std.ArrayList(u8) = .empty;
+    var found = false;
+
     for (records[from..], from..) |r, idx| {
         switch (r.sigil) {
-            .result, .failed => {},
+            .result, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
-        if (std.mem.eql(u8, std.mem.trim(u8, r.value, " \t"), id)) return idx;
+        if (!std.mem.eql(u8, std.mem.trim(u8, r.value, " \t"), id)) continue;
+
+        claimed[idx] = true;
+        found = true;
+        const content = r.content orelse continue;
+        if (content.len == 0) continue;
+        if (said.items.len > 0) try said.append(arena, '\n');
+        try said.appendSlice(arena, content);
+
+        // A verdict ends the answer; anything later with this id answers a
+        // call made again rather than this one.
+        if (r.sigil != .result) break;
     }
-    return null;
+    return if (found) said.items else null;
 }
 
 fn simple(s: *std.json.Stringify, role: []const u8, content: []const u8, call_id: []const u8) !void {

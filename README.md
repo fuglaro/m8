@@ -121,6 +121,28 @@ m8 @=/tduyxbutjb -- "Tell me more."
   the reply. Everything else is written as markdown.
 * A first word that is none of those names a command.
 
+Every command has a page, and anything under a command
+has one too:
+
+```bash
+m8 help                    every command, and what m8 reads
+m8 help send               one of them
+m8 send --help             the same page
+m8 help providers url      what is under one
+m8 providers url --help    the same page again
+```
+
+`--help` is m8's rather than any command's, so no command
+has to parse it and no two answer it differently. The one
+exception is `--`, whose arguments are prose: there it is
+something you said, and `m8 help --` is how that page is
+asked for.
+
+A page you asked for is written to stdout, where it can
+be paged and piped. A page handed back instead of what
+you asked for goes to stderr, where it cannot become part
+of a document.
+
 ### Assembling
 
 A message command is handed a ledger built from three
@@ -261,8 +283,15 @@ m8 -l sandbox call -- bash -c "ls"
 ```
 
 Output is m8: what the program writes becomes a 🧾
-receipt, or 🚫 when it exits non-zero. `--raw` hands
+receipt, written as it arrives rather than gathered
+up, and then 🟢 or 🚫 for how it ended. `--raw` hands
 stdout straight through instead.
+
+Because the receipt streams, a tool may write more
+than there is memory to hold and m8 will not hold it.
+A failure keeps the *last* 8K of what the program
+complained about — the end is where a program says
+why — and marks it `...` when there was more.
 
 `m8 call` on its own prints every lock. See Locks.
 
@@ -340,7 +369,29 @@ Query:
 
 ▄ 🧾Call ID
 │ Response
+
+▄ 🟢Call ID
 ```
+
+A call is answered by what the tool said and then by
+how it went. 🧾 is the saying, and it is written while
+the tool is still speaking; 🟢 and 🚫 are the verdict,
+which nothing can know until it stops.
+
+That order is the reason there are three. A record
+names its kind on its first line, so a single record
+meaning "it worked, and here is what it said" cannot
+be started until the program has finished — which is
+to say the output would have to be held in full,
+however large it is, so that the first line could be
+written last. Splitting the verdict off is what lets
+the answer be written as it arrives.
+
+A tool that says nothing is answered by its verdict
+alone. 🧾 without a verdict under it is a tool that
+spoke and was cut off; it still answers the call,
+because running it again to find out how it would
+have ended would do whatever it does a second time.
 
 Simple example query with definition:
 
@@ -440,6 +491,7 @@ renders markdown renders them. A tty gets `m8`.
 * 📲 call -> `:calling:`
   * 📦 package -> `:package:`
 * 🧾 result -> `:receipt:`
+* 🟢 ok -> `:green_circle:`
 * 🚫 failed -> `:no_entry_sign:`
 * 📚 skill -> `:books:`
 * 💻 system -> `:computer:`
@@ -451,7 +503,7 @@ renders markdown renders them. A tty gets `m8`.
 
 A sigil takes a value, a content block, or both.
 
-* Value only: 🧠 📚 🔓 🔏 🔌
+* Value only: 🧠 📚 🔓 🔏 🔌 🟢
 * Content only: 🙋 🤖 💭 💻
 * Both: 🧰 📦 🎁 📲 🧾 🚫
 
@@ -793,6 +845,28 @@ through parents until it reaches an agent, and
 that agent's 🧠 reaches a model. Forking is two
 turns naming one parent, and copies nothing.
 
+Two different things are written 🧠. An agent
+naming an agent is a mob reaching into a mob; a
+name in `=` or `+` is lineage, the turn this one
+continues. Both are as deep as they are — nine
+mobs is nine mobs, a thousand turns is a thousand
+turns, and neither is a fault.
+
+The one fault either can have is a loop, and a
+loop is not a depth: it is a name met twice on the
+way to itself. So that is what is looked for, and
+what m8 says when it finds one.
+
+```
+m8: an agent includes one that leads back to it
+m8: a turn in that chat names one that leads back to it
+```
+
+There is no length or depth either may not reach.
+Expanding is a loop over a stack rather than a
+call per link, so what it costs is the memory to
+hold the ledger it built.
+
 ### Models
 
 A 🧠 written with a leading `/` names a model rather than an
@@ -947,6 +1021,25 @@ m8 providers url       post the request to $M8_PROVIDER_URL
 m8 providers inbuilt   answer it here
 ```
 
+```bash
+m8 providers                   these two, and what is configured
+m8 providers url --help        what it reads, and from where
+m8 providers inbuilt --help    which models it serves
+```
+
+A provider command reads a request on stdin. A terminal
+there is nobody piping one, so it says what it is instead
+of waiting for an end of file that is not coming — which
+makes `m8 providers url` a third way to that page.
+
+`m8 providers` also lists the providers this machine has,
+naming the file they came from. Which models any of them
+serves is not in that list and is not missing: that is the
+ledger's business, written on the 🧠 that names one, so
+nothing in a config has to be kept in step with what a
+provider offers. `inbuilt` is the exception, because its
+models are m8's own.
+
 `inbuilt` speaks m8 and answers without a network, which is
 what makes the loop, tool calling, and picking up a call that
 was never answered testable rather than only demonstrable:
@@ -955,13 +1048,55 @@ was never answered testable rather than only demonstrable:
 m8 @/inbuilt/echo -- hello        # says the last thing said
 m8 @/inbuilt/you-are -- anything  # "I know you are but what am I?"
 m8 @/inbuilt/runner -- 'RUN;;;say;;;text=hi'
+m8 @/inbuilt/eliza -- "I am not sleeping well."
 ```
+
+`eliza` is Weizenbaum's doctor of 1966: a keyword found in
+what you said, whatever followed it with its pronouns
+turned around, and a sentence to put the two into. Which
+of a rule's replies comes back is decided by how many
+times you have spoken, which the ledger already says — so
+she varies through a conversation while remembering
+nothing outside it, and a conversation replays exactly.
+It is a chat that is worth having a few turns of while
+the loop around it is being worked on.
 
 `runner` calls a tool for every line of the last thing said
 reading `RUN;;;tool;;;property=value;;;...`. Deliberately
 witless — `;;;` separates and nothing escapes it — because it
 exists to drive m8's own tool path from a test rather than to
 be a language.
+
+### Environment
+
+What m8 itself reads:
+
+```
+XDG_CONFIG_HOME   your own config, as m8-st8 under it
+HOME              that, when XDG_CONFIG_HOME says nothing:
+                  ~/.config/m8-st8
+PATH              where a provider or tool named as a bare
+                  word is looked for, and where m8 finds itself
+TMPDIR            where a locked tool's own directory is made;
+                  /tmp when unset
+```
+
+And what a provider's command is handed, which m8 writes
+and never reads:
+
+```
+M8_PROVIDER_API   the codec the entry named
+M8_PROVIDER_*     every other string the entry said
+```
+
+The two m8 ships with read `M8_PROVIDER_URL` and
+`M8_PROVIDER_KEY` between them, and `m8 providers url
+--help` says what each is for. A provider you write reads
+whatever its entry says, under its own name.
+
+Under `contain-env` the environment is rebuilt from
+`core/contain-env-allowed.txt` rather than inherited, and
+`HOME` and `TMPDIR` become the sandbox's own directory.
 
 # Bonsai setup on oMLX
 
