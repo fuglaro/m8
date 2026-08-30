@@ -165,12 +165,12 @@ an error rather than a prompt.
 ```bash
 m8 [@AGENT|+CHAT] encode FORMAT    a ledger, as some api sees it
 m8 decode FORMAT                   that api's request, as a ledger
+m8 parse FORMAT                    that api's response, as a turn
 m8 send [PROVIDER]                 run a ledger and save the turn
 ```
 
 `m8` is a format like any other here, so `encode m8` is
-how a chat becomes one flat document. It is the only one
-that loses nothing.
+how a chat becomes one flat document.
 
 ```bash
 m8 +mathy encode m8
@@ -188,21 +188,61 @@ m8 decode openai-completions <openai.json
 m8 decode openai-completions <openai.json | m8 send local
 ```
 
-Encoding may lose whatever the target cannot say, and
-that is what makes it a projection: chat completions has
-no 🔌 in it and cannot tell a 🚫 from a 🧾.
+A ledger always has an api view. An api request never has
+a ledger. That asymmetry is not a gap in any one format —
+a request carries what one model needs in order to answer
+once, and a ledger carries what happened and what it was
+allowed to do.
 
-Coming the other way loses one thing only. A request says
-which model and everything to ask it for, and never whose
-model it was — so `openai-completions → m8 → openai-completions`
-is the same request, byte for byte, and all `send` needs is
-the provider. That is why parameters live on the 🧠 rather
-than in a config keyed by a name the wire never carries.
+So encoding is total, and loses whatever the target cannot
+say. That is what makes it a projection, and the ledger it
+came from still holds all of it.
 
-`decode` is a run command: it is the way in rather than
-a filter, so it takes stdin exactly as it arrives. There
-is no ledger to assemble yet, and naming an agent at it
-is refused rather than dropped.
+Decoding is partial, and hands back something ledger-shaped
+rather than the ledger. Chat completions cannot tell a 🚫
+from a 🧾, and a tool comes back without its 🔌 or its 🔒 —
+a model call has no business carrying either, so their
+absence on the way home is that rule holding rather than a
+corner missed. A tool read back is an interface, and calling
+one answers with 🚫 rather than running something nobody
+sent.
+
+`m8` is the one format whose view is the whole ledger. That
+is why it is in the table at all, and why `decode m8`
+approximates nothing.
+
+What a request does carry, it carries exactly. A request
+says which model and everything to ask it for, and never
+whose model it was — so `openai-completions → m8 →
+openai-completions` is the same request, byte for byte, and
+all `send` needs is the provider. That is why parameters
+live on the 🧠 rather than in a config keyed by a name the
+wire never carries.
+
+`decode` and `parse` are run commands: they are the way in
+rather than filters, so they take stdin exactly as it
+arrives. There is no ledger to assemble yet, and naming an
+agent at one is refused rather than dropped.
+
+`parse` is the third direction. `encode` and `decode` are
+about requests, which are ledger-shaped; a response is
+turn-shaped, so it is not decoded into a ledger but read
+into the records it adds to one. With it, the whole loop is
+something you can watch happen:
+
+```bash
+echo "Say hi." | m8 @mathy encode openai-completions \
+  | m8 providers url \
+  | m8 parse openai-completions
+```
+
+Reading is incremental whether or not the provider streamed.
+A provider that writes everything at once is a stream of one
+chunk, which is what lets streaming be something a provider
+MAY do rather than MUST. Where an api has both a streamed and
+a whole shape — chat completions changes shape, not just
+delivery, when `stream` is set — the one that actually
+arrived is the one that is read.
 
 ### Calling
 
@@ -678,10 +718,12 @@ working directory and searching outwards:
 * `./.m8-st8/` and every `.m8-st8/` above it
 * `$XDG_CONFIG_HOME/m8-st8/` else `~/.config/m8-st8/`
 
-`core/` is the exception. It holds the two files that
-decide what a lock *means*, and it is read from your
-own config only — a project folder arrives with a
-`git clone`.
+`core/` is the exception. It holds the files that decide
+what a lock *means* and what a provider *is*, and it is
+read from your own config only — a project folder arrives
+with a `git clone`, and a provider is a command that runs
+on your machine. Each is a whole-file override of the copy
+m8 ships with, not a merge.
 
 Agents are found at `<config_dir>/<name>.md`.
 
@@ -690,7 +732,7 @@ Agents are found at `<config_dir>/<name>.md`.
   core/
     mac-sandbox.sb
     contain-env-allowed.txt
-  providers.json
+    providers.json
   mathy.md              @mathy
   team/reviewer.md      @team/reviewer
   +/+.md                ++
@@ -796,38 +838,130 @@ the model wins, since the first 🧠 is the one that counts.
 
 ### Providers
 
-`providers.json`:
+A provider is a command. It reads an api-formatted request on
+stdin and writes that api's response on stdout — the same
+shape a tool has, a filter that stays in a pipeline. Reaching
+a url is one such command rather than the privileged path, so
+anything you can write a program for is a provider.
+
+`core/providers.json`:
 
 ```json
 {
+  "inbuilt": {
+    "cmd": ["m8", "providers", "inbuilt"],
+    "api": "m8"
+  },
   "local": {
-    "url": "http://127.0.0.1:11337/v1",
-    "key": "sed -n 's/.*\"api_key\" *: *\"\\([^\"]*\\)\".*/\\1/p' ~/.omlx/settings.json",
-    "api": "openai-completions"
+    "cmd": ["m8", "providers", "url"],
+    "api": "openai-completions",
+    "url": "http://127.0.0.1:11337/v1/chat/completions",
+    "key": "sed -n 's/.*\"api_key\" *: *\"\\([^\"]*\\)\".*/\\1/p' ~/.omlx/settings.json"
   }
 }
 ```
 
-A provider is a url, an api, and a way to get a key. That is
-all of it. Which models it serves and what to ask them for is
-the ledger's business, written on the 🧠 that names one — so
-nothing here has to be kept in step with what a provider
-offers, and a model it has never listed works like any other.
+Two entries mean anything to m8:
 
-`api` names a codec, which is the same name `m8 encode`
-takes. There is no second table mapping one to the other, and
-the codec is also what says which path under `url` it lives
-at.
+* `cmd` says what to run.
+* `api` says how to write the request and read the answer.
+  It names a codec, which is the same name `m8 encode` takes.
 
-A provider that speaks two apis is two providers pointing at
-one url, rather than a second kind of override:
+Everything else is handed to the command as `M8_PROVIDER_*`
+on top of the inherited environment, and means whatever the
+command makes of it. `url` arrives as `M8_PROVIDER_URL`,
+`api-version` as `M8_PROVIDER_API_VERSION`. Only string
+values with lowercase-and-hyphen keys go, because only those
+have a name to take. `cmd` stays behind — the command already
+knows what it is — and `api` goes, because what to write may
+be the command's business too.
 
-```json
-{
-  "local":   { "url": "http://127.0.0.1:11337/v1", "api": "openai-completions" },
-  "local-r": { "url": "http://127.0.0.1:11337/v1", "api": "openai-responses" }
-}
+`key` is nothing special to m8. `m8 providers url` runs it as
+a shell command and takes its output as the bearer token,
+which is that command's convention rather than the language's
+— and it is a command so a config can commit safely and still
+reach a keychain.
+
+There is no path m8 appends to a url. Which api lives where is
+a fact about a provider, not about a format, and m8 keeps no
+table of those. The whole endpoint goes in `url`.
+
+Which models a provider serves is the ledger's business,
+written on the 🧠 that names one, so nothing here has to be
+kept in step with what a provider offers.
+
+A provider that speaks two apis is two entries pointing at one
+url, rather than a second kind of override.
+
+#### Finding the command
+
+The first word of `cmd` is looked for in order:
+
+* `m8` is the m8 that is running, so a provider reaches this
+  build rather than whichever one is on a `PATH`, or none.
+* An absolute path is one.
+* A name that names a file in `core/` is that file — and if
+  it is not executable, that is an error rather than a
+  fall-through to something else of the same name.
+* A bare word is searched for on `PATH`.
+* Anything else fails.
+
+So a provider you write lives beside the config that names it,
+in `core/`, and is reached as `["my-provider"]`.
+
+#### Speaking m8
+
+A provider declaring `api: "m8"` is handed the ledger itself
+rather than a projection of it — 🧰 with its 🔌 and its 🔒
+included — and answers in the same language. It is trusted
+with that because a provider command lives in `core/`, which
+a cloned project cannot reach.
+
+Worth knowing in both directions: it is more capable, and it
+means a shim that forwards what it receives will forward your
+local command lines. A provider speaking m8 is responsible for
+projecting before anything leaves the machine.
+
+#### Locks
+
+Locks are not applied to a provider command. That is safe
+rather than generous, and the reason matters:
+
+A lock is a sandbox the child is launched inside, and
+`sandbox-exec` is one way — a provider inherits whatever m8 is
+already inside and can never shed it. So the rule only ever
+means m8 adds nothing. A jailed agent's tool that reaches a
+provider is still jailed, because it is a descendant of a
+jailed process; what the rule buys is that a jailed *agent*
+can still reach its own model, since an agent's locks are
+applied to its tools rather than to m8.
+
+Trust is held where the command is written down. `core/` is
+read from your own config only, so a project cannot define
+what runs. **Mobs travel with agents; providers are yours.**
+
+#### The ones m8 ships with
+
+```bash
+m8 providers url       post the request to $M8_PROVIDER_URL
+m8 providers inbuilt   answer it here
 ```
+
+`inbuilt` speaks m8 and answers without a network, which is
+what makes the loop, tool calling, and picking up a call that
+was never answered testable rather than only demonstrable:
+
+```bash
+m8 @/inbuilt/echo -- hello        # says the last thing said
+m8 @/inbuilt/you-are -- anything  # "I know you are but what am I?"
+m8 @/inbuilt/runner -- 'RUN;;;say;;;text=hi'
+```
+
+`runner` calls a tool for every line of the last thing said
+reading `RUN;;;tool;;;property=value;;;...`. Deliberately
+witless — `;;;` separates and nothing escapes it — because it
+exists to drive m8's own tool path from a test rather than to
+be a language.
 
 # Bonsai setup on oMLX
 

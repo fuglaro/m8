@@ -22,6 +22,9 @@ pub const Ctx = struct {
     mode: doc.Mode,
     /// The environment, for a command that spawns something.
     env: *const std.process.Environ.Map,
+    /// Where the m8 that is running lives, so a provider naming `m8` reaches
+    /// this build rather than whichever one is on a PATH, or none at all.
+    self: []const u8 = "m8",
     /// Every lock in force: `-l` on the command line, plus whatever the agent
     /// carries. Cumulative, and nothing here can loosen what an agent already
     /// has — a lock only ever removes.

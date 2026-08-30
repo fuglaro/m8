@@ -9,8 +9,9 @@
 //! is consulted for it.
 //!
 //! A file is taken from the nearest directory that has one. `providers.json`
-//! is the exception: those merge key by key, so a project can override a
-//! single provider without restating the rest.
+//! lives in `core/` with the rest, because a provider is a command that runs
+//! on your machine and a project arrives with a `git clone`. Mobs travel with
+//! agents; providers are yours.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -51,6 +52,13 @@ pub fn userDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const 
     return null;
 }
 
+/// The user's `core/`, if there is one. Where a provider command written as
+/// a relative name is looked for.
+pub fn coreDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const u8 {
+    const base = (try userDir(arena, env)) orelse return null;
+    return try std.fs.path.join(arena, &.{ base, "core" });
+}
+
 /// Read a file from `core/` in the user's config directory. Null when there is
 /// none, which means the copy compiled into the binary is used instead.
 pub fn core(
@@ -80,22 +88,25 @@ pub fn read(arena: Allocator, io: std.Io, dirs: []const []const u8, rel: []const
     return null;
 }
 
-/// Every providers.json on the search path, merged by top-level key with the
-/// nearest taking precedence.
-pub fn providers(arena: Allocator, io: std.Io, dirs: []const []const u8) !std.json.ObjectMap {
-    var merged: std.json.ObjectMap = .empty;
-    var i = dirs.len;
-    while (i > 0) { // furthest first, so nearer writes land on top
-        i -= 1;
-        const path = try std.fs.path.join(arena, &.{ dirs[i], "providers.json" });
-        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file)) catch continue;
-        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
-        if (parsed != .object) continue;
-        var it = parsed.object.iterator();
-        while (it.next()) |e| try merged.put(arena, e.key_ptr.*, e.value_ptr.*);
-    }
-    return merged;
+/// The providers, from `core/`.
+///
+/// A whole-file override like the other core files: yours replaces the
+/// built-in one rather than adding to it, so what runs is what you wrote and
+/// nothing you did not. The default is compiled in, which is what makes
+/// `inbuilt` there before anything is configured.
+pub fn providers(
+    arena: Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+) !std.json.ObjectMap {
+    const bytes = (try core(arena, io, env, "providers.json")) orelse default_providers;
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
+    if (parsed != .object) return .empty;
+    return parsed.object;
 }
+
+/// The providers m8 ships with. Overridden whole by `core/providers.json`.
+pub const default_providers = @embedFile("core/providers.json");
 
 // ---------------------------------------------------------------- tests
 

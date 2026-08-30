@@ -1,11 +1,20 @@
 //! `decode` — some other format, as a ledger.
 //!
-//! The inverse of `encode`, and only ever as faithful as the format was. A
-//! chat completions request has no 🔌 in it and cannot tell a 🚫 from a 🧾, so
-//! those do not come back. What was on the wire does.
+//! The inverse of `encode`, and an approximation by construction. A ledger
+//! always has an api view; an api request never has a ledger, because it
+//! carries what one model needs in order to answer once rather than what
+//! happened and what it was allowed to do.
 //!
-//! `m8 decode m8` is the null operation, and is meant to be: reading the
-//! language and writing it out is what proves a document round-trips.
+//! So what comes back is ledger-shaped rather than the ledger. A chat
+//! completions request cannot tell a 🚫 from a 🧾, and a tool arrives without
+//! its 🔌 or its 🔒 — a model call has no business carrying either, so those
+//! not coming home is the rule holding rather than a corner missed. What was
+//! on the wire does come back, all of it.
+//!
+//! `m8 decode m8` is the exception that says why: m8 is the one format whose
+//! view is the whole ledger, so it is the one that approximates nothing. It
+//! is a null operation and is meant to be, since reading the language and
+//! writing it out is what proves a document round-trips.
 
 const std = @import("std");
 const codec = @import("../codec.zig");

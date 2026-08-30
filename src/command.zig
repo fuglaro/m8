@@ -28,8 +28,10 @@ pub const all = [_]Command{
     @import("command/cat.zig").command,
     @import("command/encode.zig").command,
     @import("command/decode.zig").command,
+    @import("command/parse.zig").command,
     @import("command/send.zig").command,
     @import("command/call.zig").command,
+    @import("command/providers.zig").command,
 };
 
 /// Inbuilt tools. Reached as `m8 call NAME`, never typed as a command.

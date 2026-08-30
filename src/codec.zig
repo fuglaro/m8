@@ -5,8 +5,21 @@
 //! and the one typed at `m8 encode`, because they are the same thing — there
 //! is no second table mapping one to the other.
 //!
-//! Encoding may lose whatever the target cannot say: order, 💭, a 🔌. That is
-//! what makes it a projection. The ledger it came from still holds all of it.
+//! A ledger always has an api view. An api request never has a ledger. That
+//! asymmetry is the shape of this file and it is not a gap in any particular
+//! codec: a request carries what one model needs in order to answer once,
+//! while a ledger carries what happened and what it was allowed to do.
+//!
+//! So encoding is total and loses whatever the target cannot say — order, 💭,
+//! a 🔌 — which is what makes it a projection, and the ledger it came from
+//! still holds all of it. Decoding is partial, and what it hands back is a
+//! ledger-shaped approximation rather than the ledger. A tool comes back
+//! without its 🔌 or its 🔒 because a model call has no business carrying
+//! either, so their absence on the way home is this working rather than
+//! failing.
+//!
+//! `m8` is the one codec whose view is the whole ledger. That is the reason it
+//! belongs in this table, and the reason `decode m8` loses nothing.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -34,25 +47,57 @@ pub const Target = struct {
     mode: doc.Mode = .md,
 };
 
+/// Where a reply's text goes as it arrives.
+///
+/// Only text can be acted on before the end: it can be shown. A call cannot
+/// be run until its arguments are whole, so calls are gathered rather than
+/// streamed, and that is the whole reason this carries one channel.
+pub const Sink = struct {
+    ctx: *anyopaque,
+    write: *const fn (ctx: *anyopaque, bytes: []const u8) anyerror!void,
+
+    pub fn text(s: Sink, bytes: []const u8) !void {
+        if (bytes.len == 0) return;
+        return s.write(s.ctx, bytes);
+    }
+};
+
+/// A tool call, whether coming back from a model or going out again as part
+/// of the conversation so far.
+pub const Call = struct {
+    id: []const u8,
+    name: []const u8,
+    /// The arguments as the model wrote them, still JSON.
+    arguments: []const u8,
+};
+
+/// What a response turned out to hold. The text is handed back as well as
+/// streamed, because the ledger needs the whole of it.
+pub const Reply = struct {
+    text: []const u8 = "",
+    calls: []const Call = &.{},
+};
+
 pub const Codec = struct {
     name: []const u8,
     summary: []const u8,
-    /// Appended to a provider's url. Empty when the codec is not a wire
-    /// format, which is how `m8` gets to be one of these at all.
-    suffix: []const u8 = "",
     encode: *const fn (Allocator, []const doc.Record, Target) anyerror![]const u8,
     decode: *const fn (Allocator, []const u8) anyerror![]const doc.Record,
+    /// Read a response as it arrives.
+    ///
+    /// Reading is incremental whether or not the provider bothered to stream:
+    /// a provider that writes everything at once is a stream of one chunk, so
+    /// parsing this way is what makes streaming optional on their side rather
+    /// than required. A format offering both a streamed and a whole shape is
+    /// told apart by looking at what actually arrived.
+    parse: *const fn (Allocator, *std.Io.Reader, Sink) anyerror!Reply,
 };
 
+pub const m8 = @import("codec/m8.zig");
 pub const openai_completions = @import("codec/openai_completions.zig");
 
 pub const all = [_]Codec{
-    .{
-        .name = "m8",
-        .summary = "the language itself; encoding is writing it out",
-        .encode = encodeM8,
-        .decode = decodeM8,
-    },
+    m8.codec,
     openai_completions.codec,
 };
 
@@ -61,18 +106,23 @@ pub fn find(name: []const u8) ?Codec {
     return null;
 }
 
-/// The default api for a provider that names none.
+/// The api a provider gets when it names none.
 pub const default = "openai-completions";
 
-fn encodeM8(arena: Allocator, records: []const doc.Record, target: Target) ![]const u8 {
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    try ledger.writeAll(&buf.writer, arena, target.mode, records);
-    return buf.written();
-}
-
-fn decodeM8(arena: Allocator, bytes: []const u8) ![]const doc.Record {
-    var diag: doc.Diagnostic = .{};
-    return doc.parse(arena, bytes, &diag);
+/// The next line, or null at the end.
+///
+/// A stream that stops without a final newline still gives up what it had. A
+/// whole JSON response arrives exactly that way — one line with nothing after
+/// it — so a reader that insisted on the delimiter would see nothing at all.
+pub fn nextLine(arena: Allocator, r: *std.Io.Reader) !?[]const u8 {
+    if (r.takeDelimiterInclusive('\n')) |line| {
+        return line;
+    } else |e| switch (e) {
+        error.EndOfStream => {},
+        else => return e,
+    }
+    const rest = try r.allocRemaining(arena, .unlimited);
+    return if (rest.len == 0) null else rest;
 }
 
 // ---------------------------------------------------------------- tests

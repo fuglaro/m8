@@ -31,6 +31,7 @@ const command = @import("command.zig");
 const config = @import("config.zig");
 const assembly = @import("assembly.zig");
 const ledger = @import("ledger.zig");
+const provider = @import("provider.zig");
 const session = @import("session.zig");
 const sandbox = @import("sandbox.zig");
 const doc = @import("m8/doc.zig");
@@ -57,6 +58,15 @@ pub fn main(init: std.process.Init) !u8 {
 
     const argv = try init.minimal.args.toSlice(arena);
     const args = argv[@min(1, argv.len)..];
+
+    // Where this m8 is, so a provider naming `m8` reaches this build rather
+    // than whichever one is on a PATH, or none at all.
+    const self = try provider.selfPath(
+        arena,
+        io,
+        init.environ_map,
+        if (argv.len > 0) argv[0] else "m8",
+    );
 
     var out_buf: [64 * 1024]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(io, &out_buf);
@@ -163,7 +173,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     }
 
-    return runCommand(init, io, arena, cmd, cmd_args, locks.items, assembled.document, out, err);
+    return runCommand(init, io, arena, cmd, cmd_args, locks.items, assembled.document, self, out, err);
 }
 
 /// Read what this kind of command is handed.
@@ -206,6 +216,7 @@ fn runCommand(
     args: []const [:0]const u8,
     locks: []const []const u8,
     input: []const u8,
+    self: []const u8,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
 ) !u8 {
@@ -217,6 +228,7 @@ fn runCommand(
         .io = io,
         .mode = if (std.Io.File.stdout().isTty(io) catch false) .m8 else .md,
         .env = init.environ_map,
+        .self = self,
         .locks = locks,
         .args = @ptrCast(args),
         .in = input,
@@ -278,6 +290,6 @@ fn list(w: *std.Io.Writer, heading: []const u8, message: bool) !void {
     try w.print("\n{s}:\n\n", .{heading});
     for (command.all) |c| {
         if (c.takes.isMessage() != message) continue;
-        try w.print("  {s: <7} {s}\n", .{ c.name, c.summary });
+        try w.print("  {s: <9} {s}\n", .{ c.name, c.summary });
     }
 }

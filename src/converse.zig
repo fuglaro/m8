@@ -56,8 +56,14 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
     if (def.model.len == 0) return agent.Error.NoModel;
     if (def.provider.len == 0) return agent.Error.NoProvider;
 
-    const providers = try config.providers(arena, io, dirs);
-    const p = try provider.find(providers, def.provider);
+    const providers = try config.providers(arena, io, ctx.env);
+    const p = try provider.read(arena, providers, def.provider);
+    const wire = codec.find(p.api) orelse return provider.Error.UnsupportedApi;
+
+    // The command is found once, before anything is said, so a provider that
+    // is not there fails before a turn is half made.
+    const argv = try provider.resolve(arena, io, ctx.self, try config.coreDir(arena, ctx.env), p.cmd);
+    const environ = try provider.environment(arena, p, ctx.env);
 
     // Only what 🔓 named, and the last definition of a name wins.
     const offered = try agent.offer(arena, def);
@@ -102,26 +108,37 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
         var reply: LiveReply = .{
             .out = out,
             .mode = mode,
-            .text = .empty,
-            .arena = arena,
             .live = live,
             .written = &written,
         };
-        const calls = try provider.completeStreaming(arena, io, p, .{
+        const request = try wire.encode(arena, records.items, .{
             .model = def.model,
             .params = def.params,
             .tools = offered,
+            // A hint rather than a contract: a provider that cannot stream
+            // answers whole, and the parser reads either.
             .stream = true,
-        }, records.items, reply.sink());
+        });
+        const answered = try provider.run(
+            arena,
+            io,
+            argv,
+            environ,
+            request,
+            wire,
+            reply.sink(),
+            ctx.err,
+        );
         try reply.finish();
         try out.flush();
 
-        if (reply.text.items.len > 0) {
-            const said: doc.Record = .{ .sigil = .bot, .content = reply.text.items };
+        if (answered.text.len > 0) {
+            const said: doc.Record = .{ .sigil = .bot, .content = answered.text };
             try keep(arena, &records, said);
             try turn.append(arena, said);
         }
-        if (calls.len == 0) break;
+        if (answered.calls.len == 0) break;
+        const calls = answered.calls;
 
         for (calls) |c| {
             const asked: doc.Record = .{
@@ -193,7 +210,7 @@ fn answer(
     dirs: []const []const u8,
     locks: []const []const u8,
     tools: []const toolbox.Tool,
-    c: provider.Call,
+    c: codec.Call,
 ) !doc.Record {
     const arena = ctx.arena;
     const io = ctx.io;
@@ -203,7 +220,14 @@ fn answer(
     } else return failure(arena, c.id, "no tool named '{s}'", .{c.name});
 
     if (tool.command.len == 0)
-        return failure(arena, c.id, "'{s}' has no 🔌 command", .{c.name});
+        return failure(
+            arena,
+            c.id,
+            "'{s}' arrived without a 🔌, so there is nothing to run. A tool " ++
+                "read back from an api is an interface only: a model call " ++
+                "never carried how the tool runs.",
+            .{c.name},
+        );
 
     const args = std.json.parseFromSliceLeaky(std.json.Value, arena, c.arguments, .{}) catch
         return failure(arena, c.id, "arguments were not JSON", .{});
@@ -226,7 +250,7 @@ fn answer(
     // Asked after expansion, so the checker judges the command line that will
     // actually run rather than the request that produced it.
     if (sandbox.checker(all.items)) |who| {
-        const verdict = agentCheck(io, arena, dirs, all.items, who, argv) catch |e|
+        const verdict = agentCheck(ctx, dirs, all.items, who, argv) catch |e|
             return failure(arena, c.id, "Failed agentic check: {s}", .{@errorName(e)});
         if (verdict) |why| return failure(arena, c.id, "Failed agentic check: {s}", .{why});
     }
@@ -273,18 +297,17 @@ fn answer(
 /// talking its own checker into it. Its reply is never streamed and never
 /// reaches the receipt; it exists to decide, not to be read.
 fn agentCheck(
-    io: std.Io,
-    arena: Allocator,
+    ctx: Ctx,
     dirs: []const []const u8,
     locks: []const []const u8,
     who: []const u8,
     argv: []const []const u8,
 ) !?[]const u8 {
-    const l = try ledger.expand(arena, io, dirs, who, 0);
+    const arena = ctx.arena;
+    const l = try ledger.expand(arena, ctx.io, dirs, who, 0);
     const def = try agent.project(arena, l.records);
     if (def.model.len == 0) return agent.Error.NoModel;
-    const providers = try config.providers(arena, io, dirs);
-    const p = try provider.find(providers, def.provider);
+    if (def.provider.len == 0) return agent.Error.NoProvider;
 
     var records: std.ArrayList(doc.Record) = .empty;
     try records.appendSlice(arena, l.records);
@@ -296,17 +319,50 @@ fn agentCheck(
         }),
     });
 
-    const said = std.mem.trim(
-        u8,
-        try provider.complete(arena, io, p, .{
-            .model = def.model,
-            .params = def.params,
-        }, records.items),
-        " \t\r\n",
-    );
+    // Its reply is never streamed and never reaches the receipt; it exists to
+    // decide, not to be read.
+    var quiet: Quiet = .{};
+    const reply = try once(ctx, def, records.items, quiet.sink());
+    const said = std.mem.trim(u8, reply.text, " \t\r\n");
     if (std.ascii.eqlIgnoreCase(said, "allow")) return null;
     return if (said.len > 0) said else "the checker said nothing";
 }
+
+/// One turn against a provider, with nowhere for the text to go as it lands.
+fn once(
+    ctx: Ctx,
+    def: agent.Definition,
+    records: []const doc.Record,
+    sink: codec.Sink,
+) !codec.Reply {
+    const providers = try config.providers(ctx.arena, ctx.io, ctx.env);
+    const p = try provider.read(ctx.arena, providers, def.provider);
+    const wire = codec.find(p.api) orelse return provider.Error.UnsupportedApi;
+
+    const request = try wire.encode(ctx.arena, records, .{
+        .model = def.model,
+        .params = def.params,
+    });
+    return provider.run(
+        ctx.arena,
+        ctx.io,
+        try provider.resolve(ctx.arena, ctx.io, ctx.self, try config.coreDir(ctx.arena, ctx.env), p.cmd),
+        try provider.environment(ctx.arena, p, ctx.env),
+        request,
+        wire,
+        sink,
+        ctx.err,
+    );
+}
+
+/// A sink that keeps nothing. What it is handed has already been gathered by
+/// the parser, which is what the reply carries back.
+const Quiet = struct {
+    fn sink(self: *Quiet) codec.Sink {
+        return .{ .ctx = self, .write = writeFn };
+    }
+    fn writeFn(_: *anyopaque, _: []const u8) anyerror!void {}
+};
 
 fn failure(
     arena: Allocator,
@@ -350,16 +406,13 @@ fn show(
 const LiveReply = struct {
     out: *std.Io.Writer,
     mode: doc.Mode,
-    /// Kept as well as streamed, because the ledger needs the whole reply.
-    text: std.ArrayList(u8),
-    arena: Allocator,
     live: bool,
     written: *bool,
     /// Opened on the first byte. A model that only calls a tool says nothing,
     /// and an empty 🤖 above the call would be a record of nothing.
     body: ?doc.ContentWriter = null,
 
-    fn sink(self: *LiveReply) provider.Sink {
+    fn sink(self: *LiveReply) codec.Sink {
         return .{ .ctx = self, .write = writeFn };
     }
 
@@ -371,7 +424,6 @@ const LiveReply = struct {
             self.written.* = true;
             self.body = try doc.ContentWriter.begin(self.out, self.mode, .bot, "");
         }
-        try self.text.appendSlice(self.arena, bytes);
         try self.body.?.write(bytes);
         if (self.live) try self.out.flush();
     }

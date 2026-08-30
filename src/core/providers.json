@@ -1,0 +1,6 @@
+{
+  "inbuilt": {
+    "cmd": ["m8", "providers", "inbuilt"],
+    "api": "m8"
+  }
+}

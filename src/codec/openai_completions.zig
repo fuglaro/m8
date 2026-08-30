@@ -23,9 +23,9 @@ pub const codec_name = "openai-completions";
 pub const codec: api.Codec = .{
     .name = codec_name,
     .summary = "OpenAI chat completions",
-    .suffix = "/chat/completions",
     .encode = encode,
     .decode = decode,
+    .parse = parse,
 };
 
 // ------------------------------------------------------------------ encode
@@ -223,6 +223,153 @@ fn callId(value: []const u8) []const u8 {
 fn callName(value: []const u8) []const u8 {
     const cut = std.mem.indexOfScalar(u8, value, ',') orelse return value;
     return std.mem.trim(u8, value[0..cut], " \t");
+}
+
+// ------------------------------------------------------------------- parse
+
+/// Read a response, whichever shape it turned up in.
+///
+/// `stream: true` changes this api's response shape rather than only its
+/// delivery, so a provider that ignored the flag answers with one whole JSON
+/// object instead of a stream of events. Both are read here, told apart by
+/// what actually arrived — the same move `doc.detect` makes on stdin: decide
+/// from the first line, then commit.
+fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
+    // The first line that says anything decides.
+    while (true) {
+        const raw = (try api.nextLine(arena, r)) orelse return .{};
+        const line = std.mem.trimEnd(u8, raw, "\r\n");
+        if (std.mem.trim(u8, line, " \t").len == 0) continue;
+
+        if (std.mem.startsWith(u8, line, "data:") or std.mem.startsWith(u8, line, "event:"))
+            return events(arena, r, sink, line);
+        return whole(arena, r, sink, raw);
+    }
+}
+
+/// Server-sent events: each `data:` line carries a whole JSON fragment whose
+/// delta is appended. The stream ends at `data: [DONE]`.
+fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
+    var text: std.ArrayList(u8) = .empty;
+    var building: std.ArrayList(Building) = .empty;
+
+    var line = first;
+    while (true) {
+        if (std.mem.startsWith(u8, line, "data:")) {
+            const payload = std.mem.trim(u8, line["data:".len..], " ");
+            if (std.mem.eql(u8, payload, "[DONE]")) break;
+            if (std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{})) |v| {
+                if (extractDelta(v)) |fragment| {
+                    try text.appendSlice(arena, fragment);
+                    try sink.text(fragment);
+                }
+                try gatherCalls(arena, &building, v);
+            } else |_| {}
+        }
+        const raw = (try api.nextLine(arena, r)) orelse break;
+        line = std.mem.trimEnd(u8, raw, "\r\n");
+    }
+    return .{ .text = text.items, .calls = try finish(arena, building.items) };
+}
+
+/// One JSON object, from a provider that answered all at once.
+fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
+    var body: std.ArrayList(u8) = .empty;
+    try body.appendSlice(arena, first);
+    const rest = try r.allocRemaining(arena, .unlimited);
+    try body.appendSlice(arena, rest);
+
+    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body.items, .{}) catch
+        return error.MalformedResponse;
+
+    const message = messageOf(v) orelse return .{};
+    var text: []const u8 = "";
+    if (message.object.get("content")) |c| {
+        if (c == .string) {
+            text = c.string;
+            try sink.text(text);
+        }
+    }
+
+    var building: std.ArrayList(Building) = .empty;
+    if (message.object.get("tool_calls")) |list| if (list == .array) {
+        for (list.array.items) |item| try gatherOne(arena, &building, item);
+    };
+    return .{ .text = text, .calls = try finish(arena, building.items) };
+}
+
+fn messageOf(v: std.json.Value) ?std.json.Value {
+    if (v != .object) return null;
+    const choices = v.object.get("choices") orelse return null;
+    if (choices != .array or choices.array.items.len == 0) return null;
+    const first = choices.array.items[0];
+    if (first != .object) return null;
+    const message = first.object.get("message") orelse return null;
+    return if (message == .object) message else null;
+}
+
+/// A call arrives in pieces across events, addressed by index: the id and
+/// name once, then the arguments a fragment at a time. Nothing is complete
+/// until the stream ends, so each piece is appended where it belongs.
+const Building = struct {
+    id: std.ArrayList(u8) = .empty,
+    name: std.ArrayList(u8) = .empty,
+    arguments: std.ArrayList(u8) = .empty,
+};
+
+fn finish(arena: Allocator, building: []const Building) ![]const api.Call {
+    var out: std.ArrayList(api.Call) = .empty;
+    for (building) |b| try out.append(arena, .{
+        .id = b.id.items,
+        .name = b.name.items,
+        .arguments = if (b.arguments.items.len == 0) "{}" else b.arguments.items,
+    });
+    return out.items;
+}
+
+fn gatherCalls(arena: Allocator, calls: *std.ArrayList(Building), v: std.json.Value) !void {
+    const delta = deltaOf(v) orelse return;
+    const list = delta.object.get("tool_calls") orelse return;
+    if (list != .array) return;
+    for (list.array.items) |item| try gatherOne(arena, calls, item);
+}
+
+fn gatherOne(arena: Allocator, calls: *std.ArrayList(Building), item: std.json.Value) !void {
+    if (item != .object) return;
+    const index: usize = if (item.object.get("index")) |i|
+        (if (i == .integer) @intCast(i.integer) else calls.items.len)
+    else
+        calls.items.len;
+    while (calls.items.len <= index) try calls.append(arena, .{});
+    const into = &calls.items[index];
+
+    if (item.object.get("id")) |x| {
+        if (x == .string) try into.id.appendSlice(arena, x.string);
+    }
+    const f = item.object.get("function") orelse return;
+    if (f != .object) return;
+    if (f.object.get("name")) |x| {
+        if (x == .string) try into.name.appendSlice(arena, x.string);
+    }
+    if (f.object.get("arguments")) |x| {
+        if (x == .string) try into.arguments.appendSlice(arena, x.string);
+    }
+}
+
+fn deltaOf(v: std.json.Value) ?std.json.Value {
+    if (v != .object) return null;
+    const choices = v.object.get("choices") orelse return null;
+    if (choices != .array or choices.array.items.len == 0) return null;
+    const first = choices.array.items[0];
+    if (first != .object) return null;
+    const delta = first.object.get("delta") orelse return null;
+    return if (delta == .object) delta else null;
+}
+
+fn extractDelta(v: std.json.Value) ?[]const u8 {
+    const delta = deltaOf(v) orelse return null;
+    const content = delta.object.get("content") orelse return null;
+    return if (content == .string) content.string else null;
 }
 
 // ------------------------------------------------------------------ decode
@@ -590,4 +737,97 @@ test "a call still owed is written without an answer" {
     const msgs = field(v, "messages").array.items;
     try testing.expectEqual(@as(usize, 1), msgs.len);
     try testing.expectEqual(@as(usize, 1), field(msgs[0], "tool_calls").array.items.len);
+}
+
+fn readerOver(bytes: []const u8) std.Io.Reader {
+    return .fixed(bytes);
+}
+
+const Collect = struct {
+    arena: Allocator,
+    seen: std.ArrayList(u8) = .empty,
+
+    fn sink(self: *Collect) api.Sink {
+        return .{ .ctx = self, .write = writeFn };
+    }
+    fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
+        const self: *Collect = @ptrCast(@alignCast(ctx));
+        try self.seen.appendSlice(self.arena, bytes);
+    }
+};
+
+test "a streamed response and a whole one read the same" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const streamed =
+        \\data: {"choices":[{"delta":{"content":"Hello"}}]}
+        \\
+        \\data: {"choices":[{"delta":{"content":" world"}}]}
+        \\
+        \\data: [DONE]
+        \\
+    ;
+    // No trailing newline: one whole JSON object is how a provider that
+    // ignored `stream` answers, and it arrives without one.
+    const at_once =
+        \\{"choices":[{"message":{"role":"assistant","content":"Hello world"}}]}
+    ;
+
+    for ([_][]const u8{ streamed, at_once }) |body| {
+        var r = readerOver(body);
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqualStrings("Hello world", reply.text);
+        // Streamed on the way past either way, so the reader sees the same.
+        try testing.expectEqualStrings("Hello world", collect.seen.items);
+        try testing.expectEqual(@as(usize, 0), reply.calls.len);
+    }
+}
+
+test "a call is gathered whichever shape it came in" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // Arguments arrive a fragment at a time, addressed by index.
+    const streamed =
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"say"}}]}}]}
+        \\
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"text\":"}}]}}]}
+        \\
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"hi\"}"}}]}}]}
+        \\
+        \\data: [DONE]
+        \\
+    ;
+    const at_once =
+        \\{"choices":[{"message":{"content":null,"tool_calls":[
+        \\{"id":"c1","function":{"name":"say","arguments":"{\"text\":\"hi\"}"}}]}}]}
+    ;
+
+    for ([_][]const u8{ streamed, at_once }) |body| {
+        var r = readerOver(body);
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 1), reply.calls.len);
+        try testing.expectEqualStrings("c1", reply.calls[0].id);
+        try testing.expectEqualStrings("say", reply.calls[0].name);
+        try testing.expectEqualStrings(
+            \\{"text":"hi"}
+        , reply.calls[0].arguments);
+    }
+}
+
+test "a response that says nothing is nothing, not a failure" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var empty = readerOver("");
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &empty, collect.sink());
+    try testing.expectEqualStrings("", reply.text);
+    try testing.expectEqual(@as(usize, 0), reply.calls.len);
 }
