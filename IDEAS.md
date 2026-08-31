@@ -396,3 +396,16 @@ m8_st8/+/MOB/
 
 
 Where to record progress?
+
+
+# ==== DONE
+
+Hone Prior Art into existance justification and put into README.
+  Done as ## Why. PRIOR-ART.md removed.
+
+
+# ====
+
+Specify the format independently of the Zig implementation, sooner than
+  feels necessary. The moat is the data model and the format collapse,
+  not the CLI, and a second implementation is the proof of it.
