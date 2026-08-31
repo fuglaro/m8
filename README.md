@@ -1049,6 +1049,7 @@ m8 @/inbuilt/echo -- hello        # says the last thing said
 m8 @/inbuilt/you-are -- anything  # "I know you are but what am I?"
 m8 @/inbuilt/runner -- 'RUN;;;say;;;text=hi'
 m8 @/inbuilt/eliza -- "I am not sleeping well."
+m8 @/inbuilt/Z-Machine/zork1 -- "I would like to play"
 ```
 
 `eliza` is Weizenbaum's doctor of 1966: a keyword found in
@@ -1060,6 +1061,43 @@ she varies through a conversation while remembering
 nothing outside it, and a conversation replays exactly.
 It is a chat that is worth having a few turns of while
 the loop around it is being worked on.
+
+A name ending in `...` is a family rather than one model, and
+what follows the prefix is that model's own business. There is
+one: `Z-Machine`, which takes the name of a story file and is a
+Z-machine — Zork, and forty years of interactive fiction after
+it. It has no weights. It is a virtual machine wearing a model's
+interface, and it is here because a model api is stateless and
+so is it.
+
+Which is the whole of the design. A model is sent the messages
+every time, so the machine is rebuilt every time and the ledger
+is replayed through it. Nothing is kept between calls because
+there is nowhere to keep it — so the chat is the save file,
+forking a chat forks the world, and two runs of the same words
+cannot differ. Saving is not implemented and does not need to
+be: `m8 ++ encode m8 >save.md` already is one, and
+`cat save.md | m8 -- "look"` is the restore.
+
+The first thing you say is not played. It is hashed, and the
+hash is the seed the world is built from, so "hello" and
+"hello!" are two different games.
+
+```
+.m8-st8/models/Z-Machine/       nearest first, like everything
+~/.config/m8-st8/models/Z-Machine/
+```
+
+m8 ships with no story files: it plays whichever are there,
+`.z1` through `.z8`. The name is the file's own and the folder's,
+spelled the way they are, like every other name in m8.
+Zork I to III are MIT-licensed source from Microsoft and their
+repositories carry the compiled files. `m8 help providers
+inbuilt` lists what it can find.
+
+`src/zmachine/README.md` is the rest of it: the seam between
+the machine and the provider, the invariant every stored
+ledger rests on, and what a headless Z-machine has to decide.
 
 `runner` calls a tool for every line of the last thing said
 reading `RUN;;;tool;;;property=value;;;...`. Deliberately

@@ -281,3 +281,118 @@ CONSIDER DISCARED MODEL RESPONSE PARAMS
 
   finish_reason has no such slot, and there's a constraint: 🤖 is content-only — takesValue() is false for .bot — so it can't ride on the header without touching the sigil table, and the
   sigil set is deliberately closed. That's a design question rather than a fix, so I'd rather put it to you than pick.
+
+# ==== ZMachine Extras
+
+- **Procedural generation.** A generator plus a seed yields infinite graded
+  tasks — the real insight behind TextWorld (MIT licensed; its generation
+  approach is legally reusable, though note its Z-machine backend wraps
+  Jericho, which is GPLv2 via Frotz). Since the ledger already registers a
+  seed derived from the first message, a ledger becomes a fully
+  self-describing, portable game session.
+- **Agent-as-user.** Recasting an agent as the user side and having two agents
+  converse, with sandboxing. This wanted message roles to be first-class in the
+  ledger rather than implied by position — which m8 already does: 🙋 and 🤖 are
+  sigils, and the provider reads roles rather than counting positions. Nothing
+  to build.
+  The composition needs no new machinery either. An agent under test is given a
+  🧰 whose 🔌 is `["m8", "+zork", "--", "{{command}}"]`; `+` carries the chat
+  from turn to turn, and the tested agent never learns it is talking to a VM
+  rather than to a model.
+- **Glulx provider.** Separate VM, larger address space, Glk I/O including
+  hyperlink events. Roughly doubles reach into modern IFComp entries.
+
+
+# ====
+
+Editor tools
+
+Need to pick one.
+
+Maybe need to make a few if models are tuned for them...
+
+Not sure if the following is the right pick:
+
+Implement a str_replace_based_edit_tool (Anthropic's text-editor tool convention).
+Stateless interface: every call is fully self-contained (explicit path every time — no implicit cursor/current-file). Any state (undo history) lives server-side, keyed by file path, not in the conversation.
+Commands (dispatched via a command field):
+view — path (required), view_range (optional [start, end]). If path is a file, return numbered lines in that range (or whole file if omitted). If path is a directory, list contents up to 2 levels deep, skipping hidden files.
+create — path, file_text (required). Fails if path already exists.
+str_replace — path, old_str (required — must match exactly once in the file; error if zero or multiple matches, telling the caller to add more context), new_str (optional, empty = delete).
+insert — path, insert_line (required — insert after this line number), new_str (required).
+undo_edit — path only. Reverts the last edit made to that file.
+Implementation requirements:
+Maintain a small server-side history/snapshot per file path (e.g. save previous content before each mutating op) so undo_edit has something to revert to. This is the only real state — everything else is derived fresh from the filesystem each call.
+Truncate very long view output with a note suggesting the caller grep for line numbers first, rather than dumping the whole file.
+Return clear errors, not silent failures, on old_str uniqueness violations, missing files, or invalid line numbers.
+
+# ====
+
+
+# ====
+
+Named Chats
+
+Making a named chat:
+m8 @quick +chat-session-name -- …
+m8 +chat-session-name -- …
+
+So essentially
+m8 @quick …
+Is just shorthand for:
+m8 @quick +quick …
+
+Forking a chat to a new name:
+m8 @=/xxx +chat-session-name
+m8 +chat-session-name -- …
+
+====
+Listing
+
+m8 list agents [MOB]
+Lists agents then sub-mob agents alphabetically.
+
+m8 list chats [MOB]
+
+…
+
+# ====
+
+Mob chats
+
+IDEAS CURRENTLY ALL OVER THE PLACE
+
+m8 @quick +teamy/
+m8 @review +teamy/
+m8 @thinker +teamy/
+m8 @big ^plan ^manager ??????? +teamy/orchistrator
+m8 +teamy/orchistrator – ‘get everyone to do something cool’
+
+m8 @quick @teamA/coder
+m8 @think @teamA/review
+m8 @big @teamA/lead
+m8 @teamA/ ??? who is the lead??
+
+Or maybe we keep the argument interface simpler and put the complexity in the mob definition. Certainly anything that can be done there shouldn't be also done in the arguments.
+
+LONG FORM:
+m8 call minion -m {mob} -a {AGENT} [--as CHAT] – {prompt}
+m8 call mate -m {mob} -c {CHAT} [--as CHAT] – {prompt}
+
+TOOL: minion
+m8 @{mob}AGENT – “prompt”
+
+TOOL: mate
+m8 +{mob}AGENT – “prompt”
+
+Use minion to reset a peer.
+Use minion to reset yourself.
+m8 @{self}
+
+m8_st8/+/MOB/
+
+* Support magic tool parameter {mob} (same mob as agent, adds /suffix if not top level)
+* Are tool parameter values comparable with templates?
+
+
+Where to record progress?

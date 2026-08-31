@@ -18,6 +18,7 @@
 const std = @import("std");
 const config = @import("../config.zig");
 const eliza = @import("providers/eliza.zig");
+const zmachine = @import("providers/zmachine.zig");
 const provider = @import("../provider.zig");
 const doc = @import("../m8/doc.zig");
 const ledger = @import("../ledger.zig");
@@ -224,7 +225,6 @@ fn urlPage(ctx: Ctx, w: *std.Io.Writer) !void {
 }
 
 fn inbuiltPage(ctx: Ctx, w: *std.Io.Writer) !void {
-    _ = ctx;
     try w.writeAll(
         \\m8 providers inbuilt — answer the request here, with no network
         \\
@@ -239,14 +239,50 @@ fn inbuiltPage(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\
     );
-    for (models) |m| try w.print("  /inbuilt/{s: <10} {s}\n", .{ m.name, m.summary });
+    for (models) |m| try w.print("  /inbuilt/{s: <14} {s}\n", .{ m.name, m.summary });
     try w.writeAll(
         \\
         \\  m8 @/inbuilt/echo -- hello
         \\  m8 @/inbuilt/you-are -- anything
         \\  m8 @/inbuilt/runner -- 'RUN;;;say;;;text=hi'
         \\  m8 @/inbuilt/eliza -- "I am not sleeping well."
+        \\  m8 @/inbuilt/Z-Machine/zork1 -- "I would like to play"
         \\
+        \\A name ending in ... is a family rather than one model: what follows
+        \\it is the model's own business. Z-Machine takes the name of a story
+        \\file, which is a Z-machine game — Zork and everything after it —
+        \\played through the same ledger as anything else. The first thing you
+        \\say is not played: it is hashed, and the hash is the world's seed.
+        \\
+        \\Story files are looked for under models/Z-Machine in every config
+        \\directory, nearest first, so a project can carry the story its agents
+        \\are tested against and a collection of your own lives in yours:
+        \\
+        \\  ./.m8-st8/models/Z-Machine/
+        \\  ~/.config/m8-st8/models/Z-Machine/
+        \\
+        \\The name is the file's stem and the folder's, spelled the way they
+        \\are — like every other name in m8 — across .z1 to .z8 and Blorb
+        \\containers. m8 ships with none: it plays whichever you put there.
+        \\Zork I to III are MIT-licensed source from Microsoft and are
+        \\compiled in their repositories.
+        \\
+    );
+
+    // Which story files are actually here. Unlike the models a provider on
+    // the far end of a wire serves, these are files on this machine, so the
+    // page can say — and a page that can say should.
+    const stories = zmachine.available(ctx) catch &.{};
+    if (stories.len == 0) {
+        try w.print("\nstory files (none under {s} anywhere):\n\n", .{zmachine.subdir});
+        try w.writeAll("  put one there and it is a model\n");
+    } else {
+        try w.print("\nstory files ({s}):\n\n", .{zmachine.subdir});
+        for (stories) |one| try w.print("  /inbuilt/{s}{s}\n", .{ zmachine.prefix, one });
+    }
+    try w.writeByte('\n');
+
+    try w.writeAll(
         \\A 🧠 written with a leading / names a model, and what it says before
         \\its first / is the provider it is asked of. These are the only models
         \\m8 has of its own; every other one is whatever the provider you
@@ -371,13 +407,34 @@ fn bearer(ctx: Ctx) !?[]const u8 {
 
 // ---------------------------------------------------------------- inbuilt
 
-/// One model `inbuilt` serves. There are three, they are m8's own, and they
-/// exist so that the loop can be run without a network.
+/// One model `inbuilt` serves. They are m8's own, and they exist so that the
+/// loop can be run without a network.
+///
+/// A name ending in `...` advertises a *family* rather than one model: what
+/// follows the prefix is that model's own business, and the model decides what
+/// to make of it. That is how a story file comes to be a model without m8
+/// keeping a list of story files — one row on the page, and every file in
+/// `models/Z-Machine` reachable through it.
 const Model = struct {
     name: []const u8,
     summary: []const u8,
-    answer: *const fn (Ctx, doc.Mode, []const doc.Record) anyerror!u8,
+    /// The name as asked for, which is the whole of it for a family.
+    answer: *const fn (Ctx, doc.Mode, []const doc.Record, []const u8) anyerror!u8,
 };
+
+const family_mark = "...";
+
+/// A name is a byte string here and nothing else. m8 has no opinion about
+/// case, or about anything else in a name: it decides which model was asked
+/// for and hands over the rest untouched. What a family makes of what follows
+/// its prefix is that model's business, and so is whether it cares.
+fn serves(candidate: []const u8, asked: []const u8) bool {
+    if (std.mem.endsWith(u8, candidate, family_mark)) {
+        const head = candidate[0 .. candidate.len - family_mark.len];
+        return asked.len > head.len and std.mem.eql(u8, asked[0..head.len], head);
+    }
+    return std.mem.eql(u8, candidate, asked);
+}
 
 const models = [_]Model{
     .{
@@ -400,6 +457,11 @@ const models = [_]Model{
         .summary = "Weizenbaum's doctor, 1966: your own words, turned around",
         .answer = doctor,
     },
+    .{
+        .name = "Z-Machine/" ++ family_mark,
+        .summary = "a story file, played as a model: see the page below",
+        .answer = zmachine.answer,
+    },
 };
 
 /// Answer the request here. `api: "m8"`, so the request is a ledger and the
@@ -419,24 +481,30 @@ fn inbuilt(ctx: Ctx) !u8 {
 
     const m = (try ledger.runsOn(ctx.arena, records)) orelse {
         try ctx.err.writeAll("m8 providers inbuilt: the request names no model\n");
+        try ctx.err.flush();
         return 1;
     };
 
     for (models) |candidate| {
-        if (std.mem.eql(u8, candidate.name, m.name))
-            return candidate.answer(ctx, mode, records);
+        if (serves(candidate.name, m.name))
+            return candidate.answer(ctx, mode, records, m.name);
     }
 
     try ctx.err.print("m8 providers inbuilt: no model named '{s}'\n", .{m.name});
     for (models) |candidate| try ctx.err.print("  /inbuilt/{s}\n", .{candidate.name});
+    // Buffered, and the process is about to end: without this the caller is
+    // told a provider failed and never told why.
+    try ctx.err.flush();
     return 1;
 }
 
-fn echo(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
+fn echo(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
+    _ = model;
     return say(ctx, mode, lastSaid(records));
 }
 
-fn youAre(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
+fn youAre(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
+    _ = model;
     _ = records;
     return say(ctx, mode, "I know you are but what am I?");
 }
@@ -444,7 +512,8 @@ fn youAre(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
 /// ELIZA. What she says back is decided by the last thing the person said and
 /// by how many times they have spoken, both of which the ledger already holds
 /// — so she keeps nothing, and a conversation with her replays exactly.
-fn doctor(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
+fn doctor(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
+    _ = model;
     var said: []const u8 = "";
     var spoken: usize = 0;
     for (records) |r| if (r.sigil == .user) {
@@ -478,7 +547,8 @@ fn lastSaid(records: []const doc.Record) []const u8 {
 /// Deliberately witless: `;;;` separates and nothing escapes it, because this
 /// exists to drive m8's own tool path from a test rather than to be a
 /// language. Anything else in the message is said back as text.
-fn runner(ctx: Ctx, mode: doc.Mode, records: []const doc.Record) !u8 {
+fn runner(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
+    _ = model;
     var last: []const u8 = "";
     var at: usize = 0;
     for (records, 0..) |r, i| if (r.sigil == .user) {

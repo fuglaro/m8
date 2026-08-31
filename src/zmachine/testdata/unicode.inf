@@ -1,0 +1,53 @@
+! Unicode, which the Z-machine got long after Infocom stopped.
+!
+! ZSCII is a byte and its extended zone holds ninety-seven characters, of which
+! sixty-nine have a default meaning. `print_unicode` was added in Standard 1.0
+! to get past that: a sixteen-bit operand, printed straight, no table. It is
+! V5+ only, since it lives behind the extended-opcode escape.
+!
+! What this file is for is the seam. A character ZSCII can say and one it
+! cannot must come out the same way, in both windows, and `check_unicode` must
+! answer the two halves of its question separately — we can print anything and
+! can only read back what ZSCII has a code for.
+!
+!   inform -v5 unicode.inf unicode.z5
+
+Constant Story "UNICODE";
+
+Array buffer -> 64;
+Array parse -> 32;
+Array table -> 16;
+
+[ Main n;
+    ! The scroll. 228 is in ZSCII's own table; the other two are not.
+    print "lower ";
+    @print_unicode 228;
+    @print_unicode 960;
+    @print_unicode 20013;
+    print "^";
+
+    ! The grid, which is addressed by cell, so each of these takes one.
+    @split_window 2;
+    @set_window 1;
+    @set_cursor 1 1;
+    print "upper ";
+    @print_unicode 228;
+    @print_unicode 960;
+    @print_unicode 20013;
+    print " end";
+    @set_window 0;
+
+    ! Two questions in two bits: bit 0 print, bit 1 read.
+    @check_unicode 228 -> n; print "check ascii-ish ", n, "^";
+    @check_unicode 960 -> n; print "check pi ", n, "^";
+
+    ! Stream 3 writes into the game's own memory and so is still ZSCII: what
+    ! has no code becomes a question mark, and the count is in characters.
+    @output_stream 3 table;
+    @print_unicode 228;
+    @print_unicode 960;
+    @output_stream -3;
+    print "stream3 len ", table-->0, " first ", table->2, " second ", table->3, "^";
+
+    @quit;
+];

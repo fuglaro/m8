@@ -1,0 +1,103 @@
+! m8's own test story: the parts of a Z-machine an interpreter gets wrong.
+!
+! Written for this repository so the compiled files can live in it — the
+! Infocom games cannot, and a test that needs a file nobody may distribute is
+! a test that does not run. Compiled with Inform 6 and no library at all, so
+! everything here is this file.
+!
+!   inform -v3 m8test.inf m8test.z3
+!   inform -v5 m8test.inf m8test.z5
+!
+! It reads three lines and quits, so a harness drives it with three and knows
+! what every one of them should produce.
+
+Constant Story "M8TEST";
+
+Array buffer -> 64;
+Array parse -> 32;
+Array table -> 8;
+
+Object  cave "cave"
+  with  description "dark",
+        capacity 7;
+
+Object  lamp "brass lamp" cave
+  with  description "shiny";
+
+[ Main i n;
+    print "m8test^";
+
+    ! Wrapping: eighty columns, broken at the last space that fits.
+    print "The quick brown fox jumps over the lazy dog again and again and ";
+    print "again until the line has to break somewhere sensible.^";
+
+    ! Arithmetic, signed, and division toward zero.
+    print "nums ", -7/2, " ", -7%2, " ", 32767, " ", -32768, "^";
+
+    ! Objects: the tree, and a property.
+    print "obj ", (name) lamp, " in ", (name) parent(lamp);
+    print " cap ", cave.capacity, "^";
+
+    ! Random, which must be the same on every run of the same seed.
+    @random 1000 -> n; print "rand ", n;
+    @random 1000 -> n; print " ", n, "^";
+
+    ! Saving cannot work here, and how it fails is version-specific.
+    #Iftrue (#version_number == 3);
+    @save ?saved;
+    print "save failed^";
+    jump after;
+    .saved; print "save worked^";
+    .after;
+    #Endif;
+    #Iftrue (#version_number == 4);
+    @save -> i; print "save ", i, "^";
+    #Endif;
+    #Iftrue (#version_number > 4);
+    @save -> i; print "save ", i, "^";
+    @save_undo -> i; print "undo ", i, "^";
+    #Endif;
+
+    ! Output stream 3: the game measuring its own text.
+    @output_stream 3 table;
+    print "measured";
+    @output_stream -3;
+    print "stream3 ", table-->0, "^";
+
+    for (i = 1: i <= 3: i++) {
+        buffer->0 = 60;
+        parse->0 = 15;
+        print "say> ";
+        #Iftrue (#version_number < 5); @sread buffer parse;
+        #Ifnot; @aread buffer parse -> n; #Endif;
+        print "you said ", parse->1, " word";
+        if (parse->1 ~= 1) print "s";
+        print "^";
+    }
+
+    ! A single keypress, which only exists from V4 and is how a game asks
+    ! for a key rather than a line.
+    #Iftrue (#version_number > 3);
+    print "key> ";
+    @read_char 1 -> n;
+    print "you pressed ", n, "^";
+    #Endif;
+    #Iftrue (#version_number > 4);
+    @piracy ?genuine;
+    print "pirate^"; jump checked;
+    .genuine; print "genuine^";
+    .checked;
+    #Endif;
+
+    ! The checksum the file declares against the one it adds up to.
+    @verify ?ok;
+    print "verify bad^"; jump verified;
+    .ok; print "verify ok^";
+    .verified;
+
+    ! What the interpreter said about itself in the header.
+    print "screen ", 0-->16, "^";
+
+    print "done^";
+    @quit;
+];

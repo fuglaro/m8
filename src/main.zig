@@ -56,6 +56,7 @@ comptime {
     _ = @import("codec.zig");
     _ = @import("config.zig");
     _ = @import("command.zig");
+    _ = @import("zmachine/zmachine.zig");
 }
 
 pub fn main(init: std.process.Init) !u8 {
