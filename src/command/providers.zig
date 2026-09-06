@@ -202,23 +202,40 @@ fn urlPage(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\environment:
         \\
-        \\  M8_PROVIDER_URL   the whole endpoint. Required.
-        \\  M8_PROVIDER_KEY   a shell command, whose output is the bearer
-        \\                    token. Optional, and nothing at all when it is
-        \\                    empty or fails.
+        \\  M8_PROVIDER_URL       the whole endpoint. Required.
+        \\  M8_PROVIDER_HEADER_*  one per header. Each is a shell command,
+        \\                        and its output is that header's value.
+        \\                        Optional, and a command that fails or says
+        \\                        nothing leaves its header off.
         \\
-        \\The key is a command rather than a key so a config can commit safely
-        \\and still reach a keychain. That is this command's convention rather
-        \\than m8's — everything else the entry said arrives here too, under its
-        \\own M8_PROVIDER_ name, and means whatever you make of it.
+        \\A header is named by the entry key it came from, so `header-x-api-key`
+        \\arrives as M8_PROVIDER_HEADER_X_API_KEY and goes out as `x-api-key`.
         \\
-        \\An entry that names it:
+        \\Each is a command rather than a value so a config can commit safely and
+        \\still reach a keychain; a constant is `echo`. That is this command's
+        \\convention rather than m8's — everything else the entry said arrives
+        \\here too, under its own M8_PROVIDER_ name, and means whatever you make
+        \\of it.
+        \\
+        \\A bearer token, an api version and a beta flag are all just headers,
+        \\and not one of them is a format's business — which is the same reason
+        \\there is no path m8 appends to a url.
+        \\
+        \\Two entries that name it:
         \\
         \\  "local": {
         \\    "cmd": ["m8", "providers", "url"],
         \\    "api": "openai-completions",
         \\    "url": "http://127.0.0.1:11337/v1/chat/completions",
-        \\    "key": "security find-generic-password -s omlx -w"
+        \\    "header-authorization": "echo Bearer $(security find-generic-password -s omlx -w)"
+        \\  }
+        \\
+        \\  "anthropic": {
+        \\    "cmd": ["m8", "providers", "url"],
+        \\    "api": "anthropic-messages",
+        \\    "url": "https://api.anthropic.com/v1/messages",
+        \\    "header-anthropic-version": "echo 2023-06-01",
+        \\    "header-x-api-key": "security find-generic-password -s anthropic-api-key -w"
         \\  }
         \\
     );
@@ -306,11 +323,11 @@ fn inbuiltPage(ctx: Ctx, w: *std.Io.Writer) !void {
 /// and keeping a table of those is the sort of thing m8 stopped doing when
 /// `models` left providers.json.
 ///
-/// `M8_PROVIDER_KEY` is run as a shell command and its output is the bearer
-/// token. That is this command's convention rather than m8's — the key is
-/// passed through untouched and means whatever the provider it reaches makes
-/// of it — and it is a command so that a config can commit safely and still
-/// reach a keychain.
+/// Every `M8_PROVIDER_HEADER_*` is run as a shell command and its output is
+/// that header's value. That is this command's convention rather than m8's,
+/// and it is a command so that a config can commit safely and still reach a
+/// keychain. A bearer token, an api version and a beta flag are all headers,
+/// so there is one rule here rather than a field per vendor habit.
 fn url(ctx: Ctx) !u8 {
     const endpoint = ctx.env.get(provider.env_prefix ++ "URL") orelse {
         try ctx.err.writeAll("m8 providers url: no " ++ provider.env_prefix ++ "URL\n");
@@ -322,10 +339,7 @@ fn url(ctx: Ctx) !u8 {
     const request = try in.interface.allocRemaining(ctx.arena, .unlimited);
 
     var extra: std.ArrayList(std.http.Header) = .empty;
-    if (try bearer(ctx)) |token| try extra.append(ctx.arena, .{
-        .name = "authorization",
-        .value = try std.fmt.allocPrint(ctx.arena, "Bearer {s}", .{token}),
-    });
+    try headers(ctx, &extra);
 
     var client: std.http.Client = .{ .allocator = ctx.arena, .io = ctx.io };
     defer client.deinit();
@@ -387,8 +401,54 @@ fn url(ctx: Ctx) !u8 {
     return 0;
 }
 
-fn bearer(ctx: Ctx) !?[]const u8 {
-    const cmd = ctx.env.get(provider.env_prefix ++ "KEY") orelse return null;
+/// Where the key goes, and in what.
+///
+/// `authorization` carries a bearer token, because that is what a bearer
+/// token is; any other header the entry names carries the key as it is. One
+/// api's key is another's `x-api-key`, and which it is belongs to the entry
+/// that knows the endpoint rather than to a table in here.
+/// Every header the entry asked for, each one a command.
+///
+/// `header-x-api-key` arrives here as `M8_PROVIDER_HEADER_X_API_KEY`, and
+/// what it says is run: its output is the value. One rule rather than three —
+/// a bearer token, an api version, a beta flag and a tenant are all headers,
+/// and the only thing they have in common is that not one of them is a
+/// format's business. So none of them is known about here; they are written
+/// down beside the url that needs them.
+///
+/// A command rather than a value, which is the whole reason a key was ever
+/// one: a config can commit safely and still reach a keychain. A constant is
+/// `echo` and costs a fork nobody will notice beside a model call.
+fn headers(ctx: Ctx, into: *std.ArrayList(std.http.Header)) !void {
+    const prefix = provider.env_prefix ++ "HEADER_";
+    var it = ctx.env.iterator();
+    while (it.next()) |e| {
+        const named = e.key_ptr.*;
+        if (!std.mem.startsWith(u8, named, prefix)) continue;
+        const value = (try ran(ctx, e.value_ptr.*)) orelse continue;
+        try into.append(ctx.arena, .{
+            .name = try headerName(ctx, named[prefix.len..]),
+            .value = value,
+        });
+    }
+}
+
+/// `X_API_KEY` is `x-api-key`. An environment variable cannot hold a hyphen,
+/// so the one the entry was written with is put back.
+fn headerName(ctx: Ctx, named: []const u8) ![]const u8 {
+    const out = try ctx.arena.alloc(u8, named.len);
+    for (named, 0..) |c, i| out[i] = if (c == '_') '-' else std.ascii.toLower(c);
+    return out;
+}
+
+/// What a header's command said, or null when it said nothing worth sending.
+///
+/// A command that fails or answers with nothing leaves its header off
+/// entirely, so a machine with no key configured still reaches a provider
+/// that wants none. Every plausible command ends in a newline, and a value
+/// still holding one after trimming is header injection rather than a header,
+/// so it is dropped.
+fn ran(ctx: Ctx, cmd: []const u8) !?[]const u8 {
     if (cmd.len == 0) return null;
 
     const r = std.process.run(ctx.arena, ctx.io, .{
@@ -398,11 +458,10 @@ fn bearer(ctx: Ctx) !?[]const u8 {
         .exited => |code| if (code != 0) return null,
         else => return null,
     }
-    // Every plausible command ends in a newline, and a newline in an
-    // Authorization header is rejected as header injection by anything that
-    // checks.
-    const key = std.mem.trim(u8, r.stdout, " \t\r\n");
-    return if (key.len == 0) null else key;
+    const value = std.mem.trim(u8, r.stdout, " \t\r\n");
+    if (value.len == 0) return null;
+    if (std.mem.indexOfAny(u8, value, "\r\n") != null) return null;
+    return value;
 }
 
 // ---------------------------------------------------------------- inbuilt
@@ -656,7 +715,7 @@ test "the page for a provider command lists what it reads" {
     var url_page: std.Io.Writer.Allocating = .init(arena);
     try urlPage(ctx, &url_page.writer);
     try testing.expect(std.mem.indexOf(u8, url_page.written(), "M8_PROVIDER_URL") != null);
-    try testing.expect(std.mem.indexOf(u8, url_page.written(), "M8_PROVIDER_KEY") != null);
+    try testing.expect(std.mem.indexOf(u8, url_page.written(), "M8_PROVIDER_HEADER_") != null);
 
     // Every model it serves is on the page for the command that serves them.
     var inbuilt_page: std.Io.Writer.Allocating = .init(arena);

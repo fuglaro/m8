@@ -356,18 +356,18 @@ test "an inclusion lands where it was written, not at the front" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-order");
     defer f.deinit(arena);
     try f.agent(arena, "helper.md",
-        \\# :computer:
+        \\#### :computer:
         \\> Helper.
     );
     try f.agent(arena, "outer.md",
-        \\# :brain:/local/tiny
+        \\#### :brain:/local/tiny
         \\
-        \\# :computer:
+        \\#### :computer:
         \\> First.
         \\
-        \\# :brain:helper
+        \\#### :brain:helper
         \\
-        \\# :computer:
+        \\#### :computer:
         \\> Last.
     );
 
@@ -394,10 +394,10 @@ test "a chat expands through its turns to the agent it began with" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-chat");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "# :brain:/local/tiny\n\n# :computer:\n> Be brief.\n");
-    try f.agent(arena, "=/one.md", "# :brain:mathy\n\n# :raising_hand:\n> Hi.\n\n# :robot:\n> Hello.\n");
-    try f.agent(arena, "=/two.md", "# :brain:=/one\n\n# :raising_hand:\n> More.\n\n# :robot:\n> Sure.\n");
-    try f.agent(arena, "+/mathy.md", "# :brain:=/two\n");
+    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :computer:\n> Be brief.\n");
+    try f.agent(arena, "=/one.md", "#### :brain:mathy\n\n#### :raising_hand:\n> Hi.\n\n#### :robot:\n> Hello.\n");
+    try f.agent(arena, "=/two.md", "#### :brain:=/one\n\n#### :raising_hand:\n> More.\n\n#### :robot:\n> Sure.\n");
+    try f.agent(arena, "+/mathy.md", "#### :brain:=/two\n");
 
     const dirs = [_][]const u8{f.dir};
     const l = try expand(arena, f.io, &dirs, "+/mathy");
@@ -419,16 +419,16 @@ test "tool calls stay, and only an unanswered one is still owed" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-calls");
     defer f.deinit(arena);
     try f.agent(arena, "=/t.md",
-        \\# :brain:/local/tiny
+        \\#### :brain:/local/tiny
         \\
-        \\# :calling:say,c1
+        \\#### :calling:say,c1
         \\> :package:text
         \\> > hi
         \\
-        \\# :receipt:c1
+        \\#### :receipt:c1
         \\> hi
         \\
-        \\# :calling:say,c2
+        \\#### :calling:say,c2
         \\> :package:text
         \\> > bye
     );
@@ -456,7 +456,7 @@ test "a conversation is as long as it is, whatever the include cap says" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-long");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "# :brain:/local/tiny\n\n# :computer:\n> Be brief.\n");
+    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :computer:\n> Be brief.\n");
 
     // Every run writes one link, so a chat this long is a chain this deep.
     // Far past the cap on how far one agent may include another, and far
@@ -471,13 +471,13 @@ test "a conversation is as long as it is, whatever the include cap says" {
             try std.fmt.allocPrint(arena, "{s}.md", .{name}),
             try std.fmt.allocPrint(
                 arena,
-                "# :brain:{s}\n\n# :raising_hand:\n> {d}\n\n# :robot:\n> ok\n",
+                "#### :brain:{s}\n\n#### :raising_hand:\n> {d}\n\n#### :robot:\n> ok\n",
                 .{ parent, i },
             ),
         );
         parent = name;
     }
-    try f.agent(arena, "+/mathy.md", try std.fmt.allocPrint(arena, "# :brain:{s}\n", .{parent}));
+    try f.agent(arena, "+/mathy.md", try std.fmt.allocPrint(arena, "#### :brain:{s}\n", .{parent}));
 
     const dirs = [_][]const u8{f.dir};
     const l = try expand(arena, f.io, &dirs, "+/mathy");
@@ -504,14 +504,14 @@ test "lineage that closes on itself says so, rather than running out of depth" {
     defer f.deinit(arena);
     // m8 never writes this: a turn names one that existed before it did. Only
     // an edited file is shaped like this, and it is still worth naming.
-    try f.agent(arena, "=/a.md", "# :brain:=/b\n\n# :raising_hand:\n> one\n");
-    try f.agent(arena, "=/b.md", "# :brain:=/a\n\n# :raising_hand:\n> two\n");
+    try f.agent(arena, "=/a.md", "#### :brain:=/b\n\n#### :raising_hand:\n> one\n");
+    try f.agent(arena, "=/b.md", "#### :brain:=/a\n\n#### :raising_hand:\n> two\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "=/a"));
 
     // A turn naming itself is the same fault, one link shorter.
-    try f.agent(arena, "=/self.md", "# :brain:=/self\n");
+    try f.agent(arena, "=/self.md", "#### :brain:=/self\n");
     try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "=/self"));
 }
 
@@ -524,8 +524,8 @@ test "an agent met twice is not a cycle" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-twice");
     defer f.deinit(arena);
-    try f.agent(arena, "helper.md", "# :computer:\n> Helper.\n");
-    try f.agent(arena, "outer.md", "# :brain:/local/tiny\n\n# :brain:helper\n\n# :brain:helper\n");
+    try f.agent(arena, "helper.md", "#### :computer:\n> Helper.\n");
+    try f.agent(arena, "outer.md", "#### :brain:/local/tiny\n\n#### :brain:helper\n\n#### :brain:helper\n");
 
     // Twice along one path is a cycle; twice side by side is a mob used
     // twice, and both copies stand where they were named.
@@ -545,9 +545,9 @@ test "an agent that includes one leading back to it says so" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-cycle");
     defer f.deinit(arena);
-    try f.agent(arena, "ping.md", "# :brain:pong\n");
-    try f.agent(arena, "pong.md", "# :brain:ping\n");
-    try f.agent(arena, "selfy.md", "# :brain:selfy\n");
+    try f.agent(arena, "ping.md", "#### :brain:pong\n");
+    try f.agent(arena, "pong.md", "#### :brain:ping\n");
+    try f.agent(arena, "selfy.md", "#### :brain:selfy\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(Error.IncludeLoops, expand(arena, f.io, &dirs, "ping"));
@@ -568,7 +568,7 @@ test "a mob may be as deep as it is, since depth is not the fault" {
     // Well past the eight this used to stop at. Nine mobs is nine mobs, and
     // the only thing wrong with a chain is the one that closes.
     const links = 100;
-    try f.agent(arena, "tail.md", "# :brain:/local/tiny\n");
+    try f.agent(arena, "tail.md", "#### :brain:/local/tiny\n");
     var below: []const u8 = "tail";
     for (0..links) |i| {
         const name = try std.fmt.allocPrint(arena, "mob{d}", .{i});
@@ -577,7 +577,7 @@ test "a mob may be as deep as it is, since depth is not the fault" {
             try std.fmt.allocPrint(arena, "{s}.md", .{name}),
             try std.fmt.allocPrint(
                 arena,
-                "# :computer:\n> {d}\n\n# :brain:{s}\n",
+                "#### :computer:\n> {d}\n\n#### :brain:{s}\n",
                 .{ i, below },
             ),
         );
@@ -632,11 +632,11 @@ test "a name with no mark is an agent, and a missing one is missing" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-naming");
     defer f.deinit(arena);
     // Two links deep, so the failure has somewhere to be swallowed.
-    try f.agent(arena, "outer.md", "# :brain:middle\n");
-    try f.agent(arena, "middle.md", "# :brain:gone\n");
+    try f.agent(arena, "outer.md", "#### :brain:middle\n");
+    try f.agent(arena, "middle.md", "#### :brain:gone\n");
     // A slash no longer makes something a model; only the mark does.
-    try f.agent(arena, "slashed.md", "# :brain:team/gone\n");
-    try f.agent(arena, "marked.md", "# :brain:/team/gone,max_tokens:16\n");
+    try f.agent(arena, "slashed.md", "#### :brain:team/gone\n");
+    try f.agent(arena, "marked.md", "#### :brain:/team/gone,max_tokens:16\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "outer"));

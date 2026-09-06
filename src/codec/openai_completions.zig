@@ -6,9 +6,15 @@
 //! this is where the reordering and the combining live — not in the ledger,
 //! which keeps saying what happened.
 //!
-//! What it cannot carry, it drops: 💭 and 🔏 have no field here, a 🚫 arrives
-//! as an ordinary tool message, and a 🔌 is m8's business rather than the
-//! model's. Decoding gets back everything the wire actually held.
+//! What it cannot carry, it drops: 💭 and 🔏 have no field going out, a 🚫
+//! arrives as an ordinary tool message, and a 🔌 is m8's business rather than
+//! the model's. Decoding gets back everything the wire actually held.
+//!
+//! Coming back is not symmetrical. OpenAI's own schema has no reasoning
+//! channel, but the servers that speak this api added one — `reasoning_content`
+//! mostly, `reasoning` elsewhere — so a reply is read as a run of records and
+//! a server that sends reasoning gets a 💭 out of it. Sending one back is
+//! still impossible, which is the asymmetry this api has and not a gap here.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -277,7 +283,7 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
 /// Server-sent events: each `data:` line carries a whole JSON fragment whose
 /// delta is appended. The stream ends at `data: [DONE]`.
 fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
-    var text: std.ArrayList(u8) = .empty;
+    var built: Run = .{ .arena = arena, .sink = sink };
     var building: std.ArrayList(Building) = .empty;
 
     var line = first;
@@ -286,17 +292,18 @@ fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8
             const payload = std.mem.trim(u8, line["data:".len..], " ");
             if (std.mem.eql(u8, payload, "[DONE]")) break;
             if (std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{})) |v| {
-                if (extractDelta(v)) |fragment| {
-                    try text.appendSlice(arena, fragment);
-                    try sink.text(fragment);
-                }
+                // Reasoning before content: a server that puts both in one
+                // delta means the thinking came first.
+                if (extractReasoning(v)) |fragment| try built.to(.thought, fragment);
+                if (extractDelta(v)) |fragment| try built.to(.bot, fragment);
                 try gatherCalls(arena, &building, v);
             } else |_| {}
         }
         const raw = (try api.nextLine(arena, r)) orelse break;
         line = std.mem.trimEnd(u8, raw, "\r\n");
     }
-    return .{ .text = text.items, .calls = try finish(arena, building.items) };
+    try built.stop();
+    return built.reply(try finish(arena, building.items));
 }
 
 /// One JSON object, from a provider that answered all at once.
@@ -310,20 +317,72 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
         return error.MalformedResponse;
 
     const message = messageOf(v) orelse return .{};
-    var text: []const u8 = "";
-    if (message.object.get("content")) |c| {
-        if (c == .string) {
-            text = c.string;
-            try sink.text(text);
-        }
+    var built: Run = .{ .arena = arena, .sink = sink };
+    for ([_][]const u8{ "reasoning_content", "reasoning" }) |name| {
+        if (message.object.get(name)) |c| if (c == .string) {
+            try built.to(.thought, c.string);
+            break;
+        };
     }
+    if (message.object.get("content")) |c| {
+        if (c == .string) try built.to(.bot, c.string);
+    }
+    try built.stop();
 
     var building: std.ArrayList(Building) = .empty;
     if (message.object.get("tool_calls")) |list| if (list == .array) {
         for (list.array.items) |item| try gatherOne(arena, &building, item);
     };
-    return .{ .text = text, .calls = try finish(arena, building.items) };
+    return built.reply(try finish(arena, building.items));
 }
+
+/// The reply being built, as a run of records rather than one blob.
+///
+/// Which record is open is decided by what arrives: a reasoning fragment after
+/// text closes the 🤖 and opens a 💭, and the other way about. So a server
+/// that interleaves them produces records that interleave the same way, and
+/// one that does not produces the ordinary 💭-then-🤖 pair.
+const Run = struct {
+    arena: Allocator,
+    sink: api.Sink,
+    records: std.ArrayList(doc.Record) = .empty,
+    open: ?sigil.Sigil = null,
+    buf: std.ArrayList(u8) = .empty,
+
+    fn to(self: *Run, s: sigil.Sigil, fragment: []const u8) !void {
+        if (fragment.len == 0) return;
+        if (self.open != s) {
+            try self.stop();
+            try self.sink.begin(s, "");
+            self.open = s;
+        }
+        try self.buf.appendSlice(self.arena, fragment);
+        try self.sink.text(fragment);
+    }
+
+    fn stop(self: *Run) !void {
+        const s = self.open orelse return;
+        try self.sink.end();
+        try self.records.append(self.arena, .{
+            .sigil = s,
+            .content = try self.arena.dupe(u8, self.buf.items),
+        });
+        self.buf.clearRetainingCapacity();
+        self.open = null;
+    }
+
+    /// The records, with the calls written on the end as 📲 — which is where
+    /// this api puts them, since it gathers a turn's calls after its text
+    /// rather than in among it.
+    fn reply(self: *Run, calls: []const api.Call) !api.Reply {
+        for (calls) |c| try self.records.append(self.arena, .{
+            .sigil = .call,
+            .value = try std.fmt.allocPrint(self.arena, "{s},{s}", .{ c.name, c.id }),
+            .content = try toolbox.renderArgs(self.arena, .md, c.arguments),
+        });
+        return .{ .records = self.records.items, .calls = calls };
+    }
+};
 
 fn messageOf(v: std.json.Value) ?std.json.Value {
     if (v != .object) return null;
@@ -391,6 +450,19 @@ fn deltaOf(v: std.json.Value) ?std.json.Value {
     if (first != .object) return null;
     const delta = first.object.get("delta") orelse return null;
     return if (delta == .object) delta else null;
+}
+
+/// The reasoning fragment a delta carries, under whichever name the server
+/// chose. `reasoning_content` is what OpenAI-compatible servers settled on and
+/// `reasoning` is the other spelling in the wild; OpenAI's own completions
+/// schema has neither, which is why this api's header says 💭 has no field
+/// here. It costs nothing to read one when a server does offer it.
+fn extractReasoning(v: std.json.Value) ?[]const u8 {
+    const delta = deltaOf(v) orelse return null;
+    for ([_][]const u8{ "reasoning_content", "reasoning" }) |name| {
+        if (delta.object.get(name)) |x| if (x == .string) return x.string;
+    }
+    return null;
 }
 
 fn extractDelta(v: std.json.Value) ?[]const u8 {
@@ -488,7 +560,7 @@ fn readTool(arena: Allocator, out: *std.ArrayList(doc.Record), t: std.json.Value
 
     var props: std.ArrayList(toolbox.Property) = .empty;
     if (f.object.get("parameters")) |params|
-        try readObject(arena, &props, params, "");
+        try toolbox.readParameters(arena, &props, params);
 
     const tool: toolbox.Tool = .{
         .name = name,
@@ -502,86 +574,6 @@ fn readTool(arena: Allocator, out: *std.ArrayList(doc.Record), t: std.json.Value
     });
     // Being on the wire at all is what it means for a tool to be unlocked.
     try out.append(arena, .{ .sigil = .allow, .value = name });
-}
-
-/// Stated explicitly because `readObject` and `readType` are mutually
-/// recursive, and an inferred set cannot close over itself.
-pub const ReadError = Allocator.Error;
-
-fn readObject(
-    arena: Allocator,
-    props: *std.ArrayList(toolbox.Property),
-    schema: std.json.Value,
-    prefix: []const u8,
-) ReadError!void {
-    if (schema != .object) return;
-    const properties = schema.object.get("properties") orelse return;
-    if (properties != .object) return;
-
-    var required: []const std.json.Value = &.{};
-    if (schema.object.get("required")) |req| {
-        if (req == .array) required = req.array.items;
-    }
-
-    var it = properties.object.iterator();
-    while (it.next()) |e| {
-        const key = e.key_ptr.*;
-        const full = if (prefix.len == 0)
-            key
-        else
-            try std.fmt.allocPrint(arena, "{s}.{s}", .{ prefix, key });
-        const is_required = for (required) |rv| {
-            if (rv == .string and std.mem.eql(u8, rv.string, key)) break true;
-        } else false;
-        try readType(arena, props, e.value_ptr.*, full, is_required, false);
-    }
-}
-
-fn readType(
-    arena: Allocator,
-    props: *std.ArrayList(toolbox.Property),
-    v: std.json.Value,
-    name: []const u8,
-    required: bool,
-    in_array: bool,
-) ReadError!void {
-    if (v != .object) return;
-    const t = str(v.object.get("type")) orelse "string";
-
-    // Arrayness lives on the parent type, so the items decide what it is an
-    // array of and the `[]` is put back here.
-    if (std.mem.eql(u8, t, "array")) {
-        const items = v.object.get("items") orelse return;
-        return readType(arena, props, items, name, required, true);
-    }
-    const suffix = if (in_array) "[]" else "";
-
-    if (std.mem.eql(u8, t, "object")) {
-        try props.append(arena, .{
-            .name = name,
-            .type = try std.fmt.allocPrint(arena, "object{s}", .{suffix}),
-            .required = required,
-        });
-        // Parents are always declared, never inferred, so the children follow.
-        return readObject(arena, props, v, name);
-    }
-
-    var base: []const u8 = t;
-    if (v.object.get("enum")) |en| if (en == .array) {
-        var joined: std.ArrayList(u8) = .empty;
-        for (en.array.items, 0..) |item, i| {
-            if (i > 0) try joined.append(arena, '|');
-            if (item == .string) try joined.appendSlice(arena, item.string);
-        }
-        if (joined.items.len > 0) base = joined.items;
-    };
-
-    try props.append(arena, .{
-        .name = name,
-        .type = try std.fmt.allocPrint(arena, "{s}{s}", .{ base, suffix }),
-        .description = str(v.object.get("description")) orelse "",
-        .required = required,
-    });
 }
 
 /// The fields that are the request's shape rather than something asked for.
@@ -775,12 +767,14 @@ const Collect = struct {
     seen: std.ArrayList(u8) = .empty,
 
     fn sink(self: *Collect) api.Sink {
-        return .{ .ctx = self, .write = writeFn };
+        return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
     }
+    fn openFn(_: *anyopaque, _: sigil.Sigil, _: []const u8) anyerror!void {}
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
         try self.seen.appendSlice(self.arena, bytes);
     }
+    fn closeFn(_: *anyopaque) anyerror!void {}
 };
 
 test "a streamed response and a whole one read the same" {
@@ -806,7 +800,7 @@ test "a streamed response and a whole one read the same" {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
         const reply = try parse(arena, &r, collect.sink());
-        try testing.expectEqualStrings("Hello world", reply.text);
+        try testing.expectEqualStrings("Hello world", try reply.said(arena));
         // Streamed on the way past either way, so the reader sees the same.
         try testing.expectEqualStrings("Hello world", collect.seen.items);
         try testing.expectEqual(@as(usize, 0), reply.calls.len);
@@ -855,6 +849,6 @@ test "a response that says nothing is nothing, not a failure" {
     var empty = readerOver("");
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &empty, collect.sink());
-    try testing.expectEqualStrings("", reply.text);
+    try testing.expectEqualStrings("", try reply.said(arena));
     try testing.expectEqual(@as(usize, 0), reply.calls.len);
 }

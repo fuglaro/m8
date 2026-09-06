@@ -538,7 +538,7 @@ test "a body opens on the first byte and holds the last newline" {
     for ([_][]const u8{ "a\n", "\n", "b\n", "\n\n" }) |chunk| try body.write(chunk);
     try testing.expect(try body.finish());
     try testing.expectEqualStrings(
-        \\# :receipt:c1
+        \\#### :receipt:c1
         \\> a
         \\>
         \\> b

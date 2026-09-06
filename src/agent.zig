@@ -163,18 +163,18 @@ test "a definition yields its model, locks and tools" {
     const f = try Fixture.init(arena, &threaded, "m8-agent-basic");
     defer f.deinit(arena);
     try f.agent(arena, "mathy.md",
-        \\# :brain:/local/tiny
+        \\#### :brain:/local/tiny
         \\
-        \\# :lock:jail
+        \\#### :lock:jail
         \\
-        \\# :toolbox:say
+        \\#### :toolbox:say
         \\> :electric_plug:`["echo", "{{text:}}"]`
         \\> :package:text,string
         \\> Echoes.
         \\
-        \\# :unlock:say
+        \\#### :unlock:say
         \\
-        \\# :computer:
+        \\#### :computer:
         \\> Be brief.
     );
 
@@ -200,13 +200,13 @@ test "locks are the union over the lineage, so including cannot widen" {
     defer f.deinit(arena);
     // The included agent carries a lock and is named last, which is where an
     // override would put it if locks overrode rather than accumulated.
-    try f.agent(arena, "helper.md", "# :brain:/local/tiny\n\n# :lock:airgap\n");
+    try f.agent(arena, "helper.md", "#### :brain:/local/tiny\n\n#### :lock:airgap\n");
     try f.agent(arena, "outer.md",
-        \\# :brain:/local/tiny
+        \\#### :brain:/local/tiny
         \\
-        \\# :lock:no-edit-git, no-edit-git
+        \\#### :lock:no-edit-git, no-edit-git
         \\
-        \\# :brain:helper
+        \\#### :brain:helper
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -227,17 +227,17 @@ test "a later definition of a tool name is the one offered" {
     const f = try Fixture.init(arena, &threaded, "m8-agent-override");
     defer f.deinit(arena);
     try f.agent(arena, "base.md",
-        \\# :brain:/local/tiny
+        \\#### :brain:/local/tiny
         \\
-        \\# :toolbox:say
+        \\#### :toolbox:say
         \\> :electric_plug:`["echo", "base"]`
         \\
-        \\# :unlock:say
+        \\#### :unlock:say
     );
     try f.agent(arena, "outer.md",
-        \\# :brain:base
+        \\#### :brain:base
         \\
-        \\# :toolbox:say
+        \\#### :toolbox:say
         \\> :electric_plug:`["echo", "outer"]`
     );
 
@@ -257,7 +257,7 @@ test "an unknown agent and a missing model are told apart" {
 
     const f = try Fixture.init(arena, &threaded, "m8-agent-errors");
     defer f.deinit(arena);
-    try f.agent(arena, "bare.md", "# :computer:\n> No model here.\n");
+    try f.agent(arena, "bare.md", "#### :computer:\n> No model here.\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(ledger.Error.UnknownAgent, load(arena, f.io, &dirs, "nosuch"));

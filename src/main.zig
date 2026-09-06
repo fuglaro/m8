@@ -294,5 +294,8 @@ fn runCommand(
 
     try out.flush();
     if (tty) |t| try t.w.flush();
+    // A command that answered with a status rather than an error still said
+    // why on the way, and this is the one place both are on their way out.
+    try err.flush();
     return status;
 }

@@ -106,9 +106,9 @@ const Fixture = struct {
         // An agent, a turn, and the last chat pointing at it — so the
         // fallback has something real to reach and the alias something real
         // to be followed to.
-        try f.write(gpa, "mathy.md", "# :brain:/local/tiny\n");
-        try f.write(gpa, "=/last.md", "# :brain:mathy\n");
-        try f.write(gpa, "+/+.md", "# :brain:=/last\n");
+        try f.write(gpa, "mathy.md", "#### :brain:/local/tiny\n");
+        try f.write(gpa, "=/last.md", "#### :brain:mathy\n");
+        try f.write(gpa, "+/+.md", "#### :brain:=/last\n");
         return f;
     }
 
@@ -169,7 +169,7 @@ test "an m8 document piped in is the context, so nothing is grafted onto it" {
     defer f.deinit(arena);
     const dirs = [_][]const u8{f.dir};
 
-    const piped = "# :brain:/local/tiny\n\n# :raising_hand:\n> piped\n";
+    const piped = "#### :brain:/local/tiny\n\n#### :raising_hand:\n> piped\n";
     const got = try assemble(arena, f.io, &dirs, "", false, "more", piped);
     const r = try sigils(arena, got);
 
@@ -233,7 +233,7 @@ test "a document that opens right and then goes wrong is an error, not a prompt"
         "",
         false,
         "",
-        "# :brain:/local/tiny\n\n# :nosuchsigil:\n",
+        "#### :brain:/local/tiny\n\n#### :nosuchsigil:\n",
     ));
 }
 

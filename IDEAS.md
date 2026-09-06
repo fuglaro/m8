@@ -152,13 +152,12 @@ Support custom providers and api converters with plugin commands in core m8-st8.
   * a provider declaring api: "m8" receives the whole ledger, 🔌 and 🔒 included,
     rather than a projection of it.
 
-# ====
+# ==== DONE
 
-~/.config/m8-st8/core/providers.json has a good default for url.
-Should we add to the default one setups like for claude / openai etc?
- Are there any reliable test endpoints?
+Hone Prior Art into existance justification and put into README.
+  Done as ## Why. PRIOR-ART.md removed.
 
-# ====
+# ==== DONE
 
 additional fun inbuilt models
 
@@ -166,6 +165,11 @@ additional fun inbuilt models
 m8 @/inbuilt/elisa  # responses as that old school AI bot.
 m8 @/inbuilt/text-adventure-some-mit-flavour-one
 ```
+
+# ====
+
+Consider swarm name. Mob->Swarm? Use for something else?
+Swarm intelligence?
 
 # ====
 
@@ -183,7 +187,7 @@ changing an agent changes chat histories?
 # ====
 
 Other common LLM providers / Anthropic / OpenAI / Google?
-setup api, and add to default providers.json.
+setup api.
 
 # ====
 
@@ -398,14 +402,17 @@ m8_st8/+/MOB/
 Where to record progress?
 
 
-# ==== DONE
-
-Hone Prior Art into existance justification and put into README.
-  Done as ## Why. PRIOR-ART.md removed.
-
 
 # ====
 
 Specify the format independently of the Zig implementation, sooner than
   feels necessary. The moat is the data model and the format collapse,
   not the CLI, and a second implementation is the proof of it.
+
+# ====
+
+~/.config/m8-st8/core/providers.json has a good default for url.
+Should we add to the default one some basic setups like for claude / openai etc?
+Is that too opinionated?
+There are some Mac commands in there for key access.
+Maybe we just make a folder of example setups.

@@ -1,4 +1,4 @@
-# :brain:local/tiny
+#### :brain:local/tiny
 
-# :computer:
+#### :computer:
 > Answer in as few words as possible.

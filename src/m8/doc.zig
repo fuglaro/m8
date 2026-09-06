@@ -2,7 +2,7 @@
 //!
 //! A record is a header line and at most one content block:
 //!
-//!     ▄ 🧰shell          # :toolbox:shell
+//!     ▄ 🧰shell          #### :toolbox:shell
 //!     │ run a command    > run a command
 //!
 //! The header is a sigil and its value. The content is the block quoted
@@ -41,7 +41,7 @@ pub const Record = struct {
 /// What opens a record, per spelling.
 pub fn header(mode: Mode) []const u8 {
     return switch (mode) {
-        .md => "# ",
+        .md => "#### ",
         .m8 => "\u{2584} ", // ▄
     };
 }
@@ -157,16 +157,16 @@ pub fn parseMode(arena: Allocator, src: []const u8, mode: Mode, diag: *Diagnosti
             if (cur) |s| try flush(arena, &records, s, value, lines, &content);
 
             const rest = line[header(mode).len..];
-            const s = sigil.match(mode, rest) orelse {
+            const m = sigil.match(mode, rest) orelse {
                 diag.* = .{ .line = line_no, .detail = "not a known sigil" };
                 return error.UnknownSigil;
             };
-            value = rest[s.text(mode).len..];
-            if (value.len > 0 and !s.takesValue()) {
+            value = rest[m.len..];
+            if (value.len > 0 and !m.sigil.takesValue()) {
                 diag.* = .{ .line = line_no, .detail = "this sigil takes no value" };
                 return error.UnexpectedValue;
             }
-            cur = s;
+            cur = m.sigil;
             lines = 0;
             open = true;
             blank = false;
@@ -314,9 +314,9 @@ test "a record is a header and its content" {
     defer a.deinit();
     var diag: Diagnostic = .{};
     const recs = try parse(a.allocator(),
-        \\# :brain:mathy
+        \\#### :brain:mathy
         \\
-        \\# :computer:
+        \\#### :computer:
         \\> line one
         \\> line two
         \\
@@ -336,14 +336,14 @@ test "both spellings parse the same document" {
     defer b.deinit();
     var d1: Diagnostic = .{};
     var d2: Diagnostic = .{};
-    const md = try parse(a.allocator(), "# :computer:\n> hi\n", &d1);
+    const md = try parse(a.allocator(), "#### :computer:\n> hi\n", &d1);
     const m8 = try parse(b.allocator(), "\u{2584} \u{1F4BB}\n\u{2502} hi\n", &d2);
     try testing.expectEqual(md[0].sigil, m8[0].sigil);
     try testing.expectEqualStrings(md[0].content.?, m8[0].content.?);
 }
 
 test "detect finds the spelling, or says it is not a document" {
-    try testing.expectEqual(Mode.md, detect("# :brain:x\n").?);
+    try testing.expectEqual(Mode.md, detect("#### :brain:x\n").?);
     try testing.expectEqual(Mode.m8, detect("\u{2584} \u{1F9E0}x\n").?);
     try testing.expect(detect("just some words\n") == null);
     try testing.expect(detect("") == null);
@@ -353,7 +353,7 @@ test "the spellings never mix" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    try testing.expectError(error.ModeMixed, parse(a.allocator(), "# :computer:\n\u{2502} hi\n", &diag));
+    try testing.expectError(error.ModeMixed, parse(a.allocator(), "#### :computer:\n\u{2502} hi\n", &diag));
     try testing.expectEqual(@as(usize, 2), diag.line);
 }
 
@@ -361,12 +361,12 @@ test "a quote with no space is an error, and alone is an empty line" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    try testing.expectError(error.MissingSpace, parse(a.allocator(), "# :computer:\n>hi\n", &diag));
+    try testing.expectError(error.MissingSpace, parse(a.allocator(), "#### :computer:\n>hi\n", &diag));
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    const recs = try parse(b.allocator(), "# :computer:\n> one\n>\n> three\n", &d2);
+    const recs = try parse(b.allocator(), "#### :computer:\n> one\n>\n> three\n", &d2);
     try testing.expectEqualStrings("one\n\nthree", recs[0].content.?);
 }
 
@@ -374,22 +374,22 @@ test "content is verbatim, so it needs no escape" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    const recs = try parse(a.allocator(), "# :computer:\n> # :brain:not a record\n>   indented\n", &diag);
+    const recs = try parse(a.allocator(), "#### :computer:\n> #### :brain:not a record\n>   indented\n", &diag);
     try testing.expectEqual(@as(usize, 1), recs.len);
-    try testing.expectEqualStrings("# :brain:not a record\n  indented", recs[0].content.?);
+    try testing.expectEqualStrings("#### :brain:not a record\n  indented", recs[0].content.?);
 }
 
 test "a blank line closes the block and is required between records" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    try testing.expectError(error.MissingBlankLine, parse(a.allocator(), "# :computer:\n> hi\n# :brain:x\n", &d1));
+    try testing.expectError(error.MissingBlankLine, parse(a.allocator(), "#### :computer:\n> hi\n#### :brain:x\n", &d1));
     try testing.expectEqual(@as(usize, 3), d1.line);
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    try testing.expectError(error.OrphanContent, parse(b.allocator(), "# :computer:\n> hi\n\n> more\n", &d2));
+    try testing.expectError(error.OrphanContent, parse(b.allocator(), "#### :computer:\n> hi\n\n> more\n", &d2));
     try testing.expectEqual(@as(usize, 4), d2.line);
 }
 
@@ -397,19 +397,19 @@ test "value and content are refused where the sigil takes none" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    try testing.expectError(error.UnexpectedValue, parse(a.allocator(), "# :computer:words\n", &d1));
+    try testing.expectError(error.UnexpectedValue, parse(a.allocator(), "#### :computer:words\n", &d1));
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    try testing.expectError(error.UnexpectedContent, parse(b.allocator(), "# :brain:x\n> hi\n", &d2));
+    try testing.expectError(error.UnexpectedContent, parse(b.allocator(), "#### :brain:x\n> hi\n", &d2));
 }
 
 test "an unknown sigil is an error in either spelling" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    try testing.expectError(error.UnknownSigil, parse(a.allocator(), "# :nope:x\n", &d1));
+    try testing.expectError(error.UnknownSigil, parse(a.allocator(), "#### :nope:x\n", &d1));
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
@@ -424,14 +424,14 @@ test "CRLF parses identically, and a doubled CR survives" {
     defer b.deinit();
     var d1: Diagnostic = .{};
     var d2: Diagnostic = .{};
-    const lf = try parse(a.allocator(), "# :computer:\n> one\n", &d1);
-    const crlf = try parse(b.allocator(), "# :computer:\r\n> one\r\n", &d2);
+    const lf = try parse(a.allocator(), "#### :computer:\n> one\n", &d1);
+    const crlf = try parse(b.allocator(), "#### :computer:\r\n> one\r\n", &d2);
     try testing.expectEqualStrings(lf[0].content.?, crlf[0].content.?);
 
     var c: std.heap.ArenaAllocator = .init(testing.allocator);
     defer c.deinit();
     var d3: Diagnostic = .{};
-    const cr = try parse(c.allocator(), "# :computer:\n> ends in CR\r\r\n> next\n", &d3);
+    const cr = try parse(c.allocator(), "#### :computer:\n> ends in CR\r\r\n> next\n", &d3);
     try testing.expectEqualStrings("ends in CR\r\nnext", cr[0].content.?);
 }
 
@@ -459,7 +459,7 @@ test "round trip is byte for byte, in both spellings" {
 test "streamed writing matches whole writing" {
     const cases = [_][]const u8{
         "plain\ntext",
-        "content\n# :brain:looks like a record",
+        "content\n#### :brain:looks like a record",
         "para one\n\npara two",
         "trailing newline\n",
         "",
@@ -482,7 +482,7 @@ test "streamed writing matches whole writing" {
 test "a streamed body round trips back through the parser" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    const content = "one\n# :brain:two\n\nthree";
+    const content = "one\n#### :brain:two\n\nthree";
 
     var buf: [512]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);

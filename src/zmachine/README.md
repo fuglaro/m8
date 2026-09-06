@@ -76,9 +76,20 @@ left to a default:
   expects, and `restart` resets deterministically.
 
 A bug fix in the machine legitimately changes output. That is
-why the boot block carries an interpreter *semantic* version —
+why the first reply carries an interpreter *semantic* version —
 a hash of these sources — so the change is detectable instead
-of mysterious.
+of mysterious. It is a hash rather than a number somebody bumps,
+which is also why there is no separate seed-derivation version:
+the rule lives in `zmachine.zig` and `zmachine.zig` is in the
+hash, so it cannot change quietly.
+
+That provenance goes out as a 💭, not as part of the 🤖 the
+player reads — it is the interpreter's note about how the answer
+was produced, and keeping it out leaves the 🤖 naming no story
+file and no machine. The cost is that `codec.zig` is licensed to
+drop a 💭, so provenance survives `encode m8` and not
+`encode openai-completions`. Nothing replays from it, so what is
+lost is attribution rather than the world.
 
 ## What is here
 
@@ -100,7 +111,9 @@ Each file's header carries its own reasoning; this is the map.
 * `keys.zig` — the keys that are not characters, and the
   symbols that stand for them.
 * `zmachine.zig` — the seam: provenance, the seed, the status
-  line, and `play`.
+  line, and `play`. The status line is V1–3's, synthesised;
+  V4 and up have none and what sits above the text is whatever
+  the game drew.
 * `cli.zig` — `zig build zrun`, for working on the machine
   without m8 in the way.
 * `integration.zig` — the machine against real story files.

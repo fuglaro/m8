@@ -20,6 +20,7 @@ const session = @import("session.zig");
 const codec = @import("codec.zig");
 const toolbox = @import("toolbox.zig");
 const doc = @import("m8/doc.zig");
+const sigil = @import("m8/sigil.zig");
 const api = @import("command/api.zig");
 const Ctx = api.Ctx;
 
@@ -132,10 +133,15 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
         try reply.finish();
         try out.flush();
 
-        if (answered.text.len > 0) {
-            const said: doc.Record = .{ .sigil = .bot, .content = answered.text };
-            try keep(arena, &records, said);
-            try turn.append(arena, said);
+        // Every record the model produced, in the order it produced them, so
+        // a reply that thought before answering keeps its 💭 and stays
+        // replayable. A 📲 is skipped here and appended below instead: a call
+        // and the answer to it belong together in the ledger, and the loop
+        // that runs the tool is what knows where that is.
+        for (answered.records) |r| {
+            if (r.sigil == .call) continue;
+            try keep(arena, &records, r);
+            try turn.append(arena, r);
         }
         if (answered.calls.len == 0) break;
         const calls = answered.calls;
@@ -329,7 +335,7 @@ fn agentCheck(
     // decide, not to be read.
     var quiet: Quiet = .{};
     const reply = try once(ctx, def, records.items, quiet.sink());
-    const said = std.mem.trim(u8, reply.text, " \t\r\n");
+    const said = std.mem.trim(u8, try reply.said(ctx.arena), " \t\r\n");
     if (std.ascii.eqlIgnoreCase(said, "allow")) return null;
     return if (said.len > 0) said else "the checker said nothing";
 }
@@ -365,9 +371,11 @@ fn once(
 /// the parser, which is what the reply carries back.
 const Quiet = struct {
     fn sink(self: *Quiet) codec.Sink {
-        return .{ .ctx = self, .write = writeFn };
+        return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
     }
+    fn openFn(_: *anyopaque, _: sigil.Sigil, _: []const u8) anyerror!void {}
     fn writeFn(_: *anyopaque, _: []const u8) anyerror!void {}
+    fn closeFn(_: *anyopaque) anyerror!void {}
 };
 
 /// The one record that says a call could not be run. A slice, because that is
@@ -422,9 +430,18 @@ const LiveReply = struct {
     /// Opened on the first byte. A model that only calls a tool says nothing,
     /// and an empty 🤖 above the call would be a record of nothing.
     body: ?doc.ContentWriter = null,
+    pending: ?sigil.Sigil = null,
 
     fn sink(self: *LiveReply) codec.Sink {
-        return .{ .ctx = self, .write = writeFn };
+        return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
+    }
+
+    /// Remembered rather than written. A record with nothing in it is a record
+    /// of nothing, and a codec is entitled to open one and find the model had
+    /// no more to say — so the header waits for a byte to justify it.
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, _: []const u8) anyerror!void {
+        const self: *LiveReply = @ptrCast(@alignCast(ctx));
+        self.pending = s;
     }
 
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
@@ -433,13 +450,26 @@ const LiveReply = struct {
         if (self.body == null) {
             if (self.written.*) try self.out.writeByte('\n');
             self.written.* = true;
-            self.body = try doc.ContentWriter.begin(self.out, self.mode, .bot, "");
+            self.body = try doc.ContentWriter.begin(
+                self.out,
+                self.mode,
+                self.pending orelse .bot,
+                "",
+            );
         }
         try self.body.?.write(bytes);
         if (self.live) try self.out.flush();
     }
 
+    fn closeFn(ctx: *anyopaque) anyerror!void {
+        const self: *LiveReply = @ptrCast(@alignCast(ctx));
+        if (self.body) |*b| try b.finish();
+        self.body = null;
+        self.pending = null;
+    }
+
     fn finish(self: *LiveReply) !void {
         if (self.body) |*b| try b.finish();
+        self.body = null;
     }
 };

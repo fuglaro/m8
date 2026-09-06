@@ -230,9 +230,16 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
         return 1;
     };
 
+    // Boot answers with two records: a 💭 saying what is running, and the 🤖
+    // the player reads. Every other turn is one 🤖 and nothing else.
+    var out: std.ArrayList(doc.Record) = .empty;
     var body: std.Io.Writer.Allocating = .init(ctx.arena);
     if (inputs.len == 0) {
-        try writeBoot(ctx.arena, &body.writer, found, outcome.text);
+        const s = try zm.Story.load(ctx.arena, found.bytes);
+        var note: std.Io.Writer.Allocating = .init(ctx.arena);
+        try zm.Provenance.of(found.name, found.bytes, &s).write(&note.writer);
+        try out.append(ctx.arena, .{ .sigil = .thought, .content = note.written() });
+        try writeBoot(&body.writer, ctx.arena, s.version, outcome.text);
     } else if (outcome.consumed < inputs.len) {
         // The game ended before it had heard everything, so the rest was
         // never played, and saying so is the point: a provider that quietly
@@ -248,44 +255,59 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
         try body.writer.writeAll(outcome.text);
     }
 
-    try doc.write(ctx.out, mode, .{ .sigil = .bot, .content = body.written() });
+    try out.append(ctx.arena, .{ .sigil = .bot, .content = body.written() });
+    try doc.writeAll(ctx.out, mode, out.items);
     return 0;
 }
 
-/// The first call answers with three sections in one message: what this is,
-/// how to play it, and the game's own opening.
+/// The 🤖 the first call answers with: how to play, then the game's own
+/// opening, with one `---` between them. A transcript-diffing tool splits on
+/// that delimiter and takes the first — a game that prints `---` later cannot
+/// confuse it.
 ///
-/// One message rather than three because m8 joins a provider's 🤖 records into
-/// one before it reaches the ledger. The delimiter is what a transcript-diffing
-/// tool splits on, and it splits on the first two — a game that prints `---`
-/// later cannot confuse it.
+/// Nothing here names the story file, the machine or the version it is. What
+/// is running is the 💭's business and the hash there is the whole of the
+/// claim, which is what lets a provider serving a procedurally generated world
+/// — or standing in for a player against a model under test — say these same
+/// words unchanged.
 fn writeBoot(
-    arena: Allocator,
     w: *std.Io.Writer,
-    found: Found,
+    arena: Allocator,
+    version: u8,
     opening: []const u8,
 ) !void {
-    var s = try zm.Story.load(arena, found.bytes);
-    const p = zm.Provenance.of(found.name, found.bytes, &s);
-    try p.write(w);
-
-    try w.writeAll("\n---\n");
     try w.writeAll(
-        \\Type what you want to do, a line at a time. What comes back is what the
-        \\game said, exactly: this is the story file itself running, not a model
-        \\describing one, so nothing is paraphrased and nothing is added.
-        \\
-        \\The line above each reply is the status line the game keeps.
-        \\
-        \\Some keys are not characters. Where one is wanted, these stand for it:
+        \\You are talking to a text adventure story game.
+        \\Reply with what you want to do, a line at a time.
+        \\Where a key press is expected, reply with a single character,
+        \\or one of the placeholders for non-character keys:
         \\
     );
     try w.print("{s}\n", .{try zm.keys.summary(arena)});
-    try w.writeAll(
-        \\
-        \\Saving, restoring and undo are not available — this chat is the save
-        \\file, and its history is the only way back. RESTART works.
-    );
+    try w.writeAll("You may RESTART, but save, restore, and undo are not available.\n");
+
+    // V1–3 has a status line and can have nothing else: screen splitting is
+    // denied in the header, so there is no upper window for a quote box or a
+    // menu to arrive in. Seastalker's sonarscope is the only thing in the
+    // whole V3 catalogue that wanted one, and it does without.
+    //
+    // V4 and up have no status line at all — the game draws its own, into a
+    // window that as often holds a quote box, a menu or a map. Naming it
+    // would be wrong often enough to matter, so this says where it is rather
+    // than what it is, and `if any` is load-bearing: an empty upper window is
+    // the ordinary case, not the exception.
+    if (version <= 3) {
+        try w.writeAll(
+            \\You will be given the status line,
+            \\and then what the game says.
+        );
+    } else {
+        try w.writeAll(
+            \\You will be given the top panel, if any,
+            \\and then what the game says.
+        );
+    }
+
     try w.writeAll("\n---\n");
     try w.writeAll(opening);
 }

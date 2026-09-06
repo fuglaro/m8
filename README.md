@@ -81,11 +81,18 @@ implement yourself and choose not to.
 ### It is markdown, and it renders itself
 
 A stored m8 document is markdown. Headers and block
-quotes, with each sigil written as the `:word:`
-shortcode that already means "an emoji, spelled out"
-everywhere from GitHub to Slack. Typeable, greppable,
+quotes, with each sigil written as its gemoji
+`:word:` shortcode — the table GitHub renders, and the
+closest thing to a common convention across the systems
+that substitute shortcodes at all. Typeable, greppable,
 diffable, and rendered by anything that renders
 markdown.
+
+Shortcodes are not standardised; Unicode registers none.
+Slack keeps its own older names and lacks two of ours,
+`:robot:` and `:green_circle:`. Slack is not a render
+target, and an unknown shortcode degrades to the text
+that was typed, so nothing is lost that was not typed.
 
 The emoji column is m8's own rendered form, and a
 terminal gets it. One glyph per record kind, told apart
@@ -285,13 +292,13 @@ it saved is a file, so it is markdown:
 cat ".m8-st8/=/tduyxbutjb.md"
 ```
 ```
-# :brain:mathy
+#### :brain:mathy
 
-# :raising_hand:
+#### :raising_hand:
 > Tell me about the Riemann Sphere
 > in detail.
 
-# :robot:
+#### :robot:
 > The Riemann Sphere is a ...
 ```
 
@@ -411,6 +418,20 @@ m8 parse FORMAT                    that api's response, as a turn
 m8 send [PROVIDER]                 run a ledger and save the turn
 ```
 
+There are four:
+
+* `m8` — the language itself, so encoding is writing it
+  out and decoding loses nothing.
+* `openai-completions` — OpenAI chat completions, and the
+  many servers that answer in its shape.
+* `anthropic-messages` — Anthropic's messages api, which
+  is where Claude answers.
+* `openai-responses` — OpenAI's responses api, which is
+  where Codex and a ChatGPT plan answer.
+
+`m8 encode --help` is the same list, and any provider may
+name any of them.
+
 `m8` is a format like any other here, so `encode m8` is
 how a chat becomes one flat document.
 
@@ -441,13 +462,43 @@ say. That is what makes it a projection, and the ledger it
 came from still holds all of it.
 
 Decoding is partial, and hands back something ledger-shaped
-rather than the ledger. Chat completions cannot tell a 🚫
-from a 🧾, and a tool comes back without its 🔌 or its 🔒 —
-a model call has no business carrying either, so their
-absence on the way home is that rule holding rather than a
-corner missed. A tool read back is an interface, and calling
-one answers with 🚫 rather than running something nobody
-sent.
+rather than the ledger. A tool comes back without its 🔌 or
+its 🔒 — a model call has no business carrying either, so
+their absence on the way home is that rule holding rather
+than a corner missed. A tool read back is an interface, and
+calling one answers with 🚫 rather than running something
+nobody sent.
+
+How much of a ledger survives is the api's own affair rather
+than the codec's care, and the three wire formats differ in
+a way worth setting out, because it is the argument for the
+grammar rather than an accident of it.
+
+A call is answered by what the tool said and then by how it
+went — 🧾, then 🟢 or 🚫. No api carries both halves:
+
+```
+                     the saying finished   how it went
+openai-completions   —                     —
+openai-responses     status                —
+anthropic-messages   —                     is_error
+```
+
+Two records where every wire format has one field, and each
+of them keeps a different half. That is why there are three
+records and not one.
+
+Thinking divides them the same way. Chat completions has no
+field a 💭 could go out in at all. The other two do, and both
+want it signed: a thought carries a 🔏 — a signature under
+messages, an id and its encrypted content under responses —
+and a 💭 with no 🔏 is dropped rather than sent, because the
+api refuses an unsigned one and a thought that arrived off
+some other wire has no signature to give. So a reply that
+thought before it answered can be replayed and believed.
+
+The ledger holds all of it either way, which is the point of
+a projection losing things.
 
 `m8` is the one format whose view is the whole ledger. That
 is why it is in the table at all, and why `decode m8`
@@ -651,9 +702,17 @@ error. A bare quote with no space is an empty
 content line. A fully blank line closes the block,
 and one is required between records.
 
-Sigils are a closed set, written as emoji within
-U+1F300 to U+1FAFF or as `:word:`. An unknown sigil
-in either spelling is an error.
+Sigils are a closed set, written as one codepoint
+within U+1F300 to U+1FAFF or as `:word:`. An unknown
+sigil in either spelling is an error.
+
+An emoji sigil may be followed by presentation
+modifiers — a variation selector, a skin tone, or a
+joiner binding another codepoint into the glyph — and
+they belong to the sigil, not to the value behind it.
+A renderer adds them without being asked: Slack shows
+🙋 as 🙋‍♀️. Text pasted back from one still reads as
+the sigil it looks like.
 
 A `,` separates a fixed number of fields, so the
 last field may hold one safely. What a content block
@@ -701,7 +760,7 @@ is an error. Files and piped streams are `m8.md`,
 which is also valid markdown, so anything that
 renders markdown renders them. A tty gets `m8`.
 
-* ▄ header -> `#`
+* ▄ header -> `####`
 * │ content -> `>`
 * 🧠 agent -> `:brain:`
 * 🙋 user -> `:raising_hand:`
@@ -1150,7 +1209,14 @@ anything you can write a program for is a provider.
     "cmd": ["m8", "providers", "url"],
     "api": "openai-completions",
     "url": "http://127.0.0.1:11337/v1/chat/completions",
-    "key": "sed -n 's/.*\"api_key\" *: *\"\\([^\"]*\\)\".*/\\1/p' ~/.omlx/settings.json"
+    "header-authorization": "echo Bearer $(cat ~/.omlx/key)"
+  },
+  "anthropic": {
+    "cmd": ["m8", "providers", "url"],
+    "api": "anthropic-messages",
+    "url": "https://api.anthropic.com/v1/messages",
+    "header-anthropic-version": "echo 2023-06-01",
+    "header-x-api-key": "security find-generic-password -s anthropic-api-key -w"
   }
 }
 ```
@@ -1170,11 +1236,26 @@ have a name to take. `cmd` stays behind — the command already
 knows what it is — and `api` goes, because what to write may
 be the command's business too.
 
-`key` is nothing special to m8. `m8 providers url` runs it as
-a shell command and takes its output as the bearer token,
-which is that command's convention rather than the language's
-— and it is a command so a config can commit safely and still
-reach a keychain.
+`header-` is nothing special to m8. It is `m8 providers
+url`'s one convention rather than the language's, and it is
+the entry beside the url that knows it: a key named
+`header-x-api-key` arrives as `M8_PROVIDER_HEADER_X_API_KEY`,
+what it says is run, and its output is that header's value.
+
+Each is a command rather than a value so a config can commit
+safely and still reach a keychain, and a constant is `echo`.
+A command that fails or says nothing leaves its header off,
+so a machine with no key configured still reaches a provider
+that wants none.
+
+A bearer token, an api version, a beta flag and a tenant are
+all just headers, and not one of them is a format's business
+— which is the same reason there is no path m8 appends. So
+none of them is known about here and there is one rule rather
+than a field per vendor habit.
+
+A provider you write reads whatever its own entry says,
+under its own `M8_PROVIDER_` name, and owes none of this.
 
 There is no path m8 appends to a url. Which api lives where is
 a fact about a provider, not about a format, and m8 keeps no
@@ -1348,7 +1429,7 @@ M8_PROVIDER_*     every other string the entry said
 ```
 
 The two m8 ships with read `M8_PROVIDER_URL` and
-`M8_PROVIDER_KEY` between them, and `m8 providers url
+`M8_PROVIDER_HEADER_*` between them, and `m8 providers url
 --help` says what each is for. A provider you write reads
 whatever its entry says, under its own name.
 
@@ -1364,3 +1445,110 @@ brew tap jundot/omlx https://github.com/jundot/omlx
 brew install jundot/omlx/omlx --with-custom-kernel --with-grammar
 ```
 
+
+# Claude setup on the Anthropic api
+
+The entry above reaches `https://api.anthropic.com/v1/messages`
+and needs an api key. A Claude subscription does not include
+one — the api is a separate product with its own billing — so
+take a key from platform.claude.com/settings/keys and put it
+where `header-x-api-key` looks:
+
+```bash
+security add-generic-password -s anthropic-api-key -a "$USER" -w
+```
+
+That header is a command, so anywhere else you already keep
+secrets works as well — `pass`, `op read`, `gpg -d`, an
+environment variable, a file only you can read.
+
+Then a model is a 🧠 like any other, and a file is how it comes
+to have a name:
+
+```m8
+▄ 🧠/anthropic/claude-opus-5,max_tokens:16000,thinking:{"type":"adaptive","display":"summarized"}
+```
+
+A parameter may be JSON, and a `,` inside it is the JSON's
+rather than the form's, so an object goes on a 🧠 whole.
+
+`display` is worth writing down. It is `omitted` by default on
+every current model, which streams a thought with no text in
+it — so without this a 💭 reaches the ledger carrying nothing
+but its 🔏, and a terminal shows a long pause and then an
+answer. Thinking happens and is billed the same either way;
+the only question is whether the ledger gets to record it.
+
+```bash
+m8 @claude -- "Tell me about the Riemann Sphere."
+m8 @/anthropic/claude-haiku-4-5,max_tokens:1024 -- "In one line."
+```
+
+# Codex setup on a ChatGPT plan
+
+Unlike a Claude subscription, a ChatGPT plan reaches the api:
+OpenAI has publicly backed third-party harnesses on a plan,
+and GPT-5.5 is subscription-auth only with no api key at all.
+It is tolerated rather than contracted, so the token shape is
+theirs to change and this is the entry most likely to need a
+line moved.
+
+`codex login` writes an OAuth token to `~/.codex/auth.json`,
+and requests carrying it reach the responses api billed to the
+plan. So the entry is a url and a command that reads the token:
+
+```json
+"codex": {
+  "cmd": ["m8", "providers", "url"],
+  "api": "openai-responses",
+  "url": "https://chatgpt.com/backend-api/codex/responses",
+  "header-authorization": "echo Bearer $(...access_token from ~/.codex/auth.json...)",
+  "header-chatgpt-account-id": "...the account id claim in that token...",
+  "header-originator": "echo m8",
+  "header-openai-beta": "echo responses=experimental",
+  "header-accept": "echo text/event-stream"
+}
+```
+
+None of that is a published api, so it is worth saying where it
+came from: it is what Pi sends, and Pi is a harness reaching the
+same endpoint for the same reason. `originator` is the client
+naming itself — Pi sends `pi`, so m8 sends `m8`, and copying
+somebody else's would be a lie told to a server that asked.
+
+The endpoint speaks websockets first and falls back to server-sent
+events, so posting to it is a supported path rather than a trick.
+That is the whole reason `m8 providers url` can reach it at all.
+
+Two things the codec sends without being asked, because every
+client that speaks this api sends them and a ledger cannot do
+without either: `store` off, so the conversation stays yours
+rather than being kept and replayed by id at the far end, and
+`include` naming `reasoning.encrypted_content`, without which a
+💭 comes home with nothing to sign it. A 🧠 that names either
+overrules it. One gotcha that is neither: the subscription
+endpoint refuses `max_output_tokens`, so do not put one on a
+🧠 aimed at it.
+
+An api key instead, which reaches the same codec:
+
+```json
+"openai": {
+  "cmd": ["m8", "providers", "url"],
+  "api": "openai-responses",
+  "url": "https://api.openai.com/v1/responses",
+  "header-authorization": "echo Bearer $(security find-generic-password -s openai-api-key -w)"
+}
+```
+
+```bash
+m8 @gpt -- "Tell me about the Riemann Sphere."
+m8 @/codex/gpt-5.6-luna -- "In one line."
+```
+
+GPT-5.6 is three models rather than one: `sol` is the
+flagship, `terra` the balanced middle, `luna` the fast and
+cheap one — the same three tiers as opus, sonnet and haiku,
+and a file each. Which of them a subscription endpoint serves,
+and whether it wants a `-codex` variant of the name instead,
+is that endpoint's business rather than this file's.

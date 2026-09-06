@@ -71,9 +71,9 @@ pub fn parse(arena: Allocator, mode: Mode, name: []const u8, content: []const u8
             continue;
         }
 
-        if (sigil.match(mode, line)) |s| {
-            const value = line[s.text(mode).len..];
-            switch (s) {
+        if (sigil.match(mode, line)) |m| {
+            const value = line[m.len..];
+            switch (m.sigil) {
                 .command => command = try unwrap(value),
                 .lock => {
                     var it = std.mem.splitScalar(u8, value, ',');
@@ -89,7 +89,7 @@ pub fn parse(arena: Allocator, mode: Mode, name: []const u8, content: []const u8
                     try props.append(arena, .{
                         .name = pname,
                         .type = std.mem.trim(u8, value[cut + 1 ..], " \t"),
-                        .required = s == .package,
+                        .required = m.sigil == .package,
                     });
                 },
                 else => {},
@@ -249,9 +249,18 @@ pub fn writeSchema(s: *std.json.Stringify, t: Tool) SchemaError!void {
         try s.write(t.description);
     }
     try s.objectField("parameters");
-    try writeObject(s, t.properties, "");
+    try writeParameters(s, t.properties);
     try s.endObject();
     try s.endObject();
+}
+
+/// The schema itself, without the field an api hangs it from.
+///
+/// Chat completions calls that field `parameters` and messages calls it
+/// `input_schema`. The schema under it is the same schema, so it is written
+/// here once and each codec names its own field.
+pub fn writeParameters(s: *std.json.Stringify, props: []const Property) SchemaError!void {
+    return writeObject(s, props, "");
 }
 
 /// Stated explicitly because `writeObject` and `writeType` are mutually
@@ -331,6 +340,105 @@ fn segment(name: []const u8, prefix: []const u8) ?[]const u8 {
     }
     // One segment only: anything deeper belongs to a nested object.
     return if (std.mem.indexOfScalar(u8, rest, '.') == null) rest else null;
+}
+
+/// Stated explicitly because `readObject` and `readType` are mutually
+/// recursive, and an inferred set cannot close over itself.
+pub const ReadError = Allocator.Error;
+
+/// Read a schema back into properties: the inverse of `writeParameters`.
+///
+/// Nested objects flatten back to dotted paths, an array's items give the
+/// `[]` suffix, and an enum's values rejoin with `|`. A 🔌 is not here to be
+/// recovered — it never went out.
+pub fn readParameters(
+    arena: Allocator,
+    props: *std.ArrayList(Property),
+    schema: std.json.Value,
+) ReadError!void {
+    return readObject(arena, props, schema, "");
+}
+
+fn readObject(
+    arena: Allocator,
+    props: *std.ArrayList(Property),
+    schema: std.json.Value,
+    prefix: []const u8,
+) ReadError!void {
+    if (schema != .object) return;
+    const properties = schema.object.get("properties") orelse return;
+    if (properties != .object) return;
+
+    var required: []const std.json.Value = &.{};
+    if (schema.object.get("required")) |req| {
+        if (req == .array) required = req.array.items;
+    }
+
+    var it = properties.object.iterator();
+    while (it.next()) |e| {
+        const key = e.key_ptr.*;
+        const full = if (prefix.len == 0)
+            key
+        else
+            try std.fmt.allocPrint(arena, "{s}.{s}", .{ prefix, key });
+        const is_required = for (required) |rv| {
+            if (rv == .string and std.mem.eql(u8, rv.string, key)) break true;
+        } else false;
+        try readType(arena, props, e.value_ptr.*, full, is_required, false);
+    }
+}
+
+fn readType(
+    arena: Allocator,
+    props: *std.ArrayList(Property),
+    v: std.json.Value,
+    name: []const u8,
+    required: bool,
+    in_array: bool,
+) ReadError!void {
+    if (v != .object) return;
+    const t = str(v.object.get("type")) orelse "string";
+
+    // Arrayness lives on the parent type, so the items decide what it is an
+    // array of and the `[]` is put back here.
+    if (std.mem.eql(u8, t, "array")) {
+        const items = v.object.get("items") orelse return;
+        return readType(arena, props, items, name, required, true);
+    }
+    const suffix = if (in_array) "[]" else "";
+
+    if (std.mem.eql(u8, t, "object")) {
+        try props.append(arena, .{
+            .name = name,
+            .type = try std.fmt.allocPrint(arena, "object{s}", .{suffix}),
+            .required = required,
+        });
+        // Parents are always declared, never inferred, so the children follow.
+        return readObject(arena, props, v, name);
+    }
+
+    var base: []const u8 = t;
+    if (v.object.get("enum")) |en| if (en == .array) {
+        var joined: std.ArrayList(u8) = .empty;
+        for (en.array.items, 0..) |item, i| {
+            if (i > 0) try joined.append(arena, '|');
+            if (item == .string) try joined.appendSlice(arena, item.string);
+        }
+        if (joined.items.len > 0) base = joined.items;
+    };
+
+    try props.append(arena, .{
+        .name = name,
+        .type = try std.fmt.allocPrint(arena, "{s}{s}", .{ base, suffix }),
+        .description = str(v.object.get("description")) orelse "",
+        .required = required,
+    });
+}
+
+
+fn str(v: ?std.json.Value) ?[]const u8 {
+    const got = v orelse return null;
+    return if (got == .string) got.string else null;
 }
 
 /// Write a 🧰's content: the inverse of `parse`, in `mode`.
@@ -433,10 +541,10 @@ pub fn parseArgs(arena: Allocator, mode: Mode, content: []const u8) ![]const u8 
             seen += 1;
             continue;
         }
-        const s = sigil.match(mode, line) orelse continue;
-        if (s != .package) continue;
+        const m = sigil.match(mode, line) orelse continue;
+        if (m.sigil != .package) continue;
         if (key) |k| try obj.put(arena, k, valueOf(arena, val.items));
-        key = line[s.text(mode).len..];
+        key = line[m.len..];
         val = .empty;
         seen = 0;
     }

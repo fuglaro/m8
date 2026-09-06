@@ -36,10 +36,6 @@ comptime {
 pub const Machine = machine.Machine;
 pub const Story = story.Story;
 
-/// How the seed is derived from the first message. Bumping this invalidates
-/// every stored ledger, which is the point: it makes the invalidation loud.
-pub const seed_derivation: u32 = 1;
-
 /// The interpreter's semantic version: a hash of the sources that decide what
 /// a replay produces.
 ///
@@ -66,9 +62,15 @@ pub fn semantic(out: *[12]u8) void {
     _ = std.fmt.bufPrint(out, "{x}", .{digest[0..6]}) catch {};
 }
 
-/// The boot block's first section, and the whole of what a stored ledger needs
-/// in order to be replayable later. All of it is derived from the file, so none
-/// of it can drift from the thing it describes.
+/// What is running, and the whole of what a stored ledger needs in order to be
+/// replayable later. All of it is derived from the file, so none of it can
+/// drift from the thing it describes.
+///
+/// It goes out as a 💭 rather than as part of the 🤖, because it is the
+/// interpreter's note about how the answer was produced and not something the
+/// game says to the player. That also leaves the 🤖 naming no story file and
+/// no machine, so a provider serving a procedurally generated world says the
+/// same words and only this changes.
 pub const Provenance = struct {
     /// What the file was called, since a story file does not hold its title.
     /// The game's own banner says the rest, and it is in the boot output.
@@ -97,17 +99,20 @@ pub const Provenance = struct {
     }
 
     pub fn write(p: Provenance, w: *std.Io.Writer) !void {
-        try w.print("{s}\n", .{p.name});
-        try w.print("Release {d} / Serial {s}\n", .{ p.release, p.serial });
-        // On its own line: seventy-one characters, where everything else the
-        // machine prints wraps at eighty. A hash that overhangs is the one
-        // thing on the page that looks like a mistake.
-        try w.print("sha256:{s}\n", .{p.sha256});
-        try w.print("Z-machine v{d} · m8 Z-Machine {s} · seed derivation {d}", .{
-            p.version,
-            p.semantic,
-            seed_derivation,
+        try w.print("Loading {s} (Release {d} / Serial {s} /\n", .{
+            p.name,
+            p.release,
+            p.serial,
         });
+        // On its own line: seventy-two characters with its bracket, where
+        // everything else the machine prints wraps at eighty. A hash that
+        // overhangs is the one thing on the page that looks like a mistake.
+        try w.print("sha256:{s})\n", .{p.sha256});
+        // No seed derivation here. The rule lives in this file and this file
+        // is in the semantic hash, so it cannot change without the hash
+        // changing — a second number saying so would only be a number
+        // somebody has to remember to bump.
+        try w.print("on Z-machine v{d} (m8-{s}).", .{ p.version, p.semantic });
     }
 };
 

@@ -14,6 +14,7 @@
 const std = @import("std");
 const codec = @import("../codec.zig");
 const doc = @import("../m8/doc.zig");
+const sigil = @import("../m8/sigil.zig");
 const toolbox = @import("../toolbox.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
@@ -93,19 +94,40 @@ const Live = struct {
     mode: doc.Mode,
     opened: bool = false,
     body: ?doc.ContentWriter = null,
+    pending: ?sigil.Sigil = null,
 
     fn sink(self: *Live) codec.Sink {
-        return .{ .ctx = self, .write = writeFn };
+        return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
+    }
+
+    /// Remembered rather than written: the header waits for a byte, so a
+    /// record the model opened and left empty never reaches the pipe.
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, _: []const u8) anyerror!void {
+        const self: *Live = @ptrCast(@alignCast(ctx));
+        self.pending = s;
     }
 
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *Live = @ptrCast(@alignCast(ctx));
         if (self.body == null) {
-            self.body = try doc.ContentWriter.begin(self.out, self.mode, .bot, "");
+            if (self.opened) try self.out.writeByte('\n');
+            self.body = try doc.ContentWriter.begin(
+                self.out,
+                self.mode,
+                self.pending orelse .bot,
+                "",
+            );
             self.opened = true;
         }
         try self.body.?.write(bytes);
         try self.out.flush();
+    }
+
+    fn closeFn(ctx: *anyopaque) anyerror!void {
+        const self: *Live = @ptrCast(@alignCast(ctx));
+        if (self.body) |*b| try b.finish();
+        self.body = null;
+        self.pending = null;
     }
 
     fn finish(self: *Live) !void {

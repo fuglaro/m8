@@ -12,7 +12,10 @@
 //!
 //! So encoding is total and loses whatever the target cannot say — order, 💭,
 //! a 🔌 — which is what makes it a projection, and the ledger it came from
-//! still holds all of it. Decoding is partial, and what it hands back is a
+//! still holds all of it. Reading a response is the other direction and drops
+//! nothing on purpose: what comes back is records in the order the model made
+//! them, and a sigil this api did not expect is handed to `policy.zig` to
+//! refuse rather than quietly discarded. Decoding is partial, and what it hands back is a
 //! ledger-shaped approximation rather than the ledger. A tool comes back
 //! without its 🔌 or its 🔒 because a model call has no business carrying
 //! either, so their absence on the way home is this working rather than
@@ -24,6 +27,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const doc = @import("m8/doc.zig");
+const Sigil = @import("m8/sigil.zig").Sigil;
 const modelform = @import("m8/model.zig");
 const ledger = @import("ledger.zig");
 const toolbox = @import("toolbox.zig");
@@ -47,18 +51,44 @@ pub const Target = struct {
     mode: doc.Mode = .md,
 };
 
-/// Where a reply's text goes as it arrives.
+/// Where a reply goes as it arrives.
 ///
-/// Only text can be acted on before the end: it can be shown. A call cannot
-/// be run until its arguments are whole, so calls are gathered rather than
-/// streamed, and that is the whole reason this carries one channel.
+/// A reply is a sequence of records rather than a block of text. A model that
+/// thinks answers with 💭 before its 🤖, and one that thinks between tool
+/// calls answers with more of each — so what arrives is ordered, and the order
+/// is the model's rather than this file's guess at it. The sink is opened and
+/// closed around every record and the bytes in between are that record's
+/// content, which is also what lets a thought be shown while it is still
+/// being thought.
+///
+/// A sink is free to keep nothing. What the ledger gets is the reply, not
+/// this: showing and recording are different jobs and only one of them has to
+/// hold the whole thing.
 pub const Sink = struct {
     ctx: *anyopaque,
+    open: *const fn (ctx: *anyopaque, sigil: Sigil, value: []const u8) anyerror!void,
     write: *const fn (ctx: *anyopaque, bytes: []const u8) anyerror!void,
+    close: *const fn (ctx: *anyopaque) anyerror!void,
+
+    pub fn begin(s: Sink, sigil: Sigil, value: []const u8) !void {
+        return s.open(s.ctx, sigil, value);
+    }
 
     pub fn text(s: Sink, bytes: []const u8) !void {
         if (bytes.len == 0) return;
         return s.write(s.ctx, bytes);
+    }
+
+    pub fn end(s: Sink) !void {
+        return s.close(s.ctx);
+    }
+
+    /// A record that was never streamed, in one go. A 📲 arrives this way
+    /// because its arguments are only meaningful once they are whole.
+    pub fn record(s: Sink, sigil: Sigil, value: []const u8, content: []const u8) !void {
+        try s.begin(sigil, value);
+        try s.text(content);
+        try s.end();
     }
 };
 
@@ -71,11 +101,29 @@ pub const Call = struct {
     arguments: []const u8,
 };
 
-/// What a response turned out to hold. The text is handed back as well as
-/// streamed, because the ledger needs the whole of it.
+/// What a response turned out to hold: the records it adds to a ledger, in
+/// the order the model produced them.
+///
+/// Handed back as well as streamed, because the ledger needs the whole of
+/// them and a sink is entitled to keep nothing. The calls are carried beside
+/// the records rather than read back out of them: a tool is run from
+/// arguments that are still JSON, and the records hold them rendered.
 pub const Reply = struct {
-    text: []const u8 = "",
+    records: []const doc.Record = &.{},
     calls: []const Call = &.{},
+
+    /// The 🤖 content, joined — what was said, with no account of how it came
+    /// to be said. For a caller deciding on the answer rather than recording
+    /// it; a ledger wants `records`, which keeps the 💭 as well.
+    pub fn said(r: Reply, arena: Allocator) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        for (r.records) |rec| {
+            if (rec.sigil != .bot) continue;
+            if (out.items.len > 0) try out.append(arena, '\n');
+            try out.appendSlice(arena, rec.content orelse "");
+        }
+        return out.items;
+    }
 };
 
 pub const Codec = struct {
@@ -95,10 +143,14 @@ pub const Codec = struct {
 
 pub const m8 = @import("codec/m8.zig");
 pub const openai_completions = @import("codec/openai_completions.zig");
+pub const anthropic_messages = @import("codec/anthropic_messages.zig");
+pub const openai_responses = @import("codec/openai_responses.zig");
 
 pub const all = [_]Codec{
     m8.codec,
     openai_completions.codec,
+    anthropic_messages.codec,
+    openai_responses.codec,
 };
 
 pub fn find(name: []const u8) ?Codec {
@@ -158,12 +210,12 @@ test "m8 encodes to itself and decodes back" {
     const arena = a.allocator();
 
     const src =
-        \\# :brain:local/tiny
+        \\#### :brain:local/tiny
         \\
-        \\# :computer:
+        \\#### :computer:
         \\> Be brief.
         \\
-        \\# :raising_hand:
+        \\#### :raising_hand:
         \\> Hi.
         \\
     ;
