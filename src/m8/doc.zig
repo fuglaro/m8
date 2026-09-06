@@ -316,7 +316,7 @@ test "a record is a header and its content" {
     const recs = try parse(a.allocator(),
         \\#### :brain:mathy
         \\
-        \\#### :computer:
+        \\#### :compass:
         \\> line one
         \\> line two
         \\
@@ -336,8 +336,8 @@ test "both spellings parse the same document" {
     defer b.deinit();
     var d1: Diagnostic = .{};
     var d2: Diagnostic = .{};
-    const md = try parse(a.allocator(), "#### :computer:\n> hi\n", &d1);
-    const m8 = try parse(b.allocator(), "\u{2584} \u{1F4BB}\n\u{2502} hi\n", &d2);
+    const md = try parse(a.allocator(), "#### :compass:\n> hi\n", &d1);
+    const m8 = try parse(b.allocator(), "\u{2584} \u{1F9ED}\n\u{2502} hi\n", &d2);
     try testing.expectEqual(md[0].sigil, m8[0].sigil);
     try testing.expectEqualStrings(md[0].content.?, m8[0].content.?);
 }
@@ -353,7 +353,7 @@ test "the spellings never mix" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    try testing.expectError(error.ModeMixed, parse(a.allocator(), "#### :computer:\n\u{2502} hi\n", &diag));
+    try testing.expectError(error.ModeMixed, parse(a.allocator(), "#### :compass:\n\u{2502} hi\n", &diag));
     try testing.expectEqual(@as(usize, 2), diag.line);
 }
 
@@ -361,12 +361,12 @@ test "a quote with no space is an error, and alone is an empty line" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    try testing.expectError(error.MissingSpace, parse(a.allocator(), "#### :computer:\n>hi\n", &diag));
+    try testing.expectError(error.MissingSpace, parse(a.allocator(), "#### :compass:\n>hi\n", &diag));
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    const recs = try parse(b.allocator(), "#### :computer:\n> one\n>\n> three\n", &d2);
+    const recs = try parse(b.allocator(), "#### :compass:\n> one\n>\n> three\n", &d2);
     try testing.expectEqualStrings("one\n\nthree", recs[0].content.?);
 }
 
@@ -374,7 +374,7 @@ test "content is verbatim, so it needs no escape" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    const recs = try parse(a.allocator(), "#### :computer:\n> #### :brain:not a record\n>   indented\n", &diag);
+    const recs = try parse(a.allocator(), "#### :compass:\n> #### :brain:not a record\n>   indented\n", &diag);
     try testing.expectEqual(@as(usize, 1), recs.len);
     try testing.expectEqualStrings("#### :brain:not a record\n  indented", recs[0].content.?);
 }
@@ -383,13 +383,13 @@ test "a blank line closes the block and is required between records" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    try testing.expectError(error.MissingBlankLine, parse(a.allocator(), "#### :computer:\n> hi\n#### :brain:x\n", &d1));
+    try testing.expectError(error.MissingBlankLine, parse(a.allocator(), "#### :compass:\n> hi\n#### :brain:x\n", &d1));
     try testing.expectEqual(@as(usize, 3), d1.line);
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    try testing.expectError(error.OrphanContent, parse(b.allocator(), "#### :computer:\n> hi\n\n> more\n", &d2));
+    try testing.expectError(error.OrphanContent, parse(b.allocator(), "#### :compass:\n> hi\n\n> more\n", &d2));
     try testing.expectEqual(@as(usize, 4), d2.line);
 }
 
@@ -397,7 +397,7 @@ test "value and content are refused where the sigil takes none" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    try testing.expectError(error.UnexpectedValue, parse(a.allocator(), "#### :computer:words\n", &d1));
+    try testing.expectError(error.UnexpectedValue, parse(a.allocator(), "#### :compass:words\n", &d1));
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
@@ -424,14 +424,14 @@ test "CRLF parses identically, and a doubled CR survives" {
     defer b.deinit();
     var d1: Diagnostic = .{};
     var d2: Diagnostic = .{};
-    const lf = try parse(a.allocator(), "#### :computer:\n> one\n", &d1);
-    const crlf = try parse(b.allocator(), "#### :computer:\r\n> one\r\n", &d2);
+    const lf = try parse(a.allocator(), "#### :compass:\n> one\n", &d1);
+    const crlf = try parse(b.allocator(), "#### :compass:\r\n> one\r\n", &d2);
     try testing.expectEqualStrings(lf[0].content.?, crlf[0].content.?);
 
     var c: std.heap.ArenaAllocator = .init(testing.allocator);
     defer c.deinit();
     var d3: Diagnostic = .{};
-    const cr = try parse(c.allocator(), "#### :computer:\n> ends in CR\r\r\n> next\n", &d3);
+    const cr = try parse(c.allocator(), "#### :compass:\n> ends in CR\r\r\n> next\n", &d3);
     try testing.expectEqualStrings("ends in CR\r\nnext", cr[0].content.?);
 }
 

@@ -212,7 +212,7 @@ test "m8 encodes to itself and decodes back" {
     const src =
         \\#### :brain:local/tiny
         \\
-        \\#### :computer:
+        \\#### :compass:
         \\> Be brief.
         \\
         \\#### :raising_hand:

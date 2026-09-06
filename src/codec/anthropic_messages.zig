@@ -111,7 +111,7 @@ pub fn encode(arena: Allocator, records: []const doc.Record, target: api.Target)
     return buf.written();
 }
 
-/// Every 💻, joined into the field this api keeps them in. A ledger may hold
+/// Every 🧭, joined into the field this api keeps them in. A ledger may hold
 /// several, anywhere; the api has one, and it is not a message.
 fn writeSystem(arena: Allocator, s: *std.json.Stringify, records: []const doc.Record) !void {
     var text: std.ArrayList(u8) = .empty;
@@ -708,7 +708,7 @@ pub fn decode(arena: Allocator, bytes: []const u8) ![]const doc.Record {
     if (v.object.get("system")) |system| switch (system) {
         .string => |text| try out.append(arena, .{ .sigil = .system, .content = text }),
         // The cached form is a list of text blocks. What they say is what a
-        // 💻 says; `cache_control` is the request's business.
+        // 🧭 says; `cache_control` is the request's business.
         .array => |blocks| for (blocks.items) |block| {
             if (block != .object) continue;
             if (str(block.object.get("text"))) |text|
@@ -866,7 +866,7 @@ test "the system prompt is a field of its own, and max_tokens is always said" {
     defer a.deinit();
     const arena = a.allocator();
 
-    // 💻 after 🙋, and two of them: the ledger is allowed to say this and the
+    // 🧭 after 🙋, and two of them: the ledger is allowed to say this and the
     // api is not, so the encoder is where it gets fixed.
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Hi." },
@@ -1116,7 +1116,7 @@ test "a request decodes to a ledger and encodes back to the same request" {
     const records = try decode(arena, request);
 
     // What the wire held, as records. A 🧠 with the parameters it asked for,
-    // the tool and its 🔓, the 💻, and then what was said.
+    // the tool and its 🔓, the 🧭, and then what was said.
     try testing.expectEqual(sigil.Sigil.agent, records[0].sigil);
     try testing.expectEqualStrings("/claude-opus-5,max_tokens:2048", records[0].value);
     try testing.expectEqual(sigil.Sigil.tool, records[1].sigil);

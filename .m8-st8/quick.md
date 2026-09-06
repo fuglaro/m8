@@ -1,4 +1,4 @@
 #### :brain:local/tiny
 
-#### :computer:
+#### :compass:
 > Answer in as few words as possible.

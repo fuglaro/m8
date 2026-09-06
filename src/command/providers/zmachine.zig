@@ -203,7 +203,7 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
         return 1;
     };
 
-    // Only what the player said. A 💻 belongs to whoever wrote the agent and
+    // Only what the player said. A 🧭 belongs to whoever wrote the agent and
     // has nothing to do with the world; the 🤖 records are this provider's own
     // and replaying them would be reading our own homework.
     var said: std.ArrayList([]const u8) = .empty;

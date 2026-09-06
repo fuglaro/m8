@@ -135,7 +135,7 @@ pub fn encode(arena: Allocator, records: []const doc.Record, target: api.Target)
     return buf.written();
 }
 
-/// Every 💻, joined into the field this api keeps them in. A ledger may hold
+/// Every 🧭, joined into the field this api keeps them in. A ledger may hold
 /// several, anywhere; the api has one, and it is not an item.
 fn writeInstructions(arena: Allocator, s: *std.json.Stringify, records: []const doc.Record) !void {
     var text: std.ArrayList(u8) = .empty;
@@ -768,7 +768,7 @@ test "the system prompt is a field, and the rest is the ledger in its own order"
     defer a.deinit();
     const arena = a.allocator();
 
-    // 💻 after 🙋, and two of them: the ledger is allowed to say this and the
+    // 🧭 after 🙋, and two of them: the ledger is allowed to say this and the
     // api is not, so the encoder is where it gets fixed.
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Say hi." },
@@ -784,7 +784,7 @@ test "the system prompt is a field, and the rest is the ledger in its own order"
     try testing.expectEqualStrings("Be brief.\nBe kind.", field(v, "instructions").string);
 
     // One item per record, in the order they happened: no grouping, no
-    // alternation, nothing hoisted but the 💻. This is the whole projection.
+    // alternation, nothing hoisted but the 🧭. This is the whole projection.
     const input = field(v, "input").array.items;
     try testing.expectEqual(@as(usize, 5), input.len);
     try testing.expectEqualStrings("user", field(input[0], "role").string);

@@ -601,7 +601,7 @@ Agent definition:
 
 ▄ 🔓Allow Tool Name
 
-▄ 💻
+▄ 🧭
 │ System Prompt
 │ A record is a header and a content block, and
 │ content is verbatim, so this line may begin with
@@ -609,7 +609,7 @@ Agent definition:
 │ A , separates a fixed number of fields, so the
 │ last field may hold one safely.
 
-▄ 💻
+▄ 🧭
 │ Included Agents inject Tools and System
 │ Prompts.
 ```
@@ -669,7 +669,7 @@ Simple example query with definition:
 ```m8
 ▄ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
 
-▄ 💻
+▄ 🧭
 │ You are a mathematics expert that will answer questions,
 │ give insight, and advise on any relevant technique.
 │ Describe concepts with analogies and spatial models
@@ -773,7 +773,7 @@ renders markdown renders them. A tty gets `m8`.
 * 🟢 ok -> `:green_circle:`
 * 🚫 failed -> `:no_entry_sign:`
 * 📚 skill -> `:books:`
-* 💻 system -> `:computer:`
+* 🧭 system -> `:compass:`
 * 🔓 allow -> `:unlock:`
 * 🧰 tool -> `:toolbox:`
   * 🔌 command -> `:electric_plug:`
@@ -783,7 +783,7 @@ renders markdown renders them. A tty gets `m8`.
 A sigil takes a value, a content block, or both.
 
 * Value only: 🧠 📚 🔓 🔏 🔌 🟢
-* Content only: 🙋 🤖 💭 💻
+* Content only: 🙋 🤖 💭 🧭
 * Both: 🧰 📦 🎁 📲 🧾 🚫
 
 ## Types

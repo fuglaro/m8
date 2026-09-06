@@ -174,7 +174,7 @@ test "a definition yields its model, locks and tools" {
         \\
         \\#### :unlock:say
         \\
-        \\#### :computer:
+        \\#### :compass:
         \\> Be brief.
     );
 
@@ -257,7 +257,7 @@ test "an unknown agent and a missing model are told apart" {
 
     const f = try Fixture.init(arena, &threaded, "m8-agent-errors");
     defer f.deinit(arena);
-    try f.agent(arena, "bare.md", "#### :computer:\n> No model here.\n");
+    try f.agent(arena, "bare.md", "#### :compass:\n> No model here.\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(ledger.Error.UnknownAgent, load(arena, f.io, &dirs, "nosuch"));

@@ -69,7 +69,7 @@ pub fn encode(arena: Allocator, records: []const doc.Record, target: api.Target)
     return buf.written();
 }
 
-/// Every 💻, joined and hoisted to the front. The api takes one system message
+/// Every 🧭, joined and hoisted to the front. The api takes one system message
 /// and takes it first; a ledger may hold several, anywhere.
 fn writeSystem(arena: Allocator, s: *std.json.Stringify, records: []const doc.Record) !void {
     var text: std.ArrayList(u8) = .empty;
@@ -604,7 +604,7 @@ test "the api gets one system message first, whatever order the ledger is in" {
     defer a.deinit();
     const arena = a.allocator();
 
-    // 💻 after 🙋, and two of them: the ledger is allowed to say this and the
+    // 🧭 after 🙋, and two of them: the ledger is allowed to say this and the
     // api is not, so the encoder is where it gets fixed.
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Hi." },

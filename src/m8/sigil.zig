@@ -66,7 +66,7 @@ pub const Sigil = enum {
             .ok => "\u{1F7E2}", // 🟢
             .failed => "\u{1F6AB}", // 🚫
             .skill => "\u{1F4DA}", // 📚
-            .system => "\u{1F4BB}", // 💻
+            .system => "\u{1F9ED}", // 🧭
             .allow => "\u{1F513}", // 🔓
             .lock => "\u{1F512}", // 🔒
             .tool => "\u{1F9F0}", // 🧰
@@ -93,7 +93,7 @@ pub const Sigil = enum {
             .ok => ":green_circle:",
             .failed => ":no_entry_sign:",
             .skill => ":books:",
-            .system => ":computer:",
+            .system => ":compass:",
             .allow => ":unlock:",
             .lock => ":lock:",
             .tool => ":toolbox:",
@@ -240,7 +240,7 @@ test "every plain spelling is the gemoji shortcode for its own emoji" {
         .{ .sigil = .ok, .cp = 0x1F7E2, .word = ":green_circle:" },
         .{ .sigil = .failed, .cp = 0x1F6AB, .word = ":no_entry_sign:" },
         .{ .sigil = .skill, .cp = 0x1F4DA, .word = ":books:" },
-        .{ .sigil = .system, .cp = 0x1F4BB, .word = ":computer:" },
+        .{ .sigil = .system, .cp = 0x1F9ED, .word = ":compass:" },
         .{ .sigil = .allow, .cp = 0x1F513, .word = ":unlock:" },
         .{ .sigil = .lock, .cp = 0x1F512, .word = ":lock:" },
         .{ .sigil = .tool, .cp = 0x1F9F0, .word = ":toolbox:" },

@@ -356,25 +356,25 @@ test "an inclusion lands where it was written, not at the front" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-order");
     defer f.deinit(arena);
     try f.agent(arena, "helper.md",
-        \\#### :computer:
+        \\#### :compass:
         \\> Helper.
     );
     try f.agent(arena, "outer.md",
         \\#### :brain:/local/tiny
         \\
-        \\#### :computer:
+        \\#### :compass:
         \\> First.
         \\
         \\#### :brain:helper
         \\
-        \\#### :computer:
+        \\#### :compass:
         \\> Last.
     );
 
     const dirs = [_][]const u8{f.dir};
     const l = try expand(arena, f.io, &dirs, "outer");
 
-    // 🧠local/tiny stays, and the include sits between the two 💻 it was
+    // 🧠local/tiny stays, and the include sits between the two 🧭 it was
     // written between.
     try testing.expectEqual(@as(usize, 4), l.records.len);
     try testing.expectEqual(doc.Sigil.agent, l.records[0].sigil);
@@ -394,7 +394,7 @@ test "a chat expands through its turns to the agent it began with" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-chat");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :computer:\n> Be brief.\n");
+    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :compass:\n> Be brief.\n");
     try f.agent(arena, "=/one.md", "#### :brain:mathy\n\n#### :raising_hand:\n> Hi.\n\n#### :robot:\n> Hello.\n");
     try f.agent(arena, "=/two.md", "#### :brain:=/one\n\n#### :raising_hand:\n> More.\n\n#### :robot:\n> Sure.\n");
     try f.agent(arena, "+/mathy.md", "#### :brain:=/two\n");
@@ -456,7 +456,7 @@ test "a conversation is as long as it is, whatever the include cap says" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-long");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :computer:\n> Be brief.\n");
+    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :compass:\n> Be brief.\n");
 
     // Every run writes one link, so a chat this long is a chain this deep.
     // Far past the cap on how far one agent may include another, and far
@@ -482,7 +482,7 @@ test "a conversation is as long as it is, whatever the include cap says" {
     const dirs = [_][]const u8{f.dir};
     const l = try expand(arena, f.io, &dirs, "+/mathy");
 
-    // 🧠 and 💻 from the agent, then a 🙋 and a 🤖 per turn, in the order they
+    // 🧠 and 🧭 from the agent, then a 🙋 and a 🤖 per turn, in the order they
     // happened — oldest first, since a turn's parent stands where it was named.
     try testing.expectEqual(@as(usize, 2 + turns * 2), l.records.len);
     try testing.expectEqualStrings("mathy", l.origin);
@@ -524,7 +524,7 @@ test "an agent met twice is not a cycle" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-twice");
     defer f.deinit(arena);
-    try f.agent(arena, "helper.md", "#### :computer:\n> Helper.\n");
+    try f.agent(arena, "helper.md", "#### :compass:\n> Helper.\n");
     try f.agent(arena, "outer.md", "#### :brain:/local/tiny\n\n#### :brain:helper\n\n#### :brain:helper\n");
 
     // Twice along one path is a cycle; twice side by side is a mob used
@@ -577,7 +577,7 @@ test "a mob may be as deep as it is, since depth is not the fault" {
             try std.fmt.allocPrint(arena, "{s}.md", .{name}),
             try std.fmt.allocPrint(
                 arena,
-                "#### :computer:\n> {d}\n\n#### :brain:{s}\n",
+                "#### :compass:\n> {d}\n\n#### :brain:{s}\n",
                 .{ i, below },
             ),
         );
@@ -587,7 +587,7 @@ test "a mob may be as deep as it is, since depth is not the fault" {
     const dirs = [_][]const u8{f.dir};
     const l = try expand(arena, f.io, &dirs, below);
 
-    // One 💻 per link, outermost first, and the model at the bottom.
+    // One 🧭 per link, outermost first, and the model at the bottom.
     try testing.expectEqual(@as(usize, links + 1), l.records.len);
     try testing.expectEqualStrings(
         try std.fmt.allocPrint(arena, "{d}", .{links - 1}),

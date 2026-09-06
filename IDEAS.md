@@ -166,6 +166,137 @@ m8 @/inbuilt/elisa  # responses as that old school AI bot.
 m8 @/inbuilt/text-adventure-some-mit-flavour-one
 ```
 
+# ==== DONE
+
+REJECTED IDEA: Change :receipt: to :outbox_tray:
+Change :computer: to :compass:
+
+# ====
+Tools  2.0
+
+Locks change to Shields (Tool Wrappers)
+
+#### :runner:bash
+> `m8` `call` `bash` `-c` `{{CODE}}` `bash`
+— runner (value) resolves inline codes into an executable command, substituting {{CODE}}, for subsequent code blocks on interpretation of the code block, forked from searching the PATH, and executing without an interpreter)
+
+#### :shield:deny
+> `false`
+#### :shield:ask
+> ```bash
+> exec m8 shield ask – “$@”
+> ```
+— the block quote form just defines the shield, it must still be subsequently activated.
+— the block quote form defines wrapper commands for tools.
+— a shield can be defined multiple times and acts cumulatively as stacked wrappers.
+— the block quote can contain lines of inline codes defining wrapper commands.
+— the block quote can contain a code block which must define a language that refers to a previously defined runner.
+— subsequent shields and the toolbox command will be suffixed as arguments.
+— multiple shields defined with the same name stack cumulatively.
+— multiple commands stack cumulatively.
+
+#### :shield: deny
+#### :shield: ask
+— shield sigils without a block quote  enable the shield without changing its definition.
+— shields like “ask” may be activated last to avoid the user being queried about long shield wrapper prefix lists.
+
+#### :shield: filter-toolbox
+> `bash` `-e` `-c` `”$@” | m8 filter out toolbox`
+#### :shield: filter-unlock
+> `bash` `-e` `-c` `”$@” | m8 filter out unlock`
+— filter also filters out entire :brain: sigils if they contain anything filtered out.
+
+#### :shield:secure
+> ```bash
+> exec m8 shield secure “${SECURES}” – “$@”
+> ```
+#### :shield:secure SECURES airgap
+#### :shield:secure SECURES no-writes
+— shield sigils with additional values (space separated) activate the shield and append those values to that environment variable, which is passed to the shield wrapper with the env command.
+
+#### :shield:sandbox
+> :shield:secure SECURES private contain-writes no-loop no-edit-git no-edit-m8-st8 contain-env
+#### :shield:jail
+> :shield:sandbox
+> :shield:airgap
+> :shield:no-loop
+— shields can also be defined as a composition of other shields.
+
+Toolbox syntax changes.
+
+#### :toolbox: tool
+> > DESCRIPTION
+> :shield:ask
+> ```bash
+> … {{ARG1}} {{ARG2}}
+> ```
+> * argument type 
+>   argument description
+— first, the blocked quote is the description
+— then, additional shields (no block quote form)
+— then, a code block or inline blocks is the command to run.
+— then arguments as built points (name type then description on new lines)
+— a toolbox inherits all previously activated shields and can activate further shields.
+— {{ARG}} placeholders can be put anywhere and expand inline as a string if placed inside inline code or a code block (`{{ARGS}}`), and expands as separate arguments if placed raw ({{ARGS}}). Placing raw can only be done after an inline code block starts the line.
+
+#### :toolbox: tool ENV_VAR appending-value
+— similar to shields, toolboxes can have environment variables added with appending values (space separated).
+
+#### :call: tool CALLID
+> * argument `value`
+> * argument
+>   ```
+>   value line
+>   value line
+>   ```
+— code block values always drop one newline at the end.
+
+Locks are therefore no longer needed as arguments to m8.
+
+CALL_ID is always put into the environment of a tool call, and propagates through contain_env.
+
+m8 call m8 – PROGRAM
+— will call a program from the environment that creates m8. :receipt: :green_circle: :no_entry_sign: will have CALL_ID added if they don't already, and :green_circle: :no_entry_sign: will be added if missing.
+
+====
+Skills 2.0
+
+#### :toolbox: load_skill
+> `m8` `call` `m8` `--` `m8` `load` `@{{MOB}}skills/{{SKILL}}`
+> * SKILL String
+
+Skill file:
+```md
+#### :top:
+#### :compass:
+> Load the tight-docs skill when working on documentation or comments.
+#### :top:
+#### :raising_hand:
+> Skill content…
+```
+
+New :top: sigil. If the very first sigil of the file being referenced, begins a top header section until the next :top: sigil. Subsequent tops in a single file is an error.
+
+m8 cat … (gives full file)
+m8 top … (gives top only)
+m8 load … (gives bottom only)
+
+@agent and :brain: behaves as load (omitting any top on each file read) 
+^agent and :books: behaves as top (only giving the top section, if it exists)
+This behaviour recurses through deeper references.
+
+
+
+
+
+# ====
+Spin zmachine off into an isolated subcommand. Z-machine-m8 and do the same for everything else.
+— commands become
+m8-call—
+
+
+
+
 # ====
 
 Consider swarm name. Mob->Swarm? Use for something else?

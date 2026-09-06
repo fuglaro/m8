@@ -13,7 +13,7 @@
 //! somebody would have typed after `--` — so it joins the prompt, and the
 //! fallback still applies.
 //!
-//! The order is the order it was written. A 💻 that ends up after a 🙋 stays
+//! The order is the order it was written. A 🧭 that ends up after a 🙋 stays
 //! there; putting it first is the business of whichever api encoding is about
 //! to want it that way.
 
