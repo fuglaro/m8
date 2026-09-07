@@ -900,9 +900,9 @@ test "records group into messages, and an answer follows the call that asked" {
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Say hi." },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,c1", .content = ":package:text\n> hi" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
         .{ .sigil = .result, .value = "c1", .content = "hi" },
-        .{ .sigil = .call, .value = "say,c2", .content = ":package:text\n> bye" },
+        .{ .sigil = .call, .value = "say,c2", .content = "* text `bye`" },
         .{ .sigil = .failed, .value = "c2", .content = "nope" },
         .{ .sigil = .bot, .content = "Done." },
     };

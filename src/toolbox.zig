@@ -1,36 +1,40 @@
 //! Reading a 🧰 and turning a call into a command line.
 //!
 //! The harness hands back a 🧰's content as bytes and knows nothing about what
-//! is in it. This is where that content becomes a tool: a 🔌 template, some
-//! 📦 and 🎁 properties, and whatever bare lines are left as the description.
+//! is in it. Underneath a sigil the content is its own small markdown, and
+//! this is where that becomes a tool: a quoted line is the description, a
+//! bullet is an argument, a 🛡 is something to stand inside, and backticks or
+//! a fence are how it runs. Every kind is told apart by its own shape, so none
+//! of it depends on the order they were written in.
+//!
+//! Two ways to say how it runs, and the difference is not decoration. An argv
+//! may carry a placeholder because a value expands to a whole element and can
+//! never become syntax. A script cannot say that, so a fenced block carries no
+//! placeholder at all and what the call said reaches it as `M8_ARG_*`.
 //!
 //! One level down, the quote that doc.zig stripped is still there — a nested
-//! content line arrives as `> text`. So the grammar here is: a sigil opens a
-//! property, a quote continues the one above it, and anything else belongs to
-//! the tool itself.
+//! content line arrives as `> text`.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sigil = @import("m8/sigil.zig");
 const doc = @import("m8/doc.zig");
 const Mode = sigil.Mode;
+const api = @import("command/api.zig");
+const shield = @import("shield.zig");
+const markdown = @import("m8/markdown.zig");
 
 pub const Error = error{
     /// A property line had no type.
     MissingType,
     /// A placeholder was opened and not closed.
     UnclosedPlaceholder,
-    /// The 🔌 value was not a backtick-wrapped JSON array of strings.
-    BadTemplate,
-    /// A 📦 was not supplied and has no default.
+    /// A required argument was not supplied and has no default.
     MissingProperty,
-    /// A property tried to be called `lock`, which m8 fills in itself.
-    ReservedProperty,
+    /// Two properties would be the same environment variable. Caught where the
+    /// tool is written rather than when a model happens to supply both.
+    ClashingProperty,
 };
-
-/// The one property name a tool may not declare. It is how a 🔒 reaches the
-/// command line, so a model that could supply it would name its own locks.
-pub const reserved = "lock";
 
 pub const Property = struct {
     /// May be a dotted path: `parent.child`.
@@ -41,74 +45,200 @@ pub const Property = struct {
     required: bool,
 };
 
+/// How a tool runs.
+pub const Command = union(enum) {
+    /// Nothing said. A tool read back off a wire is an interface only.
+    none,
+    /// Backtick spans on one line, one argv element each. `{{ARG}}`
+    /// expands here and only here, into whole elements, so nothing a model
+    /// supplies is ever parsed as anything.
+    argv: []const []const u8,
+    /// A fenced block, run through the 🏃 its language names. No
+    /// placeholders at all: what the call said arrives as `M8_ARG_*`, so
+    /// the script m8 hands over is the script that was written.
+    block: shield.Fence,
+};
+
 pub const Tool = struct {
     name: []const u8,
+    /// What this tool answers in, from the second field of its value. Empty is
+    /// text, which becomes a 🧾. `m8` means it answers in the language, and
+    /// what it says is read as records rather than quoted inside one.
+    ///
+    /// Declared rather than sniffed, so a tool that innocently prints a line
+    /// looking like a header is never mistaken for one that speaks. A 🛡 can
+    /// still take away what it said; nothing can add to it.
+    speaks: []const u8 = "",
     description: []const u8 = "",
-    /// The 🔌 value with its backticks removed. Empty when there was none.
-    command: []const u8 = "",
-    locks: []const []const u8 = &.{},
+    /// How it runs. Two spellings, and the difference is not decoration:
+    /// an argv can carry a value that came from a model, because a value is
+    /// a whole element and can never become syntax. A block cannot, so it
+    /// carries none — its arguments arrive in the environment instead.
+    command: Command = .none,
+    /// Further 🛡 this tool stands inside, on top of whatever the agent
+    /// already activated. It can only add — which is the whole rule.
+    shields: []const shield.Activation = &.{},
     properties: []const Property = &.{},
 };
 
-/// Parse the content of a 🧰 whose value is `name`.
-pub fn parse(arena: Allocator, mode: Mode, name: []const u8, content: []const u8) !Tool {
+/// What a call is handed under, in the environment rather than in the command.
+///
+/// Nothing m8 builds ever contains model text, so a value cannot become syntax
+/// in whatever runs it. Named rather than positional, so a tool in any
+/// language reads them the way that language already reads its environment.
+pub const arg_prefix = "M8_ARG_";
+/// The whole call as JSON, always. Nested, dotted and arrayed arguments have
+/// no env spelling of their own and live here instead — no flattening, and no
+/// separator for a value to collide with.
+pub const args_var = "M8_ARGS";
+/// Which call this is, so a tool that runs m8 can answer the one it was asked.
+pub const call_var = "M8_CALL_ID";
+
+/// The environment name a property has, or null when it has none.
+///
+/// A portable identifier and nothing else, uppercased. A dotted path, a hyphen,
+/// a leading digit — those have no env spelling, and inventing one by mangling
+/// would collide with a name somebody meant. Such a property lives in
+/// `args_var` alone, which is honest rather than lossy.
+pub fn envName(arena: Allocator, name: []const u8) Allocator.Error!?[]const u8 {
+    if (name.len == 0) return null;
+    if (!std.ascii.isAlphabetic(name[0]) and name[0] != '_') return null;
+    for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return null;
+
+    const out = try arena.alloc(u8, arg_prefix.len + name.len);
+    @memcpy(out[0..arg_prefix.len], arg_prefix);
+    for (name, 0..) |c, i| out[arg_prefix.len + i] = std.ascii.toUpper(c);
+    return out;
+}
+
+/// `NAME TYPE` or `NAME? TYPE`, from a bullet with its `*` already gone.
+///
+/// The name runs to the first space and the type is the rest of the line, so
+/// the last field may hold one safely and an enum keeps its spaces. `?` on the
+/// name carries optional, which used to be a sigil of its own.
+fn property(arena: Allocator, rest: []const u8) !Property {
+    _ = arena;
+    const line = std.mem.trim(u8, rest, " \t");
+    const cut = std.mem.indexOfAny(u8, line, " \t") orelse return Error.MissingType;
+    var name = line[0..cut];
+    const optional = std.mem.endsWith(u8, name, "?");
+    if (optional) name = name[0 .. name.len - 1];
+    const kind = std.mem.trim(u8, line[cut + 1 ..], " \t");
+    if (name.len == 0 or kind.len == 0) return Error.MissingType;
+    return .{ .name = name, .type = kind, .required = !optional };
+}
+
+/// Parse the content of a 🧰 whose value is `NAME` or `NAME,FORMAT`.
+pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const u8) !Tool {
+    const at = std.mem.indexOfScalar(u8, header, ',');
+    const name = std.mem.trim(u8, if (at) |i| header[0..i] else header, " \t");
+    const speaks = if (at) |i| std.mem.trim(u8, header[i + 1 ..], " \t") else "";
     const quote = doc.quote(mode);
     const bare = doc.bareQuote(mode);
 
     var props: std.ArrayList(Property) = .empty;
-    var locks: std.ArrayList([]const u8) = .empty;
+    var shields: std.ArrayList(shield.Activation) = .empty;
     var description: std.ArrayList(u8) = .empty;
-    var command: []const u8 = "";
+    var command: Command = .none;
 
+    // Every kind of line is told apart by its own shape, so none of this
+    // depends on the order they were written in.
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        // A quoted line belongs to the property above it.
+        // A quoted line is the tool's own description: what the model is told
+        // this tool is for.
         if (std.mem.startsWith(u8, line, quote) or std.mem.eql(u8, line, bare)) {
-            if (props.items.len == 0) continue;
             const text = if (line.len > bare.len) line[quote.len..] else "";
+            description.items = @constCast(try join(arena, description.items, text));
+            continue;
+        }
+
+        const trimmed = std.mem.trim(u8, line, " \t");
+
+        // A fenced block, and an argv are the two ways to say how it runs.
+        if (markdown.opensFence(line)) {
+            command = .{ .block = try markdown.readFence(arena, line, &lines) };
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, trimmed, "*")) {
+            try props.append(arena, try property(arena, trimmed[1..]));
+            continue;
+        }
+
+        // Indented under a bullet, so it belongs to that argument.
+        if (props.items.len > 0 and line.len > 0 and (line[0] == ' ' or line[0] == '\t')) {
             const last = &props.items[props.items.len - 1];
-            last.description = try join(arena, last.description, text);
+            last.description = try join(arena, last.description, trimmed);
             continue;
         }
 
-        if (sigil.match(mode, line)) |m| {
-            const value = line[m.len..];
-            switch (m.sigil) {
-                .command => command = try unwrap(value),
-                .lock => {
-                    var it = std.mem.splitScalar(u8, value, ',');
-                    while (it.next()) |one| {
-                        const l = std.mem.trim(u8, one, " \t");
-                        if (l.len > 0) try locks.append(arena, l);
-                    }
-                },
-                .package, .optional => {
-                    const cut = std.mem.indexOfScalar(u8, value, ',') orelse return Error.MissingType;
-                    const pname = std.mem.trim(u8, value[0..cut], " \t");
-                    if (std.mem.eql(u8, pname, reserved)) return Error.ReservedProperty;
-                    try props.append(arena, .{
-                        .name = pname,
-                        .type = std.mem.trim(u8, value[cut + 1 ..], " \t"),
-                        .required = m.sigil == .package,
-                    });
-                },
-                else => {},
-            }
+        if (sigil.match(mode, trimmed)) |m| {
+            if (m.sigil == .shield)
+                try shields.append(arena, try shield.parseValue(arena, trimmed[m.len..]));
             continue;
         }
 
-        // Anything else is the tool's own description.
-        if (line.len > 0 or description.items.len > 0)
-            description.items = @constCast(try join(arena, description.items, line));
+        if (try shield.inlineArgv(arena, trimmed)) |argv| {
+            command = .{ .argv = argv };
+            continue;
+        }
+    }
+
+    // Two properties that would be one variable are a fault in the tool, not
+    // in the call that happens to supply both. Said here, where it is written.
+    for (props.items, 0..) |a, i| {
+        const an = (try envName(arena, a.name)) orelse continue;
+        for (props.items[i + 1 ..]) |b| {
+            const bn = (try envName(arena, b.name)) orelse continue;
+            if (std.mem.eql(u8, an, bn)) return Error.ClashingProperty;
+        }
     }
 
     return .{
         .name = name,
+        .speaks = speaks,
         .description = std.mem.trim(u8, description.items, "\n"),
         .command = command,
-        .locks = locks.items,
+        .shields = shields.items,
         .properties = props.items,
     };
+}
+
+/// The environment a call hands its tool: one variable per scalar that has an
+/// env spelling, the whole call as JSON, and which call it is.
+///
+/// A scalar is a string, a number or a boolean — what a shell can read as a
+/// word. An array or an object has no such spelling and is in `args_var` with
+/// everything else. An argument that was not supplied is unset rather than
+/// empty, which is the whole of what optional means to whatever reads it.
+pub fn callEnv(
+    arena: Allocator,
+    args: std.json.Value,
+    raw_args: []const u8,
+    call_id: []const u8,
+) Allocator.Error![]const api.EnvVar {
+    var out: std.ArrayList(api.EnvVar) = .empty;
+    try out.append(arena, .{ .key = args_var, .value = raw_args });
+    if (call_id.len > 0) try out.append(arena, .{ .key = call_var, .value = call_id });
+
+    if (args != .object) return out.items;
+    var it = args.object.iterator();
+    while (it.next()) |e| {
+        const key = (try envName(arena, e.key_ptr.*)) orelse continue;
+        const value: []const u8 = switch (e.value_ptr.*) {
+            .string => |v| v,
+            .number_string => |v| v,
+            .integer => |v| try std.fmt.allocPrint(arena, "{d}", .{v}),
+            .float => |v| try std.fmt.allocPrint(arena, "{d}", .{v}),
+            .bool => |v| if (v) "true" else "false",
+            // Absent and null are the same absence, and unset is how a script
+            // is told so. An array or an object is in the JSON instead.
+            else => continue,
+        };
+        try out.append(arena, .{ .key = key, .value = value });
+    }
+    return out.items;
 }
 
 fn join(arena: Allocator, a: []const u8, b: []const u8) ![]const u8 {
@@ -117,12 +247,6 @@ fn join(arena: Allocator, a: []const u8, b: []const u8) ![]const u8 {
 }
 
 /// The 🔌 value is wrapped in backticks so it renders as code wherever the
-/// document does. They are presentation, and required.
-fn unwrap(value: []const u8) ![]const u8 {
-    const v = std.mem.trim(u8, value, " \t");
-    if (v.len < 2 or v[0] != '`' or v[v.len - 1] != '`') return Error.BadTemplate;
-    return v[1 .. v.len - 1];
-}
 
 // ------------------------------------------------------------- the template
 
@@ -135,18 +259,12 @@ const close = "}}";
 /// needs, which is why it can never be spliced into a larger string.
 pub fn expand(
     arena: Allocator,
-    template: []const u8,
+    template: []const []const u8,
     args: std.json.Value,
     raw_args: []const u8,
 ) ![]const []const u8 {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, template, .{}) catch
-        return Error.BadTemplate;
-    if (parsed != .array) return Error.BadTemplate;
-
     var out: std.ArrayList([]const u8) = .empty;
-    for (parsed.array.items) |element| {
-        if (element != .string) return Error.BadTemplate;
-        const text = element.string;
+    for (template) |text| {
 
         // `{{{...}}}` is a literal `{{...}}`.
         if (std.mem.startsWith(u8, text, "{{{") and std.mem.endsWith(u8, text, "}}}")) {
@@ -451,23 +569,33 @@ pub fn render(arena: Allocator, mode: Mode, t: Tool) ![]const u8 {
     var buf: std.Io.Writer.Allocating = .init(arena);
     const w = &buf.writer;
 
-    if (t.command.len > 0)
-        try w.print("{s}`{s}`\n", .{ sigil.Sigil.command.text(mode), t.command });
-    if (t.locks.len > 0)
-        try w.print("{s}{s}\n", .{
-            sigil.Sigil.lock.text(mode),
-            try std.mem.join(arena, ", ", t.locks),
-        });
-    for (t.properties) |p| {
-        const s: sigil.Sigil = if (p.required) .package else .optional;
-        try w.print("{s}{s},{s}\n", .{ s.text(mode), p.name, p.type });
-        try writeNested(w, mode, p.description);
-    }
-    // Bare lines, so they must come last: anything after them would be read
-    // as more description rather than as a property.
-    if (t.description.len > 0) {
-        try w.writeAll(t.description);
+    // The description first, because it is what the tool is; then what it
+    // stands inside, then how it runs, then what it takes.
+    if (t.description.len > 0) try writeNested(w, mode, t.description);
+    for (t.shields) |sh| {
+        try w.print("{s}{s}", .{ sigil.Sigil.shield.text(mode), sh.name });
+        if (sh.env_var.len > 0) try w.print(" {s}", .{sh.env_var});
+        for (sh.values) |v| try w.print(" {s}", .{v});
         try w.writeByte('\n');
+    }
+    switch (t.command) {
+        .none => {},
+        .argv => |argv| {
+            for (argv, 0..) |word, i| {
+                if (i > 0) try w.writeByte(' ');
+                try markdown.writeSpan(w, word);
+            }
+            try w.writeByte('\n');
+        },
+        .block => |b| try markdown.writeFence(w, "", b.lang, b.code),
+    }
+    for (t.properties) |p| {
+        try w.print("* {s}{s} {s}\n", .{ p.name, if (p.required) "" else "?", p.type });
+        var it = std.mem.splitScalar(u8, p.description, '\n');
+        while (it.next()) |d| {
+            if (p.description.len == 0) break;
+            try w.print("  {s}\n", .{d});
+        }
     }
     // A content block is lines joined by \n, with no trailing one; the
     // framing belongs to doc.write.
@@ -492,7 +620,7 @@ fn writeNested(w: *std.Io.Writer, mode: Mode, text: []const u8) !void {
 
 // ------------------------------------------------------------- call arguments
 
-/// A call's arguments as 📦 records, one per key, so a saved turn reads as the
+/// A call's arguments as bullets, one per key, so a saved turn reads as the
 /// language rather than as a blob of JSON.
 pub fn renderArgs(arena: Allocator, mode: Mode, args: []const u8) ![]const u8 {
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{}) catch
@@ -500,23 +628,35 @@ pub fn renderArgs(arena: Allocator, mode: Mode, args: []const u8) ![]const u8 {
     if (v != .object) return arena.dupe(u8, args);
 
     var buf: std.Io.Writer.Allocating = .init(arena);
+    const w = &buf.writer;
     var it = v.object.iterator();
-    var first = true;
     while (it.next()) |e| {
-        if (!first) try buf.writer.writeByte('\n');
-        first = false;
-        try buf.writer.print("{s}{s}\n", .{ sigil.Sigil.package.text(mode), e.key_ptr.* });
         var text: std.Io.Writer.Allocating = .init(arena);
         try std.json.Stringify.value(e.value_ptr.*, .{}, &text.writer);
-        // A string goes in as itself: the point of the block is that a human
-        // reads the value, not an escaped copy of it.
+        // A string goes in as itself: the point is that a human reads the
+        // value, not an escaped copy of it.
         const raw = if (e.value_ptr.* == .string) e.value_ptr.*.string else text.written();
-        try writeNested(&buf.writer, mode, raw);
+
+        // One line with no backtick in it fits beside its name. Anything else
+        // needs a block, and a block is the only place a value may hold
+        // whatever it likes.
+        // One line fits beside its name, whatever is in it: a span carries a
+        // backtick by opening with a longer run. Only more than one line
+        // needs a block.
+        if (std.mem.indexOfScalar(u8, raw, '\n') == null and raw.len > 0) {
+            try w.print("* {s} ", .{e.key_ptr.*});
+            try markdown.writeSpan(w, raw);
+            try w.writeByte('\n');
+            continue;
+        }
+        try w.print("* {s}\n", .{e.key_ptr.*});
+        try markdown.writeFence(w, "  ", "", raw);
     }
+    _ = mode;
     return std.mem.trimEnd(u8, buf.written(), "\n");
 }
 
-/// Read 📦 records back into the JSON a provider wants.
+/// Read those bullets back into the JSON a provider wants.
 ///
 /// A value that parses as JSON and is not a string is taken as that; anything
 /// else is the text itself. The one ambiguity is a string that happens to
@@ -524,31 +664,37 @@ pub fn renderArgs(arena: Allocator, mode: Mode, args: []const u8) ![]const u8 {
 /// escaping every value, which would cost the block the readability it exists
 /// for.
 pub fn parseArgs(arena: Allocator, mode: Mode, content: []const u8) ![]const u8 {
-    const quote = doc.quote(mode);
-    const bare = doc.bareQuote(mode);
-
+    _ = mode;
     var obj: std.json.ObjectMap = .empty;
-    var key: ?[]const u8 = null;
-    var val: std.ArrayList(u8) = .empty;
-    var seen: usize = 0;
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        if (std.mem.startsWith(u8, line, quote) or std.mem.eql(u8, line, bare)) {
-            if (key == null) continue;
-            if (seen > 0) try val.append(arena, '\n');
-            if (line.len > bare.len) try val.appendSlice(arena, line[quote.len..]);
-            seen += 1;
+        const trimmed = std.mem.trimStart(u8, line, " \t");
+        if (!std.mem.startsWith(u8, trimmed, "*")) continue;
+
+        const rest = std.mem.trim(u8, trimmed[1..], " \t");
+        // The name runs to the first space, so the value beside it — which is
+        // the whole of the rest — may hold as many as it likes.
+        const cut = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
+        const key = rest[0..cut];
+        if (key.len == 0) continue;
+
+        const after = std.mem.trim(u8, rest[cut..], " \t");
+        if (after.len > 0) {
+            const found = try markdown.spans(arena, after);
+            const value = if (found.len > 0) found[0] else after;
+            try obj.put(arena, key, valueOf(arena, value));
             continue;
         }
-        const m = sigil.match(mode, line) orelse continue;
-        if (m.sigil != .package) continue;
-        if (key) |k| try obj.put(arena, k, valueOf(arena, val.items));
-        key = line[m.len..];
-        val = .empty;
-        seen = 0;
+
+        // Nothing beside it, so the value is the block underneath. A bullet
+        // with neither is a name that was given nothing, which is not the same
+        // as a name given an empty string.
+        const opening = lines.next() orelse break;
+        if (!markdown.opensFence(opening)) continue;
+        const f = try markdown.readFence(arena, opening, &lines);
+        try obj.put(arena, key, valueOf(arena, f.code));
     }
-    if (key) |k| try obj.put(arena, k, valueOf(arena, val.items));
 
     var buf: std.Io.Writer.Allocating = .init(arena);
     try std.json.Stringify.value(std.json.Value{ .object = obj }, .{}, &buf.writer);
@@ -567,7 +713,12 @@ const testing = std.testing;
 
 fn expandTest(arena: Allocator, template: []const u8, json: []const u8) ![]const []const u8 {
     const args = try std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{});
-    return expand(arena, template, args, json);
+    // The tests were written against the JSON spelling a 🔌 used to carry;
+    // the words are what mattered, so they are read out and handed over.
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, template, .{});
+    var argv: std.ArrayList([]const u8) = .empty;
+    for (parsed.array.items) |e| try argv.append(arena, e.string);
+    return expand(arena, argv.items, args, json);
 }
 
 fn expectArgv(got: []const []const u8, want: []const []const u8) !void {
@@ -643,19 +794,21 @@ test "a toolbox reads its template, properties and description" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const t = try parse(a.allocator(), .md, "shell",
-        \\:electric_plug:`["bash", "{{cmd:-c}}"]`
-        \\:lock:jail, no-edit-git
-        \\:package:cmd,string
-        \\> The command to run
-        \\:gift:dir,string
-        \\> Where to run it
-        \\Run a command.
-        \\Carefully.
+        \\`bash` `{{cmd:-c}}`
+        \\:shield:jail
+        \\* cmd string
+        \\  The command to run
+        \\* dir? string
+        \\  Where to run it
+        \\> Run a command.
+        \\> Carefully.
     );
     try testing.expectEqualStrings("shell", t.name);
-    try testing.expectEqualStrings("[\"bash\", \"{{cmd:-c}}\"]", t.command);
+    try testing.expectEqualStrings("bash", t.command.argv[0]);
+    try testing.expectEqualStrings("{{cmd:-c}}", t.command.argv[1]);
     try testing.expectEqualStrings("Run a command.\nCarefully.", t.description);
-    try expectArgv(t.locks, &.{ "jail", "no-edit-git" });
+    try testing.expectEqual(@as(usize, 1), t.shields.len);
+    try testing.expectEqualStrings("jail", t.shields[0].name);
 
     try testing.expectEqual(@as(usize, 2), t.properties.len);
     try testing.expectEqualStrings("cmd", t.properties[0].name);
@@ -669,16 +822,26 @@ test "a toolbox reads the same in either spelling" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    const md = try parse(arena, .md, "x", ":package:cmd,string\n> Desc\nRuns.");
-    const m8 = try parse(arena, .m8, "x", "\u{1F4E6}cmd,string\n\u{2502} Desc\nRuns.");
+    const md = try parse(arena, .md, "x", "* cmd string\n  Desc\n> Runs.");
+    const m8 = try parse(arena, .m8, "x", "* cmd string\n  Desc\n\u{2502} Runs.");
     try testing.expectEqualStrings(md.description, m8.description);
     try testing.expectEqualStrings(md.properties[0].description, m8.properties[0].description);
 }
 
-test "a template must be a backticked JSON array" {
+test "a command is backtick spans, and a line without them is not one" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    try testing.expectError(Error.BadTemplate, parse(a.allocator(), .md, "x", ":electric_plug:[\"no\", \"backticks\"]"));
+    const arena = a.allocator();
+
+    // Backticks are what makes a line a command, so a line without them is
+    // not one and the tool is left as an interface only.
+    const bare = try parse(arena, .md, "x", "bash -c");
+    try testing.expect(bare.command == .none);
+
+    const spans = try parse(arena, .md, "x", "`bash` `-c`");
+    try testing.expectEqual(@as(usize, 2), spans.command.argv.len);
+    try testing.expectEqualStrings("bash", spans.command.argv[0]);
+    try testing.expectEqualStrings("-c", spans.command.argv[1]);
 }
 
 fn schemaOf(arena: Allocator, t: Tool) ![]const u8 {
@@ -693,10 +856,10 @@ test "a flat tool becomes a function declaration" {
     defer a.deinit();
     const arena = a.allocator();
     const t = try parse(arena, .md, "shell",
-        \\:package:cmd,string
-        \\> The command
-        \\:gift:quiet,boolean
-        \\Runs a command.
+        \\* cmd string
+        \\  The command
+        \\* quiet? boolean
+        \\> Runs a command.
     );
     try testing.expectEqualStrings(
         \\{"type":"function","function":{"name":"shell","description":"Runs a command.","parameters":{"type":"object","properties":{"cmd":{"type":"string","description":"The command"},"quiet":{"type":"boolean"}},"required":["cmd"]}}}
@@ -708,11 +871,11 @@ test "enums, arrays and nesting reach the wire" {
     defer a.deinit();
     const arena = a.allocator();
     const t = try parse(arena, .md, "t",
-        \\:package:unit,celsius|fahrenheit
-        \\:package:tags,string[]
-        \\:package:opts,object
-        \\:package:opts.depth,integer
-        \\:gift:opts.name,string
+        \\* unit celsius|fahrenheit
+        \\* tags string[]
+        \\* opts object
+        \\* opts.depth integer
+        \\* opts.name? string
     );
     const got = try schemaOf(arena, t);
     try testing.expect(std.mem.indexOf(u8, got, "\"enum\":[\"celsius\",\"fahrenheit\"]") != null);
@@ -723,15 +886,14 @@ test "enums, arrays and nesting reach the wire" {
     try testing.expect(std.mem.indexOf(u8, got, "\"required\":[\"depth\"]") != null);
 }
 
-test "a tool may not declare a property called lock" {
+test "no property name is reserved, because the prefix already separates them" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    try testing.expectError(
-        Error.ReservedProperty,
-        parse(a.allocator(), .md, "x", ":package:lock,string"),
-    );
-    // Only that exact name; anything else is the tool's own business.
-    _ = try parse(a.allocator(), .md, "x", ":package:locking,string");
+    // `M8_ARG_` is what keeps a model's chosen name away from m8's own and
+    // from the machine's, so there is nothing left to forbid by name.
+    const t = try parse(a.allocator(), .md, "x", "* self string\n* secures string");
+    try testing.expectEqual(@as(usize, 2), t.properties.len);
+    try testing.expectEqualStrings("M8_ARG_SELF", (try envName(a.allocator(), t.properties[0].name)).?);
 }
 
 test "a tool survives being rendered and read back, in either spelling" {
@@ -740,16 +902,16 @@ test "a tool survives being rendered and read back, in either spelling" {
     const arena = a.allocator();
 
     const src =
-        \\:electric_plug:`["m8", "call", "{{with:-w}}", "--", "bash", "{{cmd:-c}}"]`
-        \\:lock:jail, airgap
-        \\:package:cmd,string
-        \\> What to run.
-        \\> Two lines of it.
-        \\:gift:with,check|sandbox
-        \\> Extras.
-        \\:package:opts,object
-        \\:package:opts.depth,integer
-        \\Runs a command.
+        \\`m8` `call` `{{with:-w}}` `--` `bash` `{{cmd:-c}}`
+        \\:shield:jail
+        \\* cmd string
+        \\  What to run.
+        \\  Two lines of it.
+        \\* with? check|sandbox
+        \\  Extras.
+        \\* opts object
+        \\* opts.depth integer
+        \\> Runs a command.
     ;
     const first = try parse(arena, .md, "shell", src);
 
@@ -757,9 +919,10 @@ test "a tool survives being rendered and read back, in either spelling" {
         const again = try parse(arena, mode, "shell", try render(arena, mode, first));
         try testing.expectEqualStrings(first.name, again.name);
         try testing.expectEqualStrings(first.description, again.description);
-        try testing.expectEqualStrings(first.command, again.command);
-        try testing.expectEqual(first.locks.len, again.locks.len);
-        for (first.locks, again.locks) |x, y| try testing.expectEqualStrings(x, y);
+        try testing.expectEqual(first.command.argv.len, again.command.argv.len);
+        for (first.command.argv, again.command.argv) |x, y| try testing.expectEqualStrings(x, y);
+        try testing.expectEqual(first.shields.len, again.shields.len);
+        for (first.shields, again.shields) |x, y| try testing.expectEqualStrings(x.name, y.name);
         try testing.expectEqual(first.properties.len, again.properties.len);
         for (first.properties, again.properties) |x, y| {
             try testing.expectEqualStrings(x.name, y.name);
@@ -770,7 +933,7 @@ test "a tool survives being rendered and read back, in either spelling" {
     }
 }
 
-test "call arguments survive a trip through 📦 records" {
+test "call arguments survive a trip through the document and back" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -787,4 +950,83 @@ test "call arguments survive a trip through 📦 records" {
         try testing.expectEqual(want.object.get("on").?.bool, got.object.get("on").?.bool);
         try testing.expectEqual(@as(usize, 2), got.object.get("deep").?.object.get("a").?.array.items.len);
     }
+}
+
+test "a property has an environment name only when it already is one" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    try testing.expectEqualStrings("M8_ARG_PATTERN", (try envName(arena, "pattern")).?);
+    try testing.expectEqualStrings("M8_ARG_IGNORE_CASE", (try envName(arena, "ignore_case")).?);
+    try testing.expectEqualStrings("M8_ARG_MYARG", (try envName(arena, "myArg")).?);
+
+    // No mangling: a name that is not already an identifier has no variable,
+    // and is read from the JSON instead.
+    for ([_][]const u8{ "opts.a", "dry-run", "2fast", "", "a b" }) |n|
+        try testing.expect((try envName(arena, n)) == null);
+}
+
+test "two properties that would be one variable are refused where they are written" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    try testing.expectError(Error.ClashingProperty, parse(arena, .md, "t",
+        "* myArg string\n* MYARG string\n"));
+
+    // Different variables, so nothing to refuse.
+    _ = try parse(arena, .md, "t", "* myArg string\n* my_arg string\n");
+}
+
+test "a call is handed its arguments named, and all of them as JSON" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const raw =
+        \\{"pattern":"x . ; rm -rf ~","count":3,"deep":true,"tags":["a"],"opts":{"a":1},"skipped":null}
+    ;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, arena, raw, .{});
+    const env = try callEnv(arena, args, raw, "c7");
+
+    const find = struct {
+        fn get(vars: []const api.EnvVar, key: []const u8) ?[]const u8 {
+            for (vars) |v| if (std.mem.eql(u8, v.key, key)) return v.value;
+            return null;
+        }
+    }.get;
+
+    // The value arrives whole and inert: it is never part of any command.
+    try testing.expectEqualStrings("x . ; rm -rf ~", find(env, "M8_ARG_PATTERN").?);
+    try testing.expectEqualStrings("3", find(env, "M8_ARG_COUNT").?);
+    try testing.expectEqualStrings("true", find(env, "M8_ARG_DEEP").?);
+    try testing.expectEqualStrings("c7", find(env, call_var).?);
+    try testing.expectEqualStrings("M8_CALL_ID", call_var);
+    try testing.expectEqualStrings(raw, find(env, args_var).?);
+
+    // Compound values have no env spelling, and null is an absence rather
+    // than an empty string. Both are in the JSON, which is where they read.
+    try testing.expect(find(env, "M8_ARG_TAGS") == null);
+    try testing.expect(find(env, "M8_ARG_OPTS") == null);
+    try testing.expect(find(env, "M8_ARG_SKIPPED") == null);
+}
+
+test "a 🧰 says what it answers in, and says nothing by saying nothing" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const quiet = try parse(arena, .md, "make", "`sh`");
+    try testing.expectEqualStrings("make", quiet.name);
+    try testing.expectEqualStrings("", quiet.speaks);
+
+    const speaks = try parse(arena, .md, "make,m8", "`sh`");
+    try testing.expectEqualStrings("make", speaks.name);
+    try testing.expectEqualStrings("m8", speaks.speaks);
+
+    // Spaces around the field are the writer's, not the value's.
+    const spaced = try parse(arena, .md, "make , m8 ", "`sh`");
+    try testing.expectEqualStrings("make", spaced.name);
+    try testing.expectEqualStrings("m8", spaced.speaks);
 }

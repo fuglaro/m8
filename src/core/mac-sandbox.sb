@@ -76,8 +76,8 @@
 ;; backward-compat hatch. Deny it here, then re-allow below unless hardened.
 (deny mach-lookup (xpc-service-name-prefix ""))
 (deny mach-register (local-name-prefix ""))
-(allow mach-lookup (xpc-service-name-prefix ""))    ;;!! !private !sandbox !jail
-(allow mach-register (local-name-prefix ""))        ;;!! !private !sandbox !jail
+(allow mach-lookup (xpc-service-name-prefix ""))    ;;!! !private
+(allow mach-register (local-name-prefix ""))        ;;!! !private
 
 ;; --- process bootstrap ---
 (allow process-exec)
@@ -114,16 +114,16 @@
 )
 
 ;; --- common executable areas allowed only with softer "contain-reads" ---
-(allow file-read*                     ;;!! !private !sandbox !jail
-  (subpath "/opt/homebrew/bin")       ;;!! !private !sandbox !jail
-  (subpath "/opt/homebrew/lib")       ;;!! !private !sandbox !jail
-  (subpath "/opt/homebrew/Cellar")    ;;!! !private !sandbox !jail
-  (subpath "/usr/local/bin")          ;;!! !private !sandbox !jail
-  (subpath "/usr/local/lib")          ;;!! !private !sandbox !jail
-  (subpath "/Library/Frameworks"))    ;;!! !private !sandbox !jail
+(allow file-read*                     ;;!! !private
+  (subpath "/opt/homebrew/bin")       ;;!! !private
+  (subpath "/opt/homebrew/lib")       ;;!! !private
+  (subpath "/opt/homebrew/Cellar")    ;;!! !private
+  (subpath "/usr/local/bin")          ;;!! !private
+  (subpath "/usr/local/lib")          ;;!! !private
+  (subpath "/Library/Frameworks"))    ;;!! !private
 
-(allow file-read* (subpath "/"))      ;;!! !private !contain-reads !sandbox !jail
-(allow file-write* (subpath "/"))     ;;!! !contain-writes !no-writes !sandbox !jail
+(allow file-read* (subpath "/"))      ;;!! !private !contain-reads
+(allow file-write* (subpath "/"))     ;;!! !contain-writes !no-writes
 
 ;; --- the temp directory ---
 (allow file-read*
@@ -149,10 +149,10 @@
 ;; $ the directory path never matches, a rename carries a whole subtree past
 ;; the check, and the contents arrive already inside.
 (deny file-write* (regex #"(^|/)\.git($|/)"))
-(allow file-write* (regex #"(^|/)\.git($|/)"))          ;;!! !no-edit-git !sandbox !jail
+(allow file-write* (regex #"(^|/)\.git($|/)"))          ;;!! !no-edit-git
 
 (deny file-write* (regex #"(^|/)\.?m8-st8($|/)"))
-(allow file-write* (regex #"(^|/)\.?m8-st8($|/)"))      ;;!! !no-edit-m8-st8 !sandbox !jail
+(allow file-write* (regex #"(^|/)\.?m8-st8($|/)"))      ;;!! !no-edit-m8-st8
 
 ;; Last, so it wins over the allow above, and untagged, so nothing can
 ;; subtract it. core/ decides what a lock means, which is what makes this
@@ -160,15 +160,15 @@
 (deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))
 
 ;; --- non-local internet access ---
-(allow network*)                      ;;!! !airgap !jail
+(allow network*)                      ;;!! !airgap
 
 ;; --- localhost access ---
 (deny network*                        ;; Deny before conditional allow.
   (remote ip "localhost:*")
   (local unix-socket)
   (remote unix-socket))
-(allow network*                       ;;!! !no-loop !sandbox !jail
-  (remote ip "localhost:*")           ;;!! !no-loop !sandbox !jail
-  (local unix-socket)                 ;;!! !no-loop !sandbox !jail
-  (remote unix-socket))               ;;!! !no-loop !sandbox !jail
+(allow network*                       ;;!! !no-loop
+  (remote ip "localhost:*")           ;;!! !no-loop
+  (local unix-socket)                 ;;!! !no-loop
+  (remote unix-socket))               ;;!! !no-loop
 

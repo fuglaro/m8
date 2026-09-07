@@ -41,6 +41,11 @@ pub const Error = error{
     /// file can be shaped like that, since m8 writes a parent that existed
     /// before its child did.
     LineageLoops,
+    /// A 🔝 somewhere other than opening or closing the one fence at the head
+    /// of a file. There is one top or there is none.
+    TopMisplaced,
+    /// A 🔝 opened a top that nothing closed.
+    TopUnclosed,
 };
 
 pub const ExpandError = Error || doc.ParseError || toolbox.Error || std.Io.Writer.Error;
@@ -79,6 +84,42 @@ pub fn names(
     return (try source(arena, io, dirs, name)) != null;
 }
 
+/// Which half of a document a reference asks for. 🧠 wants what the file
+/// says; 📚 wants what it says about itself.
+pub const Part = enum { body, top };
+
+/// A document's two halves. The fence is one sigil opening and closing, at the
+/// head of the file, the way a code fence works — so a reader knows which half
+/// it is in from the first record rather than from the end of the file.
+///
+/// A file with no fence is all body and has no top at all. That is what makes
+/// 📚 naming one yield nothing rather than the whole of it: there is no
+/// advertisement, so nothing is advertised.
+const Split = struct {
+    top: []const doc.Record = &.{},
+    body: []const doc.Record = &.{},
+
+    fn of(records: []const doc.Record) Error!Split {
+        if (records.len == 0 or records[0].sigil != .top) {
+            for (records) |r| if (r.sigil == .top) return Error.TopMisplaced;
+            return .{ .body = records };
+        }
+        for (records[1..], 1..) |r, i| {
+            if (r.sigil != .top) continue;
+            for (records[i + 1 ..]) |later| if (later.sigil == .top) return Error.TopMisplaced;
+            return .{ .top = records[1..i], .body = records[i + 1 ..] };
+        }
+        return Error.TopUnclosed;
+    }
+
+    fn half(s: Split, part: Part) []const doc.Record {
+        return switch (part) {
+            .body => s.body,
+            .top => s.top,
+        };
+    }
+};
+
 /// One document part-read: what it holds, how far through it the walk has
 /// got, and what it has settled on.
 const Frame = struct {
@@ -92,6 +133,8 @@ const Frame = struct {
     name: []const u8 = "",
     /// The first origin anything under it settled on.
     origin: []const u8 = "",
+    /// Which half was asked for, which is also which path it is on.
+    part: Part = .body,
 };
 
 /// Expand `name` into its records.
@@ -104,8 +147,9 @@ pub fn expand(
     const src = (try source(arena, io, dirs, name)) orelse return Error.UnknownAgent;
 
     var diag: doc.Diagnostic = .{};
+    const parsed = try doc.parse(arena, src, &diag);
     return walk(arena, io, dirs, .{
-        .records = try doc.parse(arena, src, &diag),
+        .records = (try Split.of(parsed)).body,
         .mode = doc.detect(src) orelse .md,
         .name = name,
     });
@@ -124,7 +168,7 @@ pub fn expandRecords(
     records: []const doc.Record,
     mode: doc.Mode,
 ) ExpandError!Ledger {
-    return walk(arena, io, dirs, .{ .records = records, .mode = mode });
+    return walk(arena, io, dirs, .{ .records = (try Split.of(records)).body, .mode = mode });
 }
 
 /// Read a document and everything it names, in order.
@@ -148,10 +192,13 @@ fn walk(
 ) ExpandError!Ledger {
     var out: std.ArrayList(doc.Record) = .empty;
     var stack: std.ArrayList(Frame) = .empty;
-    var on_path: std.StringHashMapUnmanaged(void) = .empty;
+    // One path per half. A file's top and its body are disjoint, so a body
+    // that names its own top is a reference and not a loop; the two would be
+    // indistinguishable on one path.
+    var paths: [2]std.StringHashMapUnmanaged(void) = .{ .empty, .empty };
 
     try stack.append(arena, root);
-    if (root.name.len > 0) try on_path.put(arena, root.name, {});
+    if (root.name.len > 0) try paths[@intFromEnum(root.part)].put(arena, root.name, {});
 
     var origin: []const u8 = "";
     while (stack.items.len > 0) {
@@ -161,12 +208,16 @@ fn walk(
         // up, and take it off the path.
         if (top.at == top.records.len) {
             // An authored name is its own origin and never inherits one; a
-            // generated name takes the origin of whatever it continues.
-            const settled = if (top.name.len > 0 and !session.isGenerated(top.name))
+            // generated name takes the origin of whatever it continues. A top
+            // is nobody's origin: it says what a file is for, and a
+            // conversation is never with an advertisement.
+            const settled = if (top.part == .top)
+                ""
+            else if (top.name.len > 0 and !session.isGenerated(top.name))
                 top.name
             else
                 top.origin;
-            if (top.name.len > 0) _ = on_path.remove(top.name);
+            if (top.name.len > 0) _ = paths[@intFromEnum(top.part)].remove(top.name);
             stack.items.len -= 1;
 
             if (stack.items.len == 0) {
@@ -181,35 +232,50 @@ fn walk(
         const r = top.records[top.at];
         top.at += 1;
 
+        // Two sigils reach into another document, and which one it is decides
+        // which half comes back. 🧠 wants what a file says; 📚 wants what it
+        // says about itself. The mark decides at every reference rather than
+        // being inherited, so a top may advertise what it builds on and a body
+        // may pull in a skill's advertisement.
+        //
         // A 🧠 written with the mark names a model and is kept as it is.
         // Anything else names an agent, and only an agent — nothing is looked
         // up to decide which, so a name that is not there is a missing agent
         // rather than a model nobody configured.
-        if (r.sigil != .agent or model.is(r.value)) {
-            try out.append(arena, try canonical(arena, top.mode, r));
-            continue;
-        }
+        const want: Part = switch (r.sigil) {
+            .agent => if (model.is(r.value)) {
+                try out.append(arena, try canonical(arena, top.mode, r));
+                continue;
+            } else .body,
+            .skill => .top,
+            else => {
+                try out.append(arena, try canonical(arena, top.mode, r));
+                continue;
+            },
+        };
 
         // Already on the way here, so following it would be following it
         // again. Which kind it is decides only what to call it: lineage is
         // the turn this one continues, and an inclusion is a mob reaching
         // into a mob.
-        if (on_path.contains(r.value)) return if (session.isGenerated(r.value))
+        if (paths[@intFromEnum(want)].contains(r.value)) return if (session.isGenerated(r.value))
             Error.LineageLoops
         else
             Error.IncludeLoops;
 
         const src = (try source(arena, io, dirs, r.value)) orelse return Error.UnknownAgent;
         var diag: doc.Diagnostic = .{};
+        const parsed = try doc.parse(arena, src, &diag);
         const next: Frame = .{
-            .records = try doc.parse(arena, src, &diag),
+            .records = (try Split.of(parsed)).half(want),
             .mode = doc.detect(src) orelse .md,
             .name = r.value,
+            .part = want,
         };
 
         // Nothing above is read again after this: appending may move the
         // frames, and `top` is a pointer into them.
-        try on_path.put(arena, next.name, {});
+        try paths[@intFromEnum(want)].put(arena, next.name, {});
         try stack.append(arena, next);
     }
 
@@ -422,15 +488,13 @@ test "tool calls stay, and only an unanswered one is still owed" {
         \\#### :brain:/local/tiny
         \\
         \\#### :calling:say,c1
-        \\> :package:text
-        \\> > hi
+        \\> * text `hi`
         \\
         \\#### :receipt:c1
         \\> hi
         \\
         \\#### :calling:say,c2
-        \\> :package:text
-        \\> > bye
+        \\> * text `bye`
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -605,21 +669,29 @@ test "nested content is kept in one spelling and restated for the reader" {
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .call, .value = "say,c1", .content = ":package:text\n> hi" },
+        .{ .sigil = .tool, .value = "say", .content = "> Says a thing.\n:shield:jail\n`say`\n* text string" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
     };
 
-    // A terminal is written the rendered spelling all the way down.
+    // A terminal is written the rendered spelling all the way down: the 🛡️
+    // inside the 🧰 and the quote its description sits behind are both the
+    // reader's, not the file's.
     var buf: std.Io.Writer.Allocating = .init(arena);
     try writeAll(&buf.writer, arena, .m8, &records);
-    try testing.expect(std.mem.indexOf(u8, buf.written(), "\u{1F4E6}text") != null);
-    try testing.expect(std.mem.indexOf(u8, buf.written(), ":package:") == null);
+    try testing.expect(std.mem.indexOf(u8, buf.written(), "\u{1F6E1}\u{FE0F}jail") != null);
+    try testing.expect(std.mem.indexOf(u8, buf.written(), ":shield:") == null);
+    try testing.expect(std.mem.indexOf(u8, buf.written(), "\u{2502} \u{2502} Says a thing.") != null);
+    try testing.expect(std.mem.indexOf(u8, buf.written(), "> ") == null);
 
     // And reading that back gives the canonical spelling again, so what lands
     // in a file is never half one and half the other.
     var diag: doc.Diagnostic = .{};
     const back = try doc.parse(arena, buf.written(), &diag);
-    const same = try canonical(arena, .m8, back[0]);
-    try testing.expectEqualStrings(records[0].content.?, same.content.?);
+    try testing.expectEqual(records.len, back.len);
+    for (records, back) |r, b| {
+        const same = try canonical(arena, .m8, b);
+        try testing.expectEqualStrings(r.content.?, same.content.?);
+    }
 }
 
 test "a name with no mark is an agent, and a missing one is missing" {
@@ -647,4 +719,184 @@ test "a name with no mark is an agent, and a missing one is missing" {
     try testing.expectEqualStrings("team", m.provider);
     try testing.expectEqualStrings("gone", m.name);
     try testing.expectEqualStrings("16", m.get("max_tokens").?);
+}
+
+test "the fence splits a file, and the mark decides which half comes back" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-top");
+    defer f.deinit(arena);
+    try f.agent(arena, "skills/tight-docs.md",
+        \\#### :top:
+        \\
+        \\#### :compass:
+        \\> Load tight-docs when working on documentation.
+        \\
+        \\#### :top:
+        \\
+        \\#### :raising_hand:
+        \\> The skill itself.
+    );
+
+    const dirs = [_][]const u8{f.dir};
+
+    // 🧠 wants what the file says.
+    const body = try expand(arena, f.io, &dirs, "skills/tight-docs");
+    try testing.expectEqual(@as(usize, 1), body.records.len);
+    try testing.expectEqualStrings("The skill itself.", body.records[0].content.?);
+
+    // 📚 wants what it says about itself, and neither half carries the fence.
+    const top = try expandRecords(arena, f.io, &dirs, &.{
+        .{ .sigil = .skill, .value = "skills/tight-docs" },
+    }, .md);
+    try testing.expectEqual(@as(usize, 1), top.records.len);
+    try testing.expectEqual(doc.Sigil.system, top.records[0].sigil);
+    try testing.expectEqualStrings(
+        "Load tight-docs when working on documentation.",
+        top.records[0].content.?,
+    );
+    for (body.records) |r| try testing.expect(r.sigil != .top);
+    for (top.records) |r| try testing.expect(r.sigil != .top);
+}
+
+test "a file with no fence is all body, so naming its top yields nothing" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-notop");
+    defer f.deinit(arena);
+    try f.agent(arena, "plain.md", "#### :compass:\n> All of it.\n");
+
+    const dirs = [_][]const u8{f.dir};
+    const body = try expand(arena, f.io, &dirs, "plain");
+    try testing.expectEqual(@as(usize, 1), body.records.len);
+
+    // There is no advertisement, so nothing is advertised. Not an error and
+    // not the whole file.
+    const top = try expandRecords(arena, f.io, &dirs, &.{
+        .{ .sigil = .skill, .value = "plain" },
+    }, .md);
+    try testing.expectEqual(@as(usize, 0), top.records.len);
+}
+
+test "there is one fence at the head of a file, or there is none" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-badtop");
+    defer f.deinit(arena);
+    try f.agent(arena, "late.md", "#### :compass:\n> First.\n\n#### :top:\n");
+    try f.agent(arena, "unclosed.md", "#### :top:\n\n#### :compass:\n> Forever.\n");
+    try f.agent(arena, "thrice.md",
+        \\#### :top:
+        \\
+        \\#### :top:
+        \\
+        \\#### :compass:
+        \\> Body.
+        \\
+        \\#### :top:
+    );
+
+    const dirs = [_][]const u8{f.dir};
+    try testing.expectError(Error.TopMisplaced, expand(arena, f.io, &dirs, "late"));
+    try testing.expectError(Error.TopUnclosed, expand(arena, f.io, &dirs, "unclosed"));
+    try testing.expectError(Error.TopMisplaced, expand(arena, f.io, &dirs, "thrice"));
+}
+
+test "the mark decides at every reference rather than being inherited" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-topdeep");
+    defer f.deinit(arena);
+    // Its top advertises another skill's top; its body includes an agent's
+    // body. Reaching one never drags in the other.
+    try f.agent(arena, "inner.md",
+        \\#### :top:
+        \\
+        \\#### :compass:
+        \\> Inner advert.
+        \\
+        \\#### :top:
+        \\
+        \\#### :compass:
+        \\> Inner body.
+    );
+    try f.agent(arena, "helper.md", "#### :compass:\n> Helper body.\n");
+    try f.agent(arena, "outer.md",
+        \\#### :top:
+        \\
+        \\#### :books:inner
+        \\
+        \\#### :top:
+        \\
+        \\#### :brain:helper
+    );
+
+    const dirs = [_][]const u8{f.dir};
+    const body = try expand(arena, f.io, &dirs, "outer");
+    try testing.expectEqual(@as(usize, 1), body.records.len);
+    try testing.expectEqualStrings("Helper body.", body.records[0].content.?);
+
+    const top = try expandRecords(arena, f.io, &dirs, &.{
+        .{ .sigil = .skill, .value = "outer" },
+    }, .md);
+    try testing.expectEqual(@as(usize, 1), top.records.len);
+    try testing.expectEqualStrings("Inner advert.", top.records[0].content.?);
+}
+
+test "a top that names its own top is a loop; a body naming it is not" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-toploop");
+    defer f.deinit(arena);
+    try f.agent(arena, "selfish.md",
+        \\#### :top:
+        \\
+        \\#### :books:selfish
+        \\
+        \\#### :top:
+        \\
+        \\#### :compass:
+        \\> Body.
+    );
+    // Disjoint halves, so this one terminates: the body reaches the top and
+    // the top has no way back down.
+    try f.agent(arena, "advertises-itself.md",
+        \\#### :top:
+        \\
+        \\#### :compass:
+        \\> What I am for.
+        \\
+        \\#### :top:
+        \\
+        \\#### :books:advertises-itself
+    );
+
+    const dirs = [_][]const u8{f.dir};
+    try testing.expectError(Error.IncludeLoops, expandRecords(arena, f.io, &dirs, &.{
+        .{ .sigil = .skill, .value = "selfish" },
+    }, .md));
+
+    const ok = try expand(arena, f.io, &dirs, "advertises-itself");
+    try testing.expectEqual(@as(usize, 1), ok.records.len);
+    try testing.expectEqualStrings("What I am for.", ok.records[0].content.?);
 }

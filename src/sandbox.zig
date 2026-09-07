@@ -30,11 +30,15 @@ pub const Restriction = struct {
     kernel: bool = false,
 };
 
-/// Every `-l` value, in the order the help should list them.
+/// Every restriction `m8 shield secure` knows, in the order help lists them.
 ///
-/// `kernel` says the sandbox profile enforces it, so every descendant of a
-/// locked process inherits it. The rest are enforced by m8 itself, at the
-/// point it acts.
+/// Atoms only. `sandbox` and `jail` used to be here too, carrying their own
+/// tags so that resolving stayed one pass — they are compositions in
+/// `core/shields.md` now, which is a place you can read them.
+///
+/// `kernel` says the profile enforces it, so every descendant of the process
+/// inherits it. `contain-env` is the one m8 applies itself, when it builds the
+/// environment rather than passing one on.
 pub const all = [_]Restriction{
     .{ .name = "contain-reads", .kernel = true, .summary = "no reading outside cwd, TMP, system and tool dirs" },
     .{ .name = "private", .kernel = true, .summary = "as above, and tool dirs go too" },
@@ -45,14 +49,6 @@ pub const all = [_]Restriction{
     .{ .name = "no-edit-git", .kernel = true, .summary = "no writing to a .git anywhere" },
     .{ .name = "no-edit-m8-st8", .kernel = true, .summary = "no writing to a config directory anywhere" },
     .{ .name = "contain-env", .summary = "the environment is rebuilt, not inherited" },
-    .{ .name = "deny", .summary = "no tool use at all" },
-    .{ .name = "ask", .summary = "every tool is put to you first; no tty means no" },
-    .{ .name = "freeze-toolbox", .summary = "a tool may not hand back 🧰 🔓 🧠 or 📚" },
-    .{ .name = "sandbox", .kernel = true, .summary = "private + contain-writes + no-loop + no-edit-* + contain-env" },
-    .{ .name = "jail", .kernel = true, .summary = "sandbox, and no internet either" },
-    // Last, and carries a value. `find` returns this entry for any
-    // `agent-check=<agent>`, so it must stay at the end.
-    .{ .name = check_prefix, .summary = "<agent> is asked whether a call looks safe" },
 };
 
 /// Locks the sandbox profile cannot express, and that m8 applies itself.
@@ -60,35 +56,14 @@ pub fn isKernel(name: []const u8) bool {
     return if (find(name)) |r| r.kernel else false;
 }
 
-/// True when `active` calls for the child's environment to be rebuilt.
+/// True when `active` calls for the child's environment to be rebuilt. One
+/// name, because a level that wants it says so in its own composition.
 pub fn containsEnv(active: []const []const u8) bool {
-    for (active) |a| {
-        if (std.mem.eql(u8, a, "contain-env")) return true;
-        if (std.mem.eql(u8, a, "sandbox")) return true;
-        if (std.mem.eql(u8, a, "jail")) return true;
-    }
+    for (active) |a| if (std.mem.eql(u8, a, "contain-env")) return true;
     return false;
 }
 
-/// The one lock that carries a value: `agent-check=reviewer`.
-pub const check_prefix = "agent-check=";
-
-/// The agent a lock set defers to, if any. The last one named wins, which
-/// only matters when a lineage names two — and asking both would still be
-/// subtraction, so this is a simplification rather than a loosening.
-pub fn checker(locks: []const []const u8) ?[]const u8 {
-    var found: ?[]const u8 = null;
-    for (locks) |l| {
-        if (std.mem.startsWith(u8, l, check_prefix)) found = l[check_prefix.len..];
-    }
-    return found;
-}
-
 pub fn find(name: []const u8) ?Restriction {
-    if (std.mem.startsWith(u8, name, check_prefix)) {
-        // An agent has to be named, or there is nothing to ask.
-        return if (name.len > check_prefix.len) all[all.len - 1] else null;
-    }
     for (all) |r| if (std.mem.eql(u8, r.name, name)) return r;
     return null;
 }
@@ -146,6 +121,80 @@ pub fn envPasses(src: []const u8, name: []const u8) bool {
     return false;
 }
 
+/// A directory of this run's own, which is a locked tool's TMPDIR and HOME.
+pub fn makeTmp(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
+    const base = env.get("TMPDIR") orelse "/tmp";
+    var word: [8]u8 = undefined;
+    io.random(&word);
+    var hex: [16]u8 = undefined;
+    _ = std.fmt.bufPrint(&hex, "{x}", .{&word}) catch unreachable;
+    const tmp = try std.fs.path.join(arena, &.{
+        base, try std.fmt.allocPrint(arena, "m8shield-{s}", .{&hex}),
+    });
+    try std.Io.Dir.cwd().createDirPath(io, tmp);
+    return tmp;
+}
+
+/// `sandbox-exec -f <resolved> -D ... -- argv`
+pub fn exec(
+    arena: Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+    argv: []const []const u8,
+    active: []const []const u8,
+    tmp: []const u8,
+) ![]const []const u8 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = try std.process.currentPath(io, &buf);
+    const cwd = try arena.dupe(u8, buf[0..len]);
+    const parent = std.fs.path.dirname(cwd) orelse "/";
+
+    const path = try std.fs.path.join(arena, &.{ tmp, "resolved.sb" });
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = path,
+        .data = try resolve(arena, try profile(arena, io, env), active),
+    });
+
+    var full: std.ArrayList([]const u8) = .empty;
+    try full.appendSlice(arena, &.{
+        "sandbox-exec",
+        "-f",
+        path,
+        "-D",
+        try std.fmt.allocPrint(arena, "CWD={s}", .{cwd}),
+        "-D",
+        try std.fmt.allocPrint(arena, "PARENTWD={s}", .{parent}),
+        "-D",
+        try std.fmt.allocPrint(arena, "TMP={s}", .{tmp}),
+    });
+    try full.appendSlice(arena, argv);
+    return full.items;
+}
+
+/// The environment rebuilt from the allowlist rather than inherited. HOME and
+/// TMPDIR become the run's own directory: somewhere real to write that says
+/// nothing about whose machine this is.
+pub fn contained(
+    arena: Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+    tmp: []const u8,
+) !*const std.process.Environ.Map {
+    const rules = try envAllowed(arena, io, env);
+    var m: std.process.Environ.Map = .init(arena);
+    var it = env.iterator();
+    while (it.next()) |e| {
+        if (envPasses(rules, e.key_ptr.*)) try m.put(e.key_ptr.*, e.value_ptr.*);
+    }
+    if (tmp.len > 0) {
+        try m.put("TMPDIR", tmp);
+        try m.put("HOME", tmp);
+    }
+    const boxed = try arena.create(std.process.Environ.Map);
+    boxed.* = m;
+    return boxed;
+}
+
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
@@ -186,18 +235,6 @@ test "locks only subtract, so combining them commutes" {
     const other = try res(arena, &.{ "airgap", "private" });
     try testing.expectEqualStrings(one, other);
     try testing.expect(one.len < template.len);
-}
-
-test "a level subtracts at least as much as the locks it composes" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-    const jail = try res(arena, &.{"jail"});
-    const parts = try res(arena, &.{
-        "private",     "contain-writes", "no-loop",
-        "airgap",      "no-edit-git",    "no-edit-m8-st8",
-    });
-    try testing.expectEqualStrings(parts, jail);
 }
 
 test "a tampering lock removes the allow, never the deny" {
@@ -247,14 +284,6 @@ test "the env allowlist passes what it names and nothing else" {
     try testing.expect(!envPasses(env_allowed, "AWS_SECRET_ACCESS_KEY"));
     // A comment naming a variable must not act as a rule.
     try testing.expect(!envPasses(env_allowed, "XPC_FLAGS"));
-}
-
-test "contain-env is implied by the levels that include it" {
-    try testing.expect(containsEnv(&.{"contain-env"}));
-    try testing.expect(containsEnv(&.{"sandbox"}));
-    try testing.expect(containsEnv(&.{"jail"}));
-    try testing.expect(!containsEnv(&.{"airgap"}));
-    try testing.expect(!containsEnv(&.{}));
 }
 
 // The tampering rules are worth exercising against the real sandbox: the
@@ -354,18 +383,21 @@ test "a lock leaves ordinary work alone" {
     defer testing.allocator.free(dir);
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
 
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"jail"},
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{ "private", "contain-writes", "no-loop", "airgap" },
         "mkdir -p sub && echo hi > sub/notes.txt && cat sub/notes.txt"));
 }
 
-test "agent-check is found only when it names an agent" {
-    try testing.expect(find("agent-check=reviewer") != null);
-    try testing.expect(find("agent-check=") == null);
-    try testing.expect(find("agent-check") == null);
-    try testing.expectEqualStrings("reviewer", checker(&.{"agent-check=reviewer"}).?);
-    try testing.expect(checker(&.{"jail"}) == null);
-}
+test "the table is atoms, so a level is a composition and not an entry" {
+    // What `jail` means is in core/shields.md, where it can be read and taken
+    // apart. Naming it here would be the same fact in two places.
+    for ([_][]const u8{ "jail", "sandbox", "deny", "ask", "freeze-toolbox", "agent-check=x" }) |n|
+        try testing.expect(find(n) == null);
+    for ([_][]const u8{ "private", "airgap", "contain-env" }) |n|
+        try testing.expect(find(n) != null);
 
-test "a parameterised lock is not a kernel lock" {
-    try testing.expect(!isKernel("agent-check=reviewer"));
+    // Only the environment one is m8's own; the rest are lines in the profile.
+    try testing.expect(!isKernel("contain-env"));
+    try testing.expect(isKernel("airgap"));
+    try testing.expect(containsEnv(&.{"contain-env"}));
+    try testing.expect(!containsEnv(&.{"airgap"}));
 }

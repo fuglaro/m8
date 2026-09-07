@@ -168,8 +168,7 @@ test "a reply in the language streams as it is written" {
         \\> two
         \\
         \\#### :calling:say,c1
-        \\> :package:text
-        \\> > hi
+        \\> * text `hi`
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };

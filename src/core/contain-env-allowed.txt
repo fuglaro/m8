@@ -14,6 +14,14 @@
 # listing them does nothing. A tool gets a real writable home that says
 # nothing about you.
 
+# --- m8's own namespace. Not inherited from a machine so much as said by the
+#     call: M8_ARG_*, M8_ARGS and M8_CALL_ID are how a tool is handed what it
+#     was asked for, and they must survive whatever a lock does to the rest.
+#     Passing the prefix is what keeps that rule here, in the file that decides
+#     what an environment is, rather than as a special case in the code that
+#     builds one ---
+M8_*
+
 # --- finding and running things ---
 PATH
 

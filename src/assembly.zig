@@ -43,6 +43,7 @@ pub fn assemble(
     dirs: []const []const u8,
     name: []const u8,
     named: bool,
+    as: doc.Sigil,
     prompt: []const u8,
     piped: []const u8,
 ) !Assembled {
@@ -52,20 +53,27 @@ pub fn assemble(
     var records: std.ArrayList(doc.Record) = .empty;
 
     var use = name;
-    if (!named and !is_document) use = session.latest;
+    // Only a conversation has a last one. 📚 names a file for what it says
+    // about itself, so there is no falling back to whatever was said before.
+    if (!named and !is_document and as == .agent) use = session.latest;
     if (use.len > 0) {
         // A turn names the turn it continues, never an alias to it: aliases
-        // move, and a turn that named one would become its own ancestor.
-        const target = (try session.deref(arena, io, dirs, use)) orelse use;
+        // move, and a turn that named one would become its own ancestor. A
+        // skill is not a chat and has no alias to follow.
+        const target = if (as == .agent)
+            (try session.deref(arena, io, dirs, use)) orelse use
+        else
+            use;
 
         // Checked here, while the name is still known to have come from the
         // command line, so a typo can be named rather than reported as
         // whatever the ledger made of it. A marked name is a model and is
-        // never looked up.
-        if (!modelform.is(target) and
+        // never looked up — and never a skill, since a model has no file and
+        // so has nothing to say about itself.
+        if ((as == .skill or !modelform.is(target)) and
             !try ledger.names(arena, io, dirs, target)) return error.UnknownAgent;
 
-        try records.append(arena, .{ .sigil = .agent, .value = target });
+        try records.append(arena, .{ .sigil = as, .value = target });
     }
 
     if (is_document) {
@@ -140,7 +148,7 @@ test "nothing piped: the name falls back to the last chat" {
     defer f.deinit(arena);
     const dirs = [_][]const u8{f.dir};
 
-    const got = try assemble(arena, f.io, &dirs, "", false, "hello", "");
+    const got = try assemble(arena, f.io, &dirs, "", false, .agent, "hello", "");
     const r = try sigils(arena, got);
     try testing.expectEqual(@as(usize, 2), r.len);
     // The alias was followed, so the turn will name a turn and not a mover.
@@ -150,11 +158,11 @@ test "nothing piped: the name falls back to the last chat" {
     try testing.expect(!got.said_nothing);
 
     // A name that was typed is used as it is.
-    const named = try assemble(arena, f.io, &dirs, "mathy", true, "hello", "");
+    const named = try assemble(arena, f.io, &dirs, "mathy", true, .agent, "hello", "");
     try testing.expectEqualStrings("mathy", (try sigils(arena, named))[0].value);
 
     // Neither piped nor said is somebody finding out what m8 is.
-    const empty = try assemble(arena, f.io, &dirs, "", false, "", "");
+    const empty = try assemble(arena, f.io, &dirs, "", false, .agent, "", "");
     try testing.expect(empty.said_nothing);
 }
 
@@ -170,7 +178,7 @@ test "an m8 document piped in is the context, so nothing is grafted onto it" {
     const dirs = [_][]const u8{f.dir};
 
     const piped = "#### :brain:/local/tiny\n\n#### :raising_hand:\n> piped\n";
-    const got = try assemble(arena, f.io, &dirs, "", false, "more", piped);
+    const got = try assemble(arena, f.io, &dirs, "", false, .agent, "more", piped);
     const r = try sigils(arena, got);
 
     // No last chat in front of it: 🧠 came from the document itself.
@@ -180,7 +188,7 @@ test "an m8 document piped in is the context, so nothing is grafted onto it" {
     try testing.expectEqualStrings("more", r[2].content.?);
 
     // Named, the name still leads and the document follows it.
-    const with = try assemble(arena, f.io, &dirs, "mathy", true, "", piped);
+    const with = try assemble(arena, f.io, &dirs, "mathy", true, .agent, "", piped);
     const w = try sigils(arena, with);
     try testing.expectEqualStrings("mathy", w[0].value);
     try testing.expectEqualStrings("/local/tiny", w[1].value);
@@ -199,7 +207,7 @@ test "prose piped in joins the prompt rather than becoming its own record" {
     defer f.deinit(arena);
     const dirs = [_][]const u8{f.dir};
 
-    const got = try assemble(arena, f.io, &dirs, "", false, "Summarize:", "line one\nline two\n");
+    const got = try assemble(arena, f.io, &dirs, "", false, .agent, "Summarize:", "line one\nline two\n");
     const r = try sigils(arena, got);
 
     // Prose is not context, so the fallback still applies.
@@ -209,7 +217,7 @@ test "prose piped in joins the prompt rather than becoming its own record" {
     try testing.expectEqualStrings("Summarize:\nline one\nline two", r[1].content.?);
 
     // With no prompt it is the piped text alone.
-    const bare = try assemble(arena, f.io, &dirs, "", false, "", "just this\n");
+    const bare = try assemble(arena, f.io, &dirs, "", false, .agent, "", "just this\n");
     try testing.expectEqualStrings("just this", (try sigils(arena, bare))[1].content.?);
 }
 
@@ -232,6 +240,7 @@ test "a document that opens right and then goes wrong is an error, not a prompt"
         &dirs,
         "",
         false,
+        .agent,
         "",
         "#### :brain:/local/tiny\n\n#### :nosuchsigil:\n",
     ));
@@ -253,12 +262,12 @@ test "a name that was typed is checked here, before it becomes an ordinary 🧠"
     for ([_][]const u8{ "nosuch", "+/nosuch", "=/nosuch", "team/nosuch" }) |n|
         try testing.expectError(
             error.UnknownAgent,
-            assemble(arena, f.io, &dirs, n, true, "hi", ""),
+            assemble(arena, f.io, &dirs, n, true, .agent, "hi", ""),
         );
 
     // A marked name is a model, which is not m8's to know about: it passes
     // through as the 🧠 it is and the provider answers for it.
-    const marked = try assemble(arena, f.io, &dirs, "/local/tiny", true, "hi", "");
+    const marked = try assemble(arena, f.io, &dirs, "/local/tiny", true, .agent, "hi", "");
     try testing.expectEqualStrings("/local/tiny", (try sigils(arena, marked))[0].value);
 
     // The fallback is checked the same way: with no last chat to continue,
@@ -267,6 +276,6 @@ test "a name that was typed is checked here, before it becomes an ordinary 🧠"
     try std.Io.Dir.cwd().createDirPath(f.io, bare);
     try testing.expectError(
         error.UnknownAgent,
-        assemble(arena, f.io, &.{bare}, "", false, "hi", ""),
+        assemble(arena, f.io, &.{bare}, "", false, .agent, "hi", ""),
     );
 }

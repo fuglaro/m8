@@ -184,7 +184,7 @@ Locks change to Shields (Tool Wrappers)
 > `false`
 #### :shield:ask
 > ```bash
-> exec m8 shield ask – “$@”
+> exec m8 shield ask -- "$@"
 > ```
 — the block quote form just defines the shield, it must still be subsequently activated.
 — the block quote form defines wrapper commands for tools.
@@ -195,20 +195,20 @@ Locks change to Shields (Tool Wrappers)
 — multiple shields defined with the same name stack cumulatively.
 — multiple commands stack cumulatively.
 
-#### :shield: deny
-#### :shield: ask
+#### :shield:deny
+#### :shield:ask
 — shield sigils without a block quote  enable the shield without changing its definition.
-— shields like “ask” may be activated last to avoid the user being queried about long shield wrapper prefix lists.
+— shields like "ask" may be activated last to avoid the user being queried about long shield wrapper prefix lists.
 
-#### :shield: filter-toolbox
-> `bash` `-e` `-c` `”$@” | m8 filter out toolbox`
-#### :shield: filter-unlock
-> `bash` `-e` `-c` `”$@” | m8 filter out unlock`
+#### :shield:filter-toolbox
+> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | m8 filter out toolbox`
+#### :shield:filter-unlock
+> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | m8 filter out unlock`
 — filter also filters out entire :brain: sigils if they contain anything filtered out.
 
 #### :shield:secure
 > ```bash
-> exec m8 shield secure “${SECURES}” – “$@”
+> exec m8 shield secure "${SECURES}" -- "$@"
 > ```
 #### :shield:secure SECURES airgap
 #### :shield:secure SECURES no-writes
@@ -224,25 +224,38 @@ Locks change to Shields (Tool Wrappers)
 
 Toolbox syntax changes.
 
-#### :toolbox: tool
+#### :toolbox:tool
 > > DESCRIPTION
 > :shield:ask
 > ```bash
-> … {{ARG1}} {{ARG2}}
+> grep -r "$M8_ARG_PATTERN" .
 > ```
-> * argument type 
->   argument description
+> * pattern string
+>   what to look for
+> * ignore_case? boolean
+>   optional, so unset rather than empty when not supplied
 — first, the blocked quote is the description
 — then, additional shields (no block quote form)
 — then, a code block or inline blocks is the command to run.
-— then arguments as built points (name type then description on new lines)
+— then arguments as bullet points, NAME<?> TYPE, then description on continuation lines.
+— name is up to the first space, type is the rest of the line, so an enum may hold a space.
+— ? on the name carries optional, replacing :package: and :gift:. Type carries [] and | as before.
 — a toolbox inherits all previously activated shields and can activate further shields.
-— {{ARG}} placeholders can be put anywhere and expand inline as a string if placed inside inline code or a code block (`{{ARGS}}`), and expands as separate arguments if placed raw ({{ARGS}}). Placing raw can only be done after an inline code block starts the line.
+— arguments never substitute into the command. Nothing m8 builds ever contains model text.
+— inline code form: {{ARG}} raw expands as separate arguments, one argv element per value.
+— code block form: no placeholders. Arguments arrive in the environment instead, so the block
+  is run verbatim and any language reads them natively.
+— M8_ARG_<NAME> per scalar: the name uppercased, when it is a portable identifier
+  ([A-Za-z_][A-Za-z0-9_]*). Optional and not supplied means unset, not empty.
+— M8_ARGS always carries the whole call as JSON, which is what nested, dotted and [] arguments
+  use. No flattening, no separator to collide with.
+— a name with no portable env spelling gets no scalar var and lives in M8_ARGS only. Two names
+  colliding on one env name is an error when the toolbox is defined, not at call time.
 
-#### :toolbox: tool ENV_VAR appending-value
+#### :toolbox:tool ENV_VAR appending-value
 — similar to shields, toolboxes can have environment variables added with appending values (space separated).
 
-#### :call: tool CALLID
+#### :call:tool CALLID
 > * argument `value`
 > * argument
 >   ```
@@ -255,13 +268,13 @@ Locks are therefore no longer needed as arguments to m8.
 
 CALL_ID is always put into the environment of a tool call, and propagates through contain_env.
 
-m8 call m8 – PROGRAM
+m8 call m8 -- PROGRAM
 — will call a program from the environment that creates m8. :receipt: :green_circle: :no_entry_sign: will have CALL_ID added if they don't already, and :green_circle: :no_entry_sign: will be added if missing.
 
-====
+# ====
 Skills 2.0
 
-#### :toolbox: load_skill
+#### :toolbox:load_skill
 > `m8` `call` `m8` `--` `m8` `load` `@{{MOB}}skills/{{SKILL}}`
 > * SKILL String
 
@@ -277,10 +290,6 @@ Skill file:
 
 New :top: sigil. If the very first sigil of the file being referenced, begins a top header section until the next :top: sigil. Subsequent tops in a single file is an error.
 
-m8 cat … (gives full file)
-m8 top … (gives top only)
-m8 load … (gives bottom only)
-
 @agent and :brain: behaves as load (omitting any top on each file read) 
 ^agent and :books: behaves as top (only giving the top section, if it exists)
 This behaviour recurses through deeper references.
@@ -295,7 +304,11 @@ Spin zmachine off into an isolated subcommand. Z-machine-m8 and do the same for 
 m8-call—
 
 
+# ====
 
+m8 cat … (gives full file)
+m8 top … (gives top only)
+m8 load … (gives bottom only)
 
 # ====
 
@@ -501,7 +514,7 @@ m8 @quick +teamy/
 m8 @review +teamy/
 m8 @thinker +teamy/
 m8 @big ^plan ^manager ??????? +teamy/orchistrator
-m8 +teamy/orchistrator – ‘get everyone to do something cool’
+m8 +teamy/orchistrator -- 'get everyone to do something cool'
 
 m8 @quick @teamA/coder
 m8 @think @teamA/review
@@ -511,14 +524,14 @@ m8 @teamA/ ??? who is the lead??
 Or maybe we keep the argument interface simpler and put the complexity in the mob definition. Certainly anything that can be done there shouldn't be also done in the arguments.
 
 LONG FORM:
-m8 call minion -m {mob} -a {AGENT} [--as CHAT] – {prompt}
-m8 call mate -m {mob} -c {CHAT} [--as CHAT] – {prompt}
+m8 call minion -m {mob} -a {AGENT} [--as CHAT] -- {prompt}
+m8 call mate -m {mob} -c {CHAT} [--as CHAT] -- {prompt}
 
 TOOL: minion
-m8 @{mob}AGENT – “prompt”
+m8 @{mob}AGENT -- "prompt"
 
 TOOL: mate
-m8 +{mob}AGENT – “prompt”
+m8 +{mob}AGENT -- "prompt"
 
 Use minion to reset a peer.
 Use minion to reset yourself.
@@ -547,3 +560,12 @@ Should we add to the default one some basic setups like for claude / openai etc?
 Is that too opinionated?
 There are some Mac commands in there for key access.
 Maybe we just make a folder of example setups.
+
+
+# ====
+Rename CALL_ID with propper prefix M8_CALL_ID
+
+# ====
+
+Consider removing support for inline code line injection of {{ARG}} formats
+now that we went with env pass-ins.

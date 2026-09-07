@@ -629,9 +629,9 @@ test "calls gather onto the turn that made them, ahead of their answers" {
     const records = [_]doc.Record{
         .{ .sigil = .agent, .value = "local/tiny" },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,c1", .content = ":package:text\n> hi" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
         .{ .sigil = .result, .value = "c1", .content = "hi" },
-        .{ .sigil = .call, .value = "say,c2", .content = ":package:text\n> bye" },
+        .{ .sigil = .call, .value = "say,c2", .content = "* text `bye`" },
         .{ .sigil = .failed, .value = "c2", .content = "nope" },
         .{ .sigil = .bot, .content = "Done." },
     };
@@ -679,7 +679,7 @@ test "a request decodes back to a ledger that encodes to the same request" {
         .{ .sigil = .system, .content = "Be brief." },
         .{ .sigil = .user, .content = "Hi." },
         .{ .sigil = .bot, .content = "" },
-        .{ .sigil = .call, .value = "shell,c1", .content = ":package:cmd\n> ls" },
+        .{ .sigil = .call, .value = "shell,c1", .content = "* cmd `ls`" },
         .{ .sigil = .result, .value = "c1", .content = "a\nb" },
     };
     const first = try encode(arena, &records, .{
@@ -722,7 +722,7 @@ test "an answer that arrived late is still written beside its call" {
     // What a run that picked up an owed call leaves behind: the 📲 is history,
     // somebody said something, and only then was it answered.
     const records = [_]doc.Record{
-        .{ .sigil = .call, .value = "say,c2", .content = ":package:text\n> bye" },
+        .{ .sigil = .call, .value = "say,c2", .content = "* text `bye`" },
         .{ .sigil = .user, .content = "Now say done." },
         .{ .sigil = .result, .value = "c2", .content = "bye" },
         .{ .sigil = .bot, .content = "Done." },
@@ -749,7 +749,7 @@ test "a call still owed is written without an answer" {
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .call, .value = "say,c1", .content = ":package:text\n> hi" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
     };
     const body = try encode(arena, &records, .{ .model = "tiny" });
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});

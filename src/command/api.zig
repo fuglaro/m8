@@ -25,13 +25,16 @@ pub const Ctx = struct {
     /// Where the m8 that is running lives, so a provider naming `m8` reaches
     /// this build rather than whichever one is on a PATH, or none at all.
     self: []const u8 = "m8",
-    /// Every lock in force: `-l` on the command line, plus whatever the agent
-    /// carries. Cumulative, and nothing here can loosen what an agent already
-    /// has — a lock only ever removes.
-    locks: []const []const u8 = &.{},
     /// The call this is answering, which names the 🧾 or 🚫 written back.
     /// Empty when a command was run straight from the shell.
     call_id: []const u8 = "",
+    /// What a call hands its tool, in the environment rather than in the
+    /// command. Nothing m8 builds contains model text, so a value can never
+    /// become syntax in whatever runs it.
+    ///
+    /// Added after the environment has been rebuilt, so `contain-env` filters
+    /// what was inherited and never what this call is saying.
+    extra_env: []const EnvVar = &.{},
     /// Arguments after the command name.
     args: []const []const u8,
     /// The incoming document. Empty when nothing was piped in.
@@ -50,6 +53,11 @@ pub const Ctx = struct {
     /// non-interactively rather than to fail.
     tty: ?Tty,
 };
+
+/// One variable handed to a child. Named rather than positional, so a tool
+/// written in any language reads it the way that language already reads its
+/// environment.
+pub const EnvVar = struct { key: []const u8, value: []const u8 };
 
 /// The interaction channel. Separate from `in`/`out` by construction.
 pub const Tty = struct {

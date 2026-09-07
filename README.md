@@ -266,7 +266,7 @@ over state you cannot open.
 ## Commands
 
 ```bash
-m8 [-l LOCKS] [[@AGENT|+CHAT] MSG_CMD|RUN_CMD] [ARGS]
+m8 [[@AGENT|+CHAT|^SKILL] MSG_CMD|RUN_CMD] [ARGS]
 ```
 
 ```bash
@@ -334,6 +334,8 @@ m8 @=/tduyxbutjb -- "Tell me more."
   Agents are identified by their file, so nothing
   declares its own name. `@` is how the command line
   names one; it is not part of the language.
+* `^NAME` names the same file's top instead of its body,
+  which is the 📚 that 🧠 is. See Tops.
 * Names are paths and the folder part is the mob.
   Turns save into `=`, chats into `+`. See Mobs.
 * 🧠 names an agent, unless it is written with a leading `/`,
@@ -462,8 +464,8 @@ say. That is what makes it a projection, and the ledger it
 came from still holds all of it.
 
 Decoding is partial, and hands back something ledger-shaped
-rather than the ledger. A tool comes back without its 🔌 or
-its 🔒 — a model call has no business carrying either, so
+rather than the ledger. A tool comes back without its command or
+its 🛡 — a model call has no business carrying either, so
 their absence on the way home is that rule holding rather
 than a corner missed. A tool read back is an interface, and
 calling one answers with 🚫 rather than running something
@@ -540,17 +542,17 @@ arrived is the one that is read.
 ### Calling
 
 ```bash
-m8 [-l LOCKS] call NAME [ARGS]     an m8 command
-m8 [-l LOCKS] call -- PROG [ARGS]  a program from the environment
+m8 call NAME [ARGS]     an m8 command
+m8 call -- PROG [ARGS]  a program from the environment
 ```
 
-`call` is what 🔌 expands into. `-l` belongs to `m8`
-rather than to `call`, because a lock covers a whole
-run and not one command, and it adds to whatever the
-agent already carries.
+`call` is what a 🧰 expands into. What a command may not
+do is not a flag here: a 🛡 is the process a command
+runs inside, so it is arranged around `call` rather
+than asked about within it.
 
 ```bash
-m8 -l sandbox call -- bash -c "ls"
+m8 shield secure "private airgap" -- bash -c "ls"
 ```
 
 Output is m8: what the program writes becomes a 🧾
@@ -564,7 +566,7 @@ A failure keeps the *last* 8K of what the program
 complained about — the end is where a program says
 why — and marks it `...` when there was more.
 
-`m8 call` on its own prints every lock. See Locks.
+`m8 shield` is what a 🛡 expands into. See Shields.
 
 `call` also reaches m8's own filters and its inbuilt
 tools, which is what `m8 call ask` is: a tool that puts
@@ -580,26 +582,31 @@ Agent definition:
 ▄ 🧠Address, Agent Name or Model
 
 ▄ 🧰Tool Name
-│ 🔌`["cmd", "{{Property Name:--flag}}", "{{Property Name}}"]`
-│ 📦Required Property Name,Type
-│ │ Property Description
-│ 🎁Optional Property Name,Type
-│ │ Property Description
-│ Tool Description
+│ │ Tool Description
+│ 🛡️Shield Name
+│ `cmd` `{{PropertyName:--flag}}` `{{Other}}`
+│ * PropertyName Type
+│   Property Description
+│ * Other? Type
+│   Optional, so ? on the name
 
-▄ 🧰Tool Name
-│ 🔌`["m8", "call", "{{Property Name:-w}}", "--", "{{Property Name}}"]`
-│ 📦Property Name,Enum Val|...
-│ │ Enums have |
-│ 📦Property Name,Type[]
-│ │ Arrays suffix []
-│ 📦Parent Name,object
-│ │ Mandatory Parent Def
-│ 📦Parent Name.Property Name,Type
-│ │ Nested
-│ Tool Description
+▄ 🧰Tool Name,m8
+│ │ Answers in m8 rather than text.
+│ ```bash
+│ echo "$M8_ARG_PROPERTYNAME"
+│ ```
+│ * PropertyName Enum Val|...
+│   Enums have |, and may hold a space
+│ * PropertyName Type[]
+│   Arrays suffix []
+│ * ParentName object
+│   Mandatory Parent Def
+│ * ParentName.PropertyName Type
+│   Nested
 
 ▄ 🔓Allow Tool Name
+
+▄ 🛡️Shield Name
 
 ▄ 🧭
 │ System Prompt
@@ -635,8 +642,12 @@ Query:
 │ Error response
 
 ▄ 📲Called Tool Name,Call ID
-│ 📦Tool Property Name
-│ │ Value encoded as string
+│ * Argument Name `value`
+│ * Argument Name
+│   ```
+│   a value over
+│   more than one line
+│   ```
 
 ▄ 🧾Call ID
 │ Response
@@ -663,6 +674,39 @@ alone. 🧾 without a verdict under it is a tool that
 spoke and was cut off; it still answers the call,
 because running it again to find out how it would
 have ended would do whatever it does a second time.
+
+What a call supplies is a bullet per argument: the name,
+then the value beside it as a code span. Only a value
+over more than one line needs a block underneath,
+indented under its bullet. The closing fence is what
+ends it, so the newline before that fence is framing
+rather than something the value said — which is how a
+value that really does end in one is written as a blank
+line before the close.
+
+Neither form escapes anything, and neither has to.
+Backticks are CommonMark's, so a span opens with a run
+longer than any run inside it and a fence with one at
+least as long as anything it holds:
+
+```
+`` ` ``      a value that is one backtick
+``a`b``      a run ends at a run of its own length
+`  a  `      one space each side is framing, and only one
+```
+
+That last rule is what lets a span start or end with a
+backtick at all, and it costs a value that begins and
+ends with a space an extra one at each end. A value that
+is nothing but spaces is left alone, or a single space
+would have no spelling.
+
+So a human reads the value and not an escaped copy of
+it, and what m8 reads is what the thing rendering the
+document shows. That is the whole reason for taking
+CommonMark's rule rather than a simpler one: the moment
+they differ, a document says one thing to a person and
+another to m8.
 
 Simple example query with definition:
 
@@ -730,7 +774,6 @@ Wrapper scripts in a config folder, for the commands a template cannot say.
 Command that writes the core config defaults for subsequent extension.
 Customisable caps on infinite loop situations like cyclic agent-check or model tool loops.
 Some good templating setups to support AGENTS.md
-Support custom locks no-edit-* like no-edit-git
 How should a user call at tool at a chat.
 
 ## Sigils
@@ -768,25 +811,71 @@ renders markdown renders them. A tty gets `m8`.
 * 💭 thinking -> `:thought_balloon:`
   * 🔏 signature -> `:lock_with_ink_pen:`
 * 📲 call -> `:calling:`
-  * 📦 package -> `:package:`
 * 🧾 result -> `:receipt:`
 * 🟢 ok -> `:green_circle:`
 * 🚫 failed -> `:no_entry_sign:`
 * 📚 skill -> `:books:`
+* 🔝 top -> `:top:`
 * 🧭 system -> `:compass:`
 * 🔓 allow -> `:unlock:`
+* 🛡️ shield -> `:shield:`
+* 🏃 runner -> `:runner:`
 * 🧰 tool -> `:toolbox:`
-  * 🔌 command -> `:electric_plug:`
-  * 📦 required -> `:package:`
-  * 🎁 optional -> `:gift:`
 
-A sigil takes a value, a content block, or both.
+A sigil takes a value, a content block, or both — or, for the
+one that is a fence rather than a record, neither.
 
-* Value only: 🧠 📚 🔓 🔏 🔌 🟢
+* Value only: 🧠 📚 🔓 🔏 🟢
 * Content only: 🙋 🤖 💭 🧭
-* Both: 🧰 📦 🎁 📲 🧾 🚫
+* Both: 🧰 📲 🧾 🚫 🛡️ 🏃
+* Neither: 🔝
+
+### Tops
+
+A file may open with a 🔝 and close it with a second one.
+What is between them is that file's top: what it says
+about itself, rather than what it says.
+
+```m8
+▄ 🔝
+
+▄ 🧭
+│ Load tight-docs when working on documentation.
+
+▄ 🔝
+
+▄ 🧭
+│ Keep every doc comment to one line.
+```
+
+Two sigils reach into another file and the mark decides
+which half comes back. 🧠 wants what the file says; 📚
+wants what it says about itself. On the command line
+those are `@` and `^`.
+
+A file with no 🔝 is all body and has no top at all, so
+📚 naming one yields nothing rather than the whole of
+it. There is no advertisement, so nothing is advertised.
+
+The fence is why it is two sigils and not one closing
+delimiter: a reader knows which half it is in from the
+first record rather than from the end of the file, so a
+top is read without holding a body nobody asked for.
+One 🔝 that nothing closes is an error, and so is one
+anywhere but at the head.
+
+The mark decides at every reference rather than being
+inherited, so a top may advertise what it builds on and
+a body may pull in a skill's advertisement. Neither
+drags in the other, and a 🔝 never reaches a ledger.
 
 ## Types
+
+An argument is a bullet: `* NAME TYPE`, and its
+description on the lines indented under it. The name
+runs to the first space and the type is the rest of the
+line, so the last field may hold one safely and an enum
+keeps whatever spaces its values have.
 
 Type rules compose - `Type[]` covers `object[]`.
 An array `[]` suffix applies to the whole field.
@@ -795,8 +884,8 @@ Nesting is flat dotted paths.
 Parents are always declared, never inferred.
 Arrayness lives only on the parent type
 and children use plain dots.
-Optionality (📦 and 🎁) applies at every depth,
-so an optional object with required children
+Optionality is a `?` on the name, and applies at every
+depth, so an optional object with required children
 is either absent or complete.
 There is no oneOf - a discriminator enum with
 optional fields constrains better and lets the
@@ -805,9 +894,9 @@ rejection.
 
 ## Command Templates
 
-🔌 is how a tool is run: a list of literal strings
-and placeholders, expanded against the JSON of the
-call. The value is wrapped in backticks, so it
+A tool written as an argv — backtick spans, one element
+each — may carry placeholders, expanded against the JSON
+of the call. Each span is wrapped in backticks, so it
 renders as code wherever the document does.
 
 Given `{"with": ["check", "sandbox"], "cmd_str": "echo hi"}`:
@@ -823,13 +912,13 @@ A placeholder is a whole element and expands to as
 many as it needs, so
 
 ```
-["m8", "call", "{{with:-w}}", "--", "bash", "{{cmd_str:-c}}"]
+["runner", "{{with:-w}}", "--", "bash", "{{cmd_str:-c}}"]
 ```
 
 runs
 
 ```
-["m8", "call", "-w", "check", "-w", "sandbox", "--", "bash", "-c", "echo hi"]
+["runner", "-w", "check", "-w", "sandbox", "--", "bash", "-c", "echo hi"]
 ```
 
 The flag is `--` and the key unless you name one.
@@ -857,10 +946,40 @@ An array carries no index. That is the one place
 the shape is lost, and it is what a POSIX command
 wants.
 
-📦 and 🎁 expand alike. They differ only when the
-key is missing: a required one is refused by m8
-before a command is built, an optional one is
-simply left out.
+A required argument and an optional one expand alike.
+They differ only when the key is missing: a required one
+is refused by m8 before a command is built, an optional
+one is simply left out.
+
+None of this applies to a tool written as a fenced
+block, and that is the point of the two forms. A
+placeholder is safe here because it is a whole argv
+element and can never become syntax; substituted into a
+script it would be a command line the model got to
+write. So a block carries no placeholders at all, and
+what the call said reaches it as `M8_ARG_*` — named,
+inert, and read by whatever language the block is in
+the way that language already reads its environment.
+
+```m8
+▄ 🧰search
+│ │ Look for something.
+│ ```bash
+│ grep -r "$M8_ARG_PATTERN" .
+│ ```
+│ * pattern string
+│   what to look for
+```
+
+A scalar arrives as `M8_ARG_<NAME>` when its name is
+already a portable identifier, uppercased. Anything
+nested, dotted or arrayed has no such spelling and is
+in `M8_ARGS`, which always carries the whole call as
+JSON. An argument that was not supplied is unset rather
+than empty, which is the whole of what optional means
+to whatever reads it. `M8_CALL_ID` says which call this
+is, and `M8_SELF` is where the m8 that launched it
+lives.
 
 * `null` and `false` omit the key entirely.
 * `true` emits the flag with no value.
@@ -870,53 +989,123 @@ simply left out.
   and expects a script on the other side that would
   rather read JSON than flags.
 
-## Locks
+## Shields
 
-A lock only ever removes. That is the whole rule,
-and everything else follows from it: any combination
-is safe, the order never matters, and a lock can be
-repeated without meaning anything different.
+A shield is not a program that decides to restrict a
+tool. It is the process the tool runs inside, so it
+holds exactly the tool's authority and there is no
+operation available to it for restoring a capability
+its own parent lacked. Widening is not declined here;
+it is unsayable. That is the same argument a provider
+rests on, one level further down.
+
+Everything follows from it. Restriction is
+intersection, so the permitted set is the same however
+the wrappers stack and a repeat means nothing. A second
+definition of a name adds another wrapper rather than
+replacing one, so a mob you have not read can tighten
+what it was given and can never un-define it.
 
 ```bash
-m8 -l sandbox -l no-edit-git call -- bash -c "ls"
+m8 shield secure "private airgap" -- bash -c "ls"
 ```
 
-One lock per `-l`, repeated — which is what a 🔒
-array expands to through `{{lock:-l}}`.
+### Defining and activating
 
-### Where a lock is written
+With a block it defines; with a value alone it
+activates.
 
 ```m8
-▄ 🔒jail, no-edit-git      the floor for this agent
-▄ 🧰deploy
-│ 🔒airgap                 and this tool as well
+▄ 🛡️deny
+│ `false`
+
+▄ 🛡️deny                   now it is on
 ```
 
-Three places, and they compose one way:
+A definition body holds a command spelled out in
+backticks, a fenced block in some language, or another
+🛡 to stand inside. Any of them may repeat, and all of
+them stack.
+
+```m8
+▄ 🏃bash
+│ `bash` `-c` `{{CODE}}` `bash`
+
+▄ 🛡️ask
+│ ```bash
+│ exec "$M8_SELF" shield ask -- "$@"
+│ ```
+```
+
+A 🏃 is what makes a block runnable: an argv with
+`{{CODE}}` in it. It must be defined before a block
+names it, so a document reads in one pass, and defining
+one twice is an error rather than a question.
+
+Every wrapper is handed the command it wraps as
+arguments, and `M8_SELF` is where this m8 lives — a
+block is a script m8 does not read, so it is given the
+path rather than expected to find one.
+
+Nothing inserts an argv0 for you. `bash -c` binds `$0`
+to the first argument after the script, which is why
+these are written `"$0" "$@"` and why m8 does not try
+to know that on your behalf. A shield author is
+trusted, exactly as a tool author is.
+
+### Activation order
+
+Activation order is wrapping order, and the first is
+furthest out. It decides nothing about what is
+permitted — intersection does not care — and everything
+about what a person is shown, which is why `ask` is
+worth activating last: innermost, it asks about the
+bare command rather than about a stack of prefixes.
+
+### Where a shield is written
+
+```m8
+▄ 🛡️jail                   the floor for this agent
+
+▄ 🧰deploy
+│ 🛡️airgap                 and this tool as well
+```
 
 * **Top level**, in an agent. Cumulative over the
-  lineage — the union of every 🔒 an agent and its
-  includes carry. Inclusion can only tighten.
-* **In a 🧰**, for one tool. The last definition of
-  a name wins, as anywhere else.
-* **`-l` on the command line.** Added to whatever
-  the agent already carries.
+  lineage, and inclusion can only tighten.
+* **In a 🧰**, for one tool, on top of the floor.
 
-The effective set for a tool is the union of the
-floor and the tool's own. Since a union of things
-that subtract is the narrowest of them, nothing
-reachable from a locked agent can be looser than
-the agent.
+There is no third place, and no flag. A lock used to be
+something the command line could add; a shield is
+written down where it applies, and what a run may not
+do is a fact about the agent rather than about how it
+was invoked.
 
-`lock` is a reserved property name. A 🧰 cannot
-declare one and a call cannot supply one, or a model
-could name its own.
+### What m8 ships
 
-### Where a lock is enforced
+`core/shields.md` is an ordinary m8 document, read from
+your own config or from the copy m8 carries. What
+`jail` means is a composition you can read:
 
-Kernel locks are lines in the sandbox profile. Every
-descendant of a locked process inherits them, so
-they hold however deep a tool spawns.
+```m8
+▄ 🛡️sandbox
+│ 🛡️freeze-toolbox
+│ 🛡️private
+│ 🛡️contain-writes
+│ 🛡️no-loop
+│ 🛡️no-edit-git
+│ 🛡️no-edit-m8-st8
+│ 🛡️contain-env
+
+▄ 🛡️jail
+│ 🛡️sandbox
+│ 🛡️airgap
+```
+
+Each of those atoms is `secure` with one more value
+appended to its variable, and `m8 shield secure` turns
+that variable into lines removed from the sandbox
+profile:
 
 ```
 contain-reads    no reading outside cwd, TMP, system and tool dirs
@@ -927,57 +1116,83 @@ airgap           no internet; loopback and unix sockets stay
 no-loop          no loopback or unix sockets; internet stays
 no-edit-git      no writing to a .git anywhere
 no-edit-m8-st8   no writing to a config directory anywhere
-sandbox          private + contain-writes + no-loop
-                 + no-edit-git + no-edit-m8-st8 + contain-env
-jail             sandbox, and no internet either
-```
-
-m8 locks are applied by m8, at the point it acts.
-
-```
 contain-env      the environment is rebuilt, not inherited
-deny             no tool use at all
-ask              every tool is put to you first
-freeze-toolbox   a tool may not hand back 🧰 🔓 🧠 or 📚
-agent-check=A    A is asked whether it looks safe
 ```
 
-Applying at the point of action sounds weaker than
-the kernel, and for these four it is not:
+Those are atoms and the profile knows nothing else. A
+level is a composition in the language, where it can be
+read, overridden or taken apart — and a value `secure`
+does not recognise is refused rather than ignored, so
+not understanding what was asked for is never a reason
+to apply less than was asked for.
 
-* `deny` is self-enforcing. No tools means no child
-  process, so there is nothing to inherit it.
-* `ask` gates the decision where the decision is
-  made. Whatever happens downstream happens because
-  you already said yes to something that could do
-  it. With no terminal there is nobody to ask, and
-  the answer is no.
-* `freeze-toolbox` applies to each m8 as it reads
-  its own tool responses, which is exactly where it
-  belongs, at every depth independently.
-* `contain-env` is applied once, when the child is
-  built, and a child cannot put back what it never
-  received.
+`freeze-toolbox` is a composition too, and shows what
+the mechanism buys. A tool may hand back 🧰 and 🔓 —
+that is how a toolmaker works — and closing that
+channel is four filters rather than a rule:
+
+```m8
+▄ 🛡️freeze-toolbox
+│ 🛡️filter-toolbox
+│ 🛡️filter-unlock
+│ 🛡️filter-brain
+│ 🛡️filter-books
+```
+
+Each is a pipe through `m8 filter out SIGIL`. Including
+an agent or a skill *is* a way to acquire a toolbox, so
+🧠 and 📚 are named alongside 🧰 and 🔓 rather than
+being resolved to see what they happen to carry. What
+is not m8 at all is handed through untouched: most of
+what a tool says is text, and text has no records in it
+to take out.
+
+### The three that could not be written in the shell
+
+Most shields are programs you already have, which is
+why `deny` is `/usr/bin/false` and a filter is a pipe.
+Three need m8 itself:
+
+```bash
+m8 shield secure "RESTRICTIONS" -- CMD   the profile
+m8 shield ask -- CMD                     the person
+m8 shield check AGENT -- CMD             another agent
+```
+
+`ask` puts the command to whoever is at the terminal.
+With no terminal there is nobody to ask, and the answer
+is no — a pipe or a cron job must not be a way of
+skipping the question.
+
+`check` puts the candidate to an agent, which answers
+`allow` or explains itself. Anything else becomes
+`Failed agentic check: <response>`. It is never more
+capable than what invoked it, and nothing has to be
+passed down to make that true: it runs inside every
+shield that was already standing there. A checker reads
+text an attacker may have shaped, so it belongs beside
+`ask` rather than instead of it.
 
 ### Two agents
 
-One that cannot widen, whatever it includes or is
-asked to do:
+One that cannot widen, whatever it includes or is asked
+to do:
 
 ```m8
 ▄ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
 
-▄ 🔒jail, freeze-toolbox
+▄ 🛡️jail
 
 ▄ 🧠team/helpers
 ```
 
-`team/helpers` may define whatever tools it likes.
-They all run jailed, because the floor is a union
-and inclusion cannot subtract from it. Nothing this
-agent is told can add a tool, because a reply is
-never read for definitions and `freeze-toolbox`
-closes the tool response channel too.
+`team/helpers` may define whatever tools and shields it
+likes. They all run jailed, because activating adds and
+defining stacks, and neither can subtract. Nothing this
+agent is told can add a tool, because a reply is never
+read for definitions and `jail` composes
+`freeze-toolbox`, which closes the tool response
+channel too.
 
 One that builds its own:
 
@@ -985,61 +1200,42 @@ One that builds its own:
 ▄ 🧠/local/Ternary-Bonsai-27B-mlx-2bit
 
 ▄ 🧰toolmaker
-│ 🔌`["m8", "call", "--", "make-tool", "{{spec}}"]`
-│ 📦spec,string
-│ │ What the tool should do
-│ Write a new tool and return its definition.
+│ │ Write a new tool and return its definition.
+│ `make-tool` `{{spec}}`
+│ * spec string
+│   What the tool should do
 
 ▄ 🔓toolmaker
 ```
 
-No 🔒 at all, so `toolmaker` may hand back 🧰 and 🔓
-records and they are honoured. The two live happily
-in one config, and neither can become the other.
-
-### The checker
-
-`agent-check=A` puts the candidate to agent `A`,
-which answers `allow` or explains itself. Anything
-else becomes `Failed agentic check: <response>`.
-
-The locks in force are passed through to `A`, so a
-checker is never more capable than what invoked it.
-That is what stops a jailed agent reaching the
-network by talking its own checker into it — and it
-means the jailed-validator pattern, where a checker
-runs the candidate somewhere tighter and reports
-what happened, needs the caller loose enough to
-allow it.
-
-A checker reads text an attacker may have shaped.
-It belongs beside `ask`, not instead of it.
+No 🛡 at all, so `toolmaker` may hand back 🧰 and 🔓
+records and they are honoured. The two live happily in
+one config, and neither can become the other.
 
 ### Thinking it through
 
-* Decide the floor first. A 🔒 at the top of an
-  agent is the only thing that cannot be argued
-  with later.
-* Prefer a level to a list. `sandbox` and `jail`
-  say what they mean and pick up new locks as they
-  are added; a hand-written list does not.
-* Kernel locks survive anything the tool spawns.
-  If a restriction has to hold three processes
-  deep, it needs to be one of those.
-* A mob you include can define tools. That is the
-  point of a mob. Your floor is what makes it safe
-  to include one you have not read.
-* `no-edit-m8-st8` is what stops a tool rewriting
-  the agent that constrains it. Without it, every
-  other lock is advisory as of the next run.
-* `core/` is denied to every locked process, always
-  and untagged, which is what makes the profile
-  safe to override from your own config.
+* Decide the floor first. A 🛡 at the top of an agent
+  is the only thing that cannot be argued with later.
+* Prefer a level to a list. `sandbox` and `jail` say
+  what they mean and pick up whatever is added to their
+  composition; a hand-written list does not.
+* Kernel restrictions survive anything a tool spawns.
+  If something has to hold three processes deep, it
+  needs to be one of those rather than a wrapper the
+  tool could simply not call.
+* A mob you include can define tools and shields. That
+  is the point of a mob. Your floor is what makes it
+  safe to include one you have not read.
+* `no-edit-m8-st8` is what stops a tool rewriting the
+  agent that constrains it. Without it, every other
+  restriction is advisory as of the next run.
+* `core/` is denied to every secured process, always
+  and untagged, which is what makes the profile safe to
+  override from your own config.
 * Read a config directory before working in it. It
-  arrives with a `git clone` like anything else,
-  and it defines what runs — though never what
-  running is allowed to reach, which is `core/`,
-  and yours alone.
+  arrives with a `git clone` like anything else, and it
+  defines what runs — though never what running is
+  allowed to reach, which is `core/`, and yours alone.
 
 ## Configs
 
@@ -1050,7 +1246,7 @@ working directory and searching outwards:
 * `$XDG_CONFIG_HOME/m8-st8/` else `~/.config/m8-st8/`
 
 `core/` is the exception. It holds the files that decide
-what a lock *means* and what a provider *is*, and it is
+what a restriction *means* and what a provider *is*, and it is
 read from your own config only — a project folder arrives
 with a `git clone`, and a provider is a command that runs
 on your machine. Each is a whole-file override of the copy
@@ -1287,7 +1483,7 @@ in `core/`, and is reached as `["my-provider"]`.
 #### Speaking m8
 
 A provider declaring `api: "m8"` is handed the ledger itself
-rather than a projection of it — 🧰 with its 🔌 and its 🔒
+rather than a projection of it — 🧰 with its command and its 🛡
 included — and answers in the same language. It is trusted
 with that because a provider command lives in `core/`, which
 a cloned project cannot reach.
@@ -1297,18 +1493,18 @@ means a shim that forwards what it receives will forward your
 local command lines. A provider speaking m8 is responsible for
 projecting before anything leaves the machine.
 
-#### Locks
+#### Shields
 
-Locks are not applied to a provider command. That is safe
+Shields are not applied to a provider command. That is safe
 rather than generous, and the reason matters:
 
-A lock is a sandbox the child is launched inside, and
+A shield is a process the child is launched inside, and
 `sandbox-exec` is one way — a provider inherits whatever m8 is
 already inside and can never shed it. So the rule only ever
 means m8 adds nothing. A jailed agent's tool that reaches a
 provider is still jailed, because it is a descendant of a
 jailed process; what the rule buys is that a jailed *agent*
-can still reach its own model, since an agent's locks are
+can still reach its own model, since an agent's shields are
 applied to its tools rather than to m8.
 
 Trust is held where the command is written down. `core/` is

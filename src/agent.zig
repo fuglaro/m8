@@ -14,10 +14,11 @@ const doc = @import("m8/doc.zig");
 const ledger = @import("ledger.zig");
 const model = @import("m8/model.zig");
 const toolbox = @import("toolbox.zig");
+const shield = @import("shield.zig");
 
 pub const Error = error{ NoModel, NoProvider };
 
-pub const LoadError = Error || ledger.ExpandError;
+pub const LoadError = Error || ledger.ExpandError || shield.Error;
 
 pub const Definition = struct {
     name: []const u8 = "",
@@ -29,15 +30,21 @@ pub const Definition = struct {
     /// The model's parameters, in the api's own vocabulary. m8 translates
     /// none of them; they go out as written.
     params: []const model.Param = &.{},
-    /// Every 🔒 in the ledger. Cumulative rather than overriding: a lock only
-    /// ever removes, so a union is the narrowest of the set and including
-    /// something can tighten but never widen.
-    locks: []const []const u8 = &.{},
     /// Every 🧰, in the order met. A later definition of a name wins, which is
     /// settled in `offer` rather than here.
     tools: []const toolbox.Tool = &.{},
     /// Every 🔓. A tool is offered to the model only if it is named here.
     allowed: []const []const u8 = &.{},
+    /// Every 🛡 that carried a block. Cumulative like locks and for the same
+    /// reason: a second definition of a name stacks a wrapper, so including
+    /// something can tighten and can never un-define.
+    shields: []const shield.Definition = &.{},
+    /// Every 🛡 that carried a value alone, in the order met. Activation order
+    /// is wrapping order.
+    active: []const shield.Activation = &.{},
+    /// Every 🏃, which a code block's language names. Defined before use, so
+    /// one forward pass is the whole of resolving them.
+    runners: []const shield.Runner = &.{},
 };
 
 /// Read a ledger and project it.
@@ -60,7 +67,6 @@ pub fn load(
 /// line instead, and only the caller knows whether that happened.
 pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definition {
     var def: Definition = .{};
-    var locks: std.ArrayList([]const u8) = .empty;
     var tools: std.ArrayList(toolbox.Tool) = .empty;
     var allowed: std.ArrayList([]const u8) = .empty;
 
@@ -76,15 +82,6 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
             }
         },
 
-        // Comma separated, the same spelling `-l` takes.
-        .lock => {
-            var it = std.mem.splitScalar(u8, r.value, ',');
-            while (it.next()) |one| {
-                const l = std.mem.trim(u8, one, " \t");
-                if (l.len > 0) try add(arena, &locks, l);
-            }
-        },
-
         // A ledger's nested content is canonically the file spelling.
         .tool => try tools.append(arena, try toolbox.parse(arena, .md, r.value, r.content orelse "")),
 
@@ -93,9 +90,12 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
         else => {},
     };
 
-    def.locks = locks.items;
     def.tools = tools.items;
     def.allowed = allowed.items;
+    const set = try shield.project(arena, .md, records);
+    def.shields = set.defs;
+    def.active = set.active;
+    def.runners = set.runners;
     return def;
 }
 
@@ -148,8 +148,8 @@ const Fixture = struct {
     }
 };
 
-fn hasLock(d: Definition, name: []const u8) bool {
-    for (d.locks) |l| if (std.mem.eql(u8, l, name)) return true;
+fn hasShield(d: Definition, name: []const u8) bool {
+    for (d.active) |a| if (std.mem.eql(u8, a.name, name)) return true;
     return false;
 }
 
@@ -165,12 +165,12 @@ test "a definition yields its model, locks and tools" {
     try f.agent(arena, "mathy.md",
         \\#### :brain:/local/tiny
         \\
-        \\#### :lock:jail
+        \\#### :shield:jail
         \\
         \\#### :toolbox:say
-        \\> :electric_plug:`["echo", "{{text:}}"]`
-        \\> :package:text,string
-        \\> Echoes.
+        \\> `echo` `{{text:}}`
+        \\> * text string
+        \\> > Echoes.
         \\
         \\#### :unlock:say
         \\
@@ -183,13 +183,13 @@ test "a definition yields its model, locks and tools" {
     try testing.expectEqualStrings("local", d.provider);
     try testing.expectEqualStrings("tiny", d.model);
     try testing.expectEqualStrings("mathy", d.origin);
-    try testing.expect(hasLock(d, "jail"));
+    try testing.expect(hasShield(d, "jail"));
     try testing.expectEqual(@as(usize, 1), d.tools.len);
     try testing.expectEqualStrings("say", d.tools[0].name);
     try testing.expectEqual(@as(usize, 1), (try offer(arena, d)).len);
 }
 
-test "locks are the union over the lineage, so including cannot widen" {
+test "shields accumulate over the lineage, so including cannot widen" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -198,23 +198,24 @@ test "locks are the union over the lineage, so including cannot widen" {
 
     const f = try Fixture.init(arena, &threaded, "m8-agent-union");
     defer f.deinit(arena);
-    // The included agent carries a lock and is named last, which is where an
-    // override would put it if locks overrode rather than accumulated.
-    try f.agent(arena, "helper.md", "#### :brain:/local/tiny\n\n#### :lock:airgap\n");
+    // The included agent activates one and is named last, which is where an
+    // override would put it if activation replaced rather than accumulated.
+    try f.agent(arena, "helper.md", "#### :brain:/local/tiny\n\n#### :shield:airgap\n");
     try f.agent(arena, "outer.md",
         \\#### :brain:/local/tiny
         \\
-        \\#### :lock:no-edit-git, no-edit-git
+        \\#### :shield:no-edit-git
         \\
         \\#### :brain:helper
     );
 
     const dirs = [_][]const u8{f.dir};
     const d = try load(arena, f.io, &dirs, "outer");
-    try testing.expect(hasLock(d, "no-edit-git"));
-    try testing.expect(hasLock(d, "airgap"));
-    // A repeat is still one lock.
-    try testing.expectEqual(@as(usize, 2), d.locks.len);
+    try testing.expect(hasShield(d, "no-edit-git"));
+    try testing.expect(hasShield(d, "airgap"));
+    // Activation order is wrapping order, and the outer one is further out.
+    try testing.expectEqualStrings("no-edit-git", d.active[0].name);
+    try testing.expectEqualStrings("airgap", d.active[1].name);
 }
 
 test "a later definition of a tool name is the one offered" {
@@ -230,7 +231,7 @@ test "a later definition of a tool name is the one offered" {
         \\#### :brain:/local/tiny
         \\
         \\#### :toolbox:say
-        \\> :electric_plug:`["echo", "base"]`
+        \\> `echo` `base`
         \\
         \\#### :unlock:say
     );
@@ -238,14 +239,14 @@ test "a later definition of a tool name is the one offered" {
         \\#### :brain:base
         \\
         \\#### :toolbox:say
-        \\> :electric_plug:`["echo", "outer"]`
+        \\> `echo` `outer`
     );
 
     const dirs = [_][]const u8{f.dir};
     const d = try load(arena, f.io, &dirs, "outer");
     const offered = try offer(arena, d);
     try testing.expectEqual(@as(usize, 1), offered.len);
-    try testing.expectEqualStrings("[\"echo\", \"outer\"]", offered[0].command);
+    try testing.expectEqualStrings("outer", offered[0].command.argv[1]);
 }
 
 test "an unknown agent and a missing model are told apart" {

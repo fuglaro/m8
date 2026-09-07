@@ -1,6 +1,6 @@
 //! m8 — a composable shell harness.
 //!
-//!     m8 [-l LOCKS] [[@AGENT|+CHAT] MSG_CMD|RUN_CMD] [ARGS]
+//!     m8 [[@AGENT|+CHAT|^SKILL] MSG_CMD|RUN_CMD] [ARGS]
 //!
 //! `@` is how the command line names an agent; it is not part of the language.
 //! Every turn is saved as a new agent in `=` and its name printed, so a saved
@@ -38,17 +38,18 @@ const assembly = @import("assembly.zig");
 const ledger = @import("ledger.zig");
 const provider = @import("provider.zig");
 const session = @import("session.zig");
-const sandbox = @import("sandbox.zig");
 const doc = @import("m8/doc.zig");
 const help = @import("command/help.zig");
 
 comptime {
     _ = @import("m8/sigil.zig");
+    _ = @import("m8/markdown.zig");
     _ = @import("m8/doc.zig");
     _ = @import("m8/model.zig");
     _ = @import("session.zig");
     _ = @import("sandbox.zig");
     _ = @import("toolbox.zig");
+    _ = @import("shield.zig");
     _ = @import("provider.zig");
     _ = @import("agent.zig");
     _ = @import("ledger.zig");
@@ -89,38 +90,26 @@ pub fn main(init: std.process.Init) !u8 {
 
     var rest = args;
 
-    // `-l` sits before the name because it covers the whole run, not one
-    // command. It adds to whatever an agent already carries and can never
-    // take away, since a lock only ever removes.
-    //
-    // One lock per flag, repeated — which is what a 🔒 array expands to
-    // through `{{lock:-l}}`, and what any other argv would do. The comma list
-    // belongs to the sigil value, where `,` is the field separator; argv has
-    // its own idiom and this is it.
-    var locks: std.ArrayList([]const u8) = .empty;
-    while (rest.len >= 2 and (std.mem.eql(u8, rest[0], "-l") or std.mem.eql(u8, rest[0], "--lock"))) {
-        const lock = rest[1];
-        if (sandbox.find(lock) == null) {
-            try err.print("m8: no lock named '{s}'\n", .{lock});
-            if (std.mem.indexOfScalar(u8, lock, ',') != null)
-                try err.writeAll("m8: one lock per -l, repeat the flag\n");
-            try err.flush();
-            return 1;
-        }
-        try locks.append(arena, lock);
-        rest = rest[2..];
-    }
-
     // A name, then a command, then that command's arguments. Nothing is
     // guessed: a name is written `@x` or `+x`, and everything after a command
     // belongs to it — including a prompt, since `--` is a command too.
     var name: []const u8 = "";
     var named = false;
+    // Which half of what it names. `@` and `+` want what a file says; `^`
+    // wants what it says about itself, which is the same distinction 🧠 and
+    // 📚 carry in the language. The mark is the whole of it — nothing is
+    // looked up to decide.
+    var as: doc.Sigil = .agent;
     if (rest.len > 0) {
         const word = rest[0];
         if (std.mem.startsWith(u8, word, "@")) {
             name = word[1..];
             named = true;
+            rest = rest[1..];
+        } else if (std.mem.startsWith(u8, word, "^")) {
+            name = word[1..];
+            named = true;
+            as = .skill;
             rest = rest[1..];
         } else if (std.mem.startsWith(u8, word, session.alias)) {
             name = try std.fmt.allocPrint(arena, "{s}/{s}", .{
@@ -187,7 +176,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     const dirs = try config.discover(arena, io, init.environ_map);
 
-    const assembled = gather(io, arena, dirs, name, named, prompt, cmd.takes) catch |e| {
+    const assembled = gather(io, arena, dirs, name, named, as, prompt, cmd.takes) catch |e| {
         switch (e) {
             // Only the command line's own name reaches here; anything inside a
             // ledger is the command's business.
@@ -208,7 +197,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     }
 
-    return runCommand(init, io, arena, cmd, cmd_args, locks.items, assembled.document, self, out, err);
+    return runCommand(init, io, arena, cmd, cmd_args, assembled.document, self, out, err);
 }
 
 /// Read what this kind of command is handed.
@@ -218,6 +207,7 @@ fn gather(
     dirs: []const []const u8,
     name: []const u8,
     named: bool,
+    as: doc.Sigil,
     prompt: []const u8,
     takes: command.Takes,
 ) !assembly.Assembled {
@@ -236,6 +226,7 @@ fn gather(
             dirs,
             name,
             named,
+            as,
             prompt,
             try command.api.readDocument(io, arena, &in_buf),
         ),
@@ -249,7 +240,6 @@ fn runCommand(
     arena: std.mem.Allocator,
     c: command.Command,
     args: []const []const u8,
-    locks: []const []const u8,
     input: []const u8,
     self: []const u8,
     out: *std.Io.Writer,
@@ -264,7 +254,6 @@ fn runCommand(
         .mode = if (std.Io.File.stdout().isTty(io) catch false) .m8 else .md,
         .env = init.environ_map,
         .self = self,
-        .locks = locks,
         .args = args,
         .in = input,
         .out = out,
@@ -280,6 +269,12 @@ fn runCommand(
             ),
             error.LineageLoops => try err.writeAll(
                 "m8: a turn in that chat names one that leads back to it\n",
+            ),
+            error.TopMisplaced => try err.writeAll(
+                "m8: a top opens and closes at the head of a file, or there is none\n",
+            ),
+            error.TopUnclosed => try err.writeAll(
+                "m8: a top was opened and nothing closed it\n",
             ),
             error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
             error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),

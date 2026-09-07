@@ -31,6 +31,8 @@ pub const all = [_]Command{
     @import("command/parse.zig").command,
     @import("command/send.zig").command,
     @import("command/call.zig").command,
+    @import("command/shield.zig").command,
+    @import("command/filter.zig").command,
     @import("command/providers.zig").command,
     @import("command/help.zig").command,
 };

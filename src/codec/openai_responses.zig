@@ -775,7 +775,7 @@ test "the system prompt is a field, and the rest is the ledger in its own order"
         .{ .sigil = .system, .content = "Be brief." },
         .{ .sigil = .system, .content = "Be kind." },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,fc_1", .content = ":package:text\n> hi" },
+        .{ .sigil = .call, .value = "say,fc_1", .content = "* text `hi`" },
         .{ .sigil = .result, .value = "fc_1", .content = "hi" },
         .{ .sigil = .bot, .content = "Done." },
     };
@@ -806,7 +806,7 @@ test "a call answered twice is one output, and a failure keeps only what it said
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .call, .value = "say,fc_1", .content = ":package:text\n> hi" },
+        .{ .sigil = .call, .value = "say,fc_1", .content = "* text `hi`" },
         .{ .sigil = .result, .value = "fc_1", .content = "part one" },
         .{ .sigil = .failed, .value = "fc_1", .content = "nope" },
     };
