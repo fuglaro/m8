@@ -78,6 +78,11 @@ pub const Tool = struct {
     /// Further 🛡 this tool stands inside, on top of whatever the agent
     /// already activated. It can only add — which is the whole rule.
     shields: []const shield.Activation = &.{},
+    /// A variable this tool adds to what its call is handed, from the value's
+    /// last fields. The same shape a 🛡 uses, for the same reason: something a
+    /// definition says once rather than a call having to carry it.
+    env_var: []const u8 = "",
+    env_values: []const []const u8 = &.{},
     properties: []const Property = &.{},
 };
 
@@ -130,9 +135,20 @@ fn property(arena: Allocator, rest: []const u8) !Property {
 
 /// Parse the content of a 🧰 whose value is `NAME` or `NAME,FORMAT`.
 pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const u8) !Tool {
+    // `NAME`, `NAME,FORMAT`, and either of those followed by `VAR value...`.
+    // The comma binds first and says what it answers in; whatever spaces are
+    // left carry a variable and what to append to it, the shape a 🛡 has.
     const at = std.mem.indexOfScalar(u8, header, ',');
-    const name = std.mem.trim(u8, if (at) |i| header[0..i] else header, " \t");
-    const speaks = if (at) |i| std.mem.trim(u8, header[i + 1 ..], " \t") else "";
+    var rest = std.mem.tokenizeAny(u8, if (at) |i| header[i + 1 ..] else header, " \t");
+    const name = if (at) |i|
+        std.mem.trim(u8, header[0..i], " \t")
+    else
+        rest.next() orelse "";
+    const speaks = if (at == null) "" else rest.next() orelse "";
+
+    const env_var = rest.next() orelse "";
+    var env_values: std.ArrayList([]const u8) = .empty;
+    while (rest.next()) |v| try env_values.append(arena, v);
     const quote = doc.quote(mode);
     const bare = doc.bareQuote(mode);
 
@@ -198,6 +214,8 @@ pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const 
     return .{
         .name = name,
         .speaks = speaks,
+        .env_var = env_var,
+        .env_values = env_values.items,
         .description = std.mem.trim(u8, description.items, "\n"),
         .command = command,
         .shields = shields.items,
@@ -1029,4 +1047,28 @@ test "a 🧰 says what it answers in, and says nothing by saying nothing" {
     const spaced = try parse(arena, .md, "make , m8 ", "`sh`");
     try testing.expectEqualStrings("make", spaced.name);
     try testing.expectEqualStrings("m8", spaced.speaks);
+}
+
+test "a 🧰 may add a variable of its own, after whatever it answers in" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const both = try parse(arena, .md, "make,m8 SECURES airgap no-writes", "`sh`");
+    try testing.expectEqualStrings("make", both.name);
+    try testing.expectEqualStrings("m8", both.speaks);
+    try testing.expectEqualStrings("SECURES", both.env_var);
+    try testing.expectEqual(@as(usize, 2), both.env_values.len);
+    try testing.expectEqualStrings("no-writes", both.env_values[1]);
+
+    // Without the comma there is nothing it answers in, and the spaces still
+    // carry a variable.
+    const plain = try parse(arena, .md, "make LEVEL loud", "`sh`");
+    try testing.expectEqualStrings("make", plain.name);
+    try testing.expectEqualStrings("", plain.speaks);
+    try testing.expectEqualStrings("LEVEL", plain.env_var);
+
+    const bare = try parse(arena, .md, "make", "`sh`");
+    try testing.expectEqualStrings("make", bare.name);
+    try testing.expectEqualStrings("", bare.env_var);
 }

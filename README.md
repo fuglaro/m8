@@ -34,6 +34,23 @@ Four things make it different:
   and talks to the user on `/dev/tty`, so it stays
   in the pipeline even while it is interactive.
 
+Where things are:
+
+* **Why** — what m8 is for, and what has already been
+  proved by somebody else.
+* **Commands** — the command line, assembling a ledger,
+  encoding, calling.
+* **Language and Schema**, **Sigils**, **Types**,
+  **Command Templates** — the format, in enough detail
+  to write a parser from.
+* **Shields** — what a tool runs inside.
+* **Configs** — where agents, mobs, models and providers
+  live.
+* [docs/providers.md](docs/providers.md) — setting up
+  oMLX, Anthropic and a ChatGPT plan.
+* [src/zmachine/README.md](src/zmachine/README.md) — the
+  seam between a virtual machine and a provider.
+
 ## Why
 
 The conversation is the artifact. The harness, the
@@ -246,22 +263,24 @@ same place.
 
 Three things are settled, and m8 joins them rather than
 relitigating them.
-[`SKILL.md`](https://anomity.ai/blog/agent-skills-open-standard-adoption-governance/)
-went open standard in December 2025 and had 16+ adopters
-by March 2026. A skill is a folder with frontmatter, and
-a mob is already a folder. The
-[2026-07-28 MCP spec](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
-took tool schemas to full JSON Schema 2020-12, and MCP
-went to the Linux Foundation, so 🧰 is generated from an
-MCP server rather than authored against one. That is
-worth doing for its own sake as well: one study measured
-MCP integration inflating input tokens
-[236x while dropping accuracy 9.5%](https://arxiv.org/html/2508.12566v1),
-so rendering those tools into something terse is a
-contribution. And forking shipped in a mass-market
-product in June 2026, which makes branching table stakes
-rather than a differentiator. It is still a menu command
-over state you cannot open.
+
+* [`SKILL.md`](https://anomity.ai/blog/agent-skills-open-standard-adoption-governance/)
+  went open standard in December 2025 and had 16+
+  adopters by March 2026. A skill is a folder with
+  frontmatter, and a mob is already a folder.
+* The [2026-07-28 MCP spec](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
+  took tool schemas to full JSON Schema 2020-12, and MCP
+  went to the Linux Foundation, so 🧰 is generated from
+  an MCP server rather than authored against one. Worth
+  doing for its own sake as well: one study measured MCP
+  integration inflating input tokens
+  [236x while dropping accuracy 9.5%](https://arxiv.org/html/2508.12566v1),
+  so rendering those tools into something terse is a
+  contribution.
+* Forking shipped in a mass-market product in June 2026,
+  which makes branching table stakes rather than a
+  differentiator. It is still a menu command over state
+  you cannot open.
 
 ## Commands
 
@@ -766,15 +785,19 @@ A \r immediately before a \n is stripped, exactly
 one, so \r\r\n ends content in a literal \r.
 
 ### TODO: Consider the following.
-Local Wikipedia search with vector database...
-Native Functions.
-Tools responding with text response.
-MCP output schema.
-Wrapper scripts in a config folder, for the commands a template cannot say.
-Command that writes the core config defaults for subsequent extension.
-Customisable caps on infinite loop situations like cyclic agent-check or model tool loops.
-Some good templating setups to support AGENTS.md
-How should a user call at tool at a chat.
+
+* Local Wikipedia search with a vector database.
+* Native functions.
+* Tools responding with a text response.
+* MCP output schema.
+* Wrapper scripts in a config folder, for the commands a
+  template cannot say.
+* A command that writes the core config defaults, for
+  extending afterwards.
+* Customisable caps on loops that do not end — a cyclic
+  agent check, or a model calling tools forever.
+* Templating setups that support AGENTS.md.
+* How a person calls a tool at a chat.
 
 ## Sigils
 
@@ -877,20 +900,21 @@ runs to the first space and the type is the rest of the
 line, so the last field may hold one safely and an enum
 keeps whatever spaces its values have.
 
-Type rules compose - `Type[]` covers `object[]`.
-An array `[]` suffix applies to the whole field.
-Enum values cannot contain a `|`.
-Nesting is flat dotted paths.
-Parents are always declared, never inferred.
-Arrayness lives only on the parent type
-and children use plain dots.
-Optionality is a `?` on the name, and applies at every
-depth, so an optional object with required children
-is either absent or complete.
-There is no oneOf - a discriminator enum with
-optional fields constrains better and lets the
-tool return a real error instead of a schema
-rejection.
+Type rules compose, so `Type[]` covers `object[]`.
+
+* An array `[]` suffix applies to the whole field, and
+  arrayness lives only on the parent type — children use
+  plain dots.
+* Enum values cannot contain a `|`.
+* Nesting is flat dotted paths, and parents are always
+  declared, never inferred.
+* Optionality is a `?` on the name and applies at every
+  depth, so an optional object with required children is
+  either absent or complete.
+
+There is no oneOf. A discriminator enum with optional
+fields constrains better, and lets the tool return a real
+error instead of a schema rejection.
 
 ## Command Templates
 
@@ -971,15 +995,20 @@ the way that language already reads its environment.
 │   what to look for
 ```
 
-A scalar arrives as `M8_ARG_<NAME>` when its name is
-already a portable identifier, uppercased. Anything
-nested, dotted or arrayed has no such spelling and is
-in `M8_ARGS`, which always carries the whole call as
-JSON. An argument that was not supplied is unset rather
-than empty, which is the whole of what optional means
-to whatever reads it. `M8_CALL_ID` says which call this
-is, and `M8_SELF` is where the m8 that launched it
-lives.
+What a block is handed:
+
+* `M8_ARG_<NAME>` per scalar, the name uppercased, when
+  it is already a portable identifier.
+* `M8_ARGS`, always, carrying the whole call as JSON.
+  Anything nested, dotted or arrayed has no env spelling
+  of its own and lives here rather than in a mangled
+  variable that might collide.
+* `M8_CALL_ID`, which call this is.
+* `M8_SELF`, where the m8 that launched it lives.
+
+An argument that was not supplied is unset rather than
+empty, which is the whole of what optional means to
+whatever reads it.
 
 * `null` and `false` omit the key entirely.
 * `true` emits the flag with no value.
@@ -1075,11 +1104,10 @@ bare command rather than about a stack of prefixes.
   lineage, and inclusion can only tighten.
 * **In a 🧰**, for one tool, on top of the floor.
 
-There is no third place, and no flag. A lock used to be
-something the command line could add; a shield is
-written down where it applies, and what a run may not
-do is a fact about the agent rather than about how it
-was invoked.
+There is no third place and no flag. A shield is written
+down where it applies, so what a run may not do is a
+fact about the agent rather than about how it was
+invoked.
 
 ### What m8 ships
 
@@ -1511,6 +1539,9 @@ Trust is held where the command is written down. `core/` is
 read from your own config only, so a project cannot define
 what runs. **Mobs travel with agents; providers are yours.**
 
+Worked entries for oMLX, Anthropic and a ChatGPT plan
+are in [docs/providers.md](docs/providers.md).
+
 #### The ones m8 ships with
 
 ```bash
@@ -1632,119 +1663,3 @@ whatever its entry says, under its own name.
 Under `contain-env` the environment is rebuilt from
 `core/contain-env-allowed.txt` rather than inherited, and
 `HOME` and `TMPDIR` become the sandbox's own directory.
-
-# Bonsai setup on oMLX
-
-```bash
-# Check metal is available so fast kernels install.
-brew tap jundot/omlx https://github.com/jundot/omlx
-brew install jundot/omlx/omlx --with-custom-kernel --with-grammar
-```
-
-
-# Claude setup on the Anthropic api
-
-The entry above reaches `https://api.anthropic.com/v1/messages`
-and needs an api key. A Claude subscription does not include
-one — the api is a separate product with its own billing — so
-take a key from platform.claude.com/settings/keys and put it
-where `header-x-api-key` looks:
-
-```bash
-security add-generic-password -s anthropic-api-key -a "$USER" -w
-```
-
-That header is a command, so anywhere else you already keep
-secrets works as well — `pass`, `op read`, `gpg -d`, an
-environment variable, a file only you can read.
-
-Then a model is a 🧠 like any other, and a file is how it comes
-to have a name:
-
-```m8
-▄ 🧠/anthropic/claude-opus-5,max_tokens:16000,thinking:{"type":"adaptive","display":"summarized"}
-```
-
-A parameter may be JSON, and a `,` inside it is the JSON's
-rather than the form's, so an object goes on a 🧠 whole.
-
-`display` is worth writing down. It is `omitted` by default on
-every current model, which streams a thought with no text in
-it — so without this a 💭 reaches the ledger carrying nothing
-but its 🔏, and a terminal shows a long pause and then an
-answer. Thinking happens and is billed the same either way;
-the only question is whether the ledger gets to record it.
-
-```bash
-m8 @claude -- "Tell me about the Riemann Sphere."
-m8 @/anthropic/claude-haiku-4-5,max_tokens:1024 -- "In one line."
-```
-
-# Codex setup on a ChatGPT plan
-
-Unlike a Claude subscription, a ChatGPT plan reaches the api:
-OpenAI has publicly backed third-party harnesses on a plan,
-and GPT-5.5 is subscription-auth only with no api key at all.
-It is tolerated rather than contracted, so the token shape is
-theirs to change and this is the entry most likely to need a
-line moved.
-
-`codex login` writes an OAuth token to `~/.codex/auth.json`,
-and requests carrying it reach the responses api billed to the
-plan. So the entry is a url and a command that reads the token:
-
-```json
-"codex": {
-  "cmd": ["m8", "providers", "url"],
-  "api": "openai-responses",
-  "url": "https://chatgpt.com/backend-api/codex/responses",
-  "header-authorization": "echo Bearer $(...access_token from ~/.codex/auth.json...)",
-  "header-chatgpt-account-id": "...the account id claim in that token...",
-  "header-originator": "echo m8",
-  "header-openai-beta": "echo responses=experimental",
-  "header-accept": "echo text/event-stream"
-}
-```
-
-None of that is a published api, so it is worth saying where it
-came from: it is what Pi sends, and Pi is a harness reaching the
-same endpoint for the same reason. `originator` is the client
-naming itself — Pi sends `pi`, so m8 sends `m8`, and copying
-somebody else's would be a lie told to a server that asked.
-
-The endpoint speaks websockets first and falls back to server-sent
-events, so posting to it is a supported path rather than a trick.
-That is the whole reason `m8 providers url` can reach it at all.
-
-Two things the codec sends without being asked, because every
-client that speaks this api sends them and a ledger cannot do
-without either: `store` off, so the conversation stays yours
-rather than being kept and replayed by id at the far end, and
-`include` naming `reasoning.encrypted_content`, without which a
-💭 comes home with nothing to sign it. A 🧠 that names either
-overrules it. One gotcha that is neither: the subscription
-endpoint refuses `max_output_tokens`, so do not put one on a
-🧠 aimed at it.
-
-An api key instead, which reaches the same codec:
-
-```json
-"openai": {
-  "cmd": ["m8", "providers", "url"],
-  "api": "openai-responses",
-  "url": "https://api.openai.com/v1/responses",
-  "header-authorization": "echo Bearer $(security find-generic-password -s openai-api-key -w)"
-}
-```
-
-```bash
-m8 @gpt -- "Tell me about the Riemann Sphere."
-m8 @/codex/gpt-5.6-luna -- "In one line."
-```
-
-GPT-5.6 is three models rather than one: `sol` is the
-flagship, `terra` the balanced middle, `luna` the fast and
-cheap one — the same three tiers as opus, sonnet and haiku,
-and a file each. Which of them a subscription endpoint serves,
-and whether it wants a `-codex` variant of the name instead,
-is that endpoint's business rather than this file's.

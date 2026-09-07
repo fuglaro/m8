@@ -338,3 +338,70 @@ An empty string cannot be a code span — CommonMark has none — so an
 empty argv element or call value has no inline form. Nothing in m8 needs
 one, and a block covers it if that ever changes. Said out loud because
 it is the kind of gap that is better known than discovered.
+
+## Tools 2.0 and Skills 2.0 — checked against the sketch
+
+206 tests green. I went through IDEAS.md line by line rather than from
+memory. One gap was left, and it is closed:
+
+* **`#### :toolbox:tool ENV_VAR value` now works.** The comma binds
+  first and says what the tool answers in; whatever spaces follow carry
+  a variable and what to append to it, the shape a 🛡 already had.
+  Verified end to end.
+
+### Three places the build differs from the sketch, all deliberate
+
+* **"filter also filters out entire :brain: sigils if they contain
+  anything filtered out."** Done as composition instead:
+  `freeze-toolbox` stacks `filter-toolbox`, `filter-unlock`,
+  `filter-brain` and `filter-books`. Nothing is resolved. It is the more
+  conservative reading — a 🧠 in a tool's answer is a way of acquiring a
+  toolbox whatever it names — and it means a filter needs no filesystem
+  and can stream.
+* **"passed to the shield wrapper with the env command."** It goes in
+  the process environment rather than through an `env` prefix. Same
+  effect, one fewer process, and it is the same channel `M8_ARG_*` uses.
+* **`m8 call m8 -- PROGRAM`.** The behaviour landed — a call id filled
+  in when missing, a verdict appended when the tool wrote none — but in
+  `converse.settle`, reached by `,m8` on the 🧰 rather than by a command
+  form. Declared on the tool rather than said at the call site.
+
+### And one in Skills 2.0
+
+* **No `m8 cat` / `m8 top` / `m8 load`.** `@` and `^` already carry that
+  distinction, so `m8 ^x encode m8` is the top. You moved this down
+  IDEAS.md yourself when I raised it.
+
+## The README readapt, against your doctrine
+
+Fetched and applied documentation.md rather than guessing at it. What
+each rule changed:
+
+* **Docs are Done.** Verified the README's claims against the code
+  rather than against memory: sixteen sigils, and still exactly two
+  missing from Slack's table — `robot` and `green_circle` — so that
+  sentence survives the night's churn. `m8 shield` and `m8 filter`
+  appear in `m8 help` and have pages. The shield example in the README
+  runs as written.
+* **Now is Now.** One violation, and it was mine from last night: the
+  Shields section explained what a lock *used to be*. Git carries that.
+* **Structures are Clean.** Four walls of text that were really lists
+  became lists — the three settled things in The field, the type rules,
+  the TODO block, and what a block is handed. The two long paragraphs
+  left are narrated rationale, which the doctrine asks for rather than
+  forbids.
+* **Detail is Localised.** The three provider setups were operator
+  detail sitting at the top level; they are `docs/providers.md` now,
+  with a pointer where a reader wants one. The README opens with an
+  index of where things are, which it did not have.
+
+The README is about the same length it was, which I take as the right
+outcome: nothing was cut, some of it moved to where it belongs and the
+rest reads as structure instead of paragraphs.
+
+### Not done
+
+`### Four formats were always one` predates shields, so its argument is
+now stronger than the way it is put. And `## Command Templates` is a
+long section about one of two command forms. Both are judgement calls
+about your own argument rather than corrections, so I have left them.

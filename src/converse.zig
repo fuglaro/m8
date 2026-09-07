@@ -279,6 +279,12 @@ fn answer(
     var env: std.ArrayList(api.EnvVar) = .empty;
     try env.append(arena, .{ .key = shield.self_var, .value = ctx.self });
     try env.appendSlice(arena, stood.env);
+    // What the tool's own definition adds, which is neither the machine's nor
+    // the call's and so is written down once rather than supplied every time.
+    if (tool.env_var.len > 0) try env.append(arena, .{
+        .key = tool.env_var,
+        .value = try std.mem.join(arena, " ", tool.env_values),
+    });
     try env.appendSlice(arena, try toolbox.callEnv(arena, args, c.arguments, c.id));
 
     var captured: std.Io.Writer.Allocating = .init(arena);
