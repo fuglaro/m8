@@ -45,7 +45,7 @@ pub const Target = struct {
     model: []const u8 = "",
     params: []const modelform.Param = &.{},
     stream: bool = false,
-    /// The tools offered, already filtered by 🔓.
+    /// The tools offered, already filtered by what a blockless 🧰 named.
     tools: []const toolbox.Tool = &.{},
     /// The spelling to write, for a codec whose wire format is m8 itself.
     mode: doc.Mode = .md,

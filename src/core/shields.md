@@ -49,9 +49,6 @@
 #### :shield:filter-toolbox
 > `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8_SELF" filter out toolbox`
 
-#### :shield:filter-unlock
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8_SELF" filter out unlock`
-
 #### :shield:filter-brain
 > `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8_SELF" filter out brain`
 
@@ -60,7 +57,6 @@
 
 #### :shield:freeze-toolbox
 > :shield:filter-toolbox
-> :shield:filter-unlock
 > :shield:filter-brain
 > :shield:filter-books
 

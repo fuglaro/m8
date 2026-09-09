@@ -3,7 +3,7 @@
 //! This is a projection and nothing else. The ledger is the truth — every
 //! record, in the order it was written — and a request needs less than that:
 //! which model, which locks, which tools, and which of those the agent has
-//! actually unlocked. Nothing here is ever written back.
+//! actually offered. Nothing here is ever written back.
 //!
 //! What a turn *said* is not in here. That belongs to the ledger, and to
 //! whichever api encoding is about to reshape it.
@@ -30,10 +30,11 @@ pub const Definition = struct {
     /// The model's parameters, in the api's own vocabulary. m8 translates
     /// none of them; they go out as written.
     params: []const model.Param = &.{},
-    /// Every 🧰, in the order met. A later definition of a name wins, which is
-    /// settled in `offer` rather than here.
+    /// Every 🧰 that carried a block, in the order met. A later definition of
+    /// a name wins, which is settled in `offer` rather than here.
     tools: []const toolbox.Tool = &.{},
-    /// Every 🔓. A tool is offered to the model only if it is named here.
+    /// Every 🧰 that carried none, which names a tool to offer. A tool reaches
+    /// the model only if it is named here.
     allowed: []const []const u8 = &.{},
     /// Every 🛡 that carried a block. Cumulative like locks and for the same
     /// reason: a second definition of a name stacks a wrapper, so including
@@ -82,10 +83,14 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
             }
         },
 
-        // A ledger's nested content is canonically the file spelling.
-        .tool => try tools.append(arena, try toolbox.parse(arena, .md, r.value, r.content orelse "")),
-
-        .allow => try add(arena, &allowed, r.value),
+        // A ledger's nested content is canonically the file spelling. With a
+        // block this defines a tool; with none it offers one, which is the
+        // same split 🛡 has. The name is read the same way either way, so a
+        // definition and the line that offers it are spelled alike.
+        .tool => if (r.content) |content|
+            try tools.append(arena, try toolbox.parse(arena, .md, r.value, content))
+        else
+            try add(arena, &allowed, (try toolbox.parse(arena, .md, r.value, "")).name),
 
         else => {},
     };
@@ -99,8 +104,9 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
     return def;
 }
 
-/// The tools this agent may use: named by a 🔓, with the last definition of a
-/// name winning, so an including agent can replace what it pulled in.
+/// The tools this agent may use: named by a blockless 🧰, with the last
+/// definition of a name winning, so an including agent can replace what it
+/// pulled in.
 pub fn offer(arena: Allocator, def: Definition) ![]const toolbox.Tool {
     var out: std.ArrayList(toolbox.Tool) = .empty;
     for (def.allowed) |name| {
@@ -172,7 +178,7 @@ test "a definition yields its model, locks and tools" {
         \\> * text string
         \\> > Echoes.
         \\
-        \\#### :unlock:say
+        \\#### :toolbox:say
         \\
         \\#### :compass:
         \\> Be brief.
@@ -233,7 +239,7 @@ test "a later definition of a tool name is the one offered" {
         \\#### :toolbox:say
         \\> `echo` `base`
         \\
-        \\#### :unlock:say
+        \\#### :toolbox:say
     );
     try f.agent(arena, "outer.md",
         \\#### :brain:base

@@ -31,11 +31,11 @@ pub fn fromModel(s: Sigil) bool {
 /// a filter per sigil that opens it, so what is closed is written down in the
 /// language and can be read, composed, or taken apart. Including an agent or a
 /// skill *is* a way to acquire a toolbox, which is why that shield names 🧠 and
-/// 📚 alongside 🧰 and 🔓 rather than resolving them to see what they carry.
+/// 📚 alongside 🧰 rather than resolving them to see what they carry.
 pub fn fromTool(s: Sigil) bool {
     return switch (s) {
         .result, .ok, .failed => true,
-        .tool, .allow, .agent, .skill => true,
+        .tool, .agent, .skill => true,
         else => false,
     };
 }
@@ -51,14 +51,14 @@ pub fn refuse(records: []const @import("m8/doc.zig").Record, allowed: *const fn 
 const testing = std.testing;
 
 test "a model may not produce a definition, whatever the locks" {
-    for ([_]Sigil{ .tool, .allow, .agent, .skill, .system, .shield, .runner }) |s|
+    for ([_]Sigil{ .tool, .agent, .skill, .system, .shield, .runner }) |s|
         try testing.expect(!fromModel(s));
     for ([_]Sigil{ .bot, .thought, .signature, .call }) |s|
         try testing.expect(fromModel(s));
 }
 
 test "a tool answers, and may hand back definitions for a shield to take away" {
-    for ([_]Sigil{ .result, .ok, .failed, .tool, .allow, .agent, .skill }) |s|
+    for ([_]Sigil{ .result, .ok, .failed, .tool, .agent, .skill }) |s|
         try testing.expect(fromTool(s));
     // Never: a tool does not speak as the model or as the person, and no
     // shield opens that — it is not a door.

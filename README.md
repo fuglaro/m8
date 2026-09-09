@@ -51,6 +51,8 @@ Where things are:
 * [src/zmachine/README.md](src/zmachine/README.md) — the
   seam between a virtual machine and a provider.
 
+An mEight install will bring you a m8 in your terminal.
+
 ## Why
 
 The conversation is the artifact. The harness, the
@@ -234,7 +236,7 @@ same place.
   clearest fork in the road.
 * [aichat](https://github.com/sigoden/aichat) and
   [llm-functions](https://github.com/sigoden/llm-functions)
-  proved a tool is just a script. That is 🧰 and 🔓.
+  proved a tool is just a script. That is 🧰.
 * [Pi](https://pi.dev/) proved a harness can win by
   exclusion: no MCP, no subagents, no plan mode, no
   permission popups. Its sessions are still internal
@@ -561,7 +563,7 @@ arrived is the one that is read.
 ### Calling
 
 ```bash
-m8 call NAME [ARGS]     an m8 command
+m8 call NAME [ARGS]     a m8 command
 m8 call -- PROG [ARGS]  a program from the environment
 ```
 
@@ -604,9 +606,9 @@ Agent definition:
 │ │ Tool Description
 │ 🛡️Shield Name
 │ `cmd` `{{PropertyName:--flag}}` `{{Other}}`
-│ * PropertyName Type
+│ * PropertyName string
 │   Property Description
-│ * Other? Type
+│ * Other? integer
 │   Optional, so ? on the name
 
 ▄ 🧰Tool Name,m8
@@ -614,16 +616,16 @@ Agent definition:
 │ ```bash
 │ echo "$M8_ARG_PROPERTYNAME"
 │ ```
-│ * PropertyName Enum Val|...
-│   Enums have |, and may hold a space
-│ * PropertyName Type[]
+│ * PropertyName celsius|fahrenheit
+│   An enum is its values, which may hold a space
+│ * PropertyName string[]
 │   Arrays suffix []
 │ * ParentName object
 │   Mandatory Parent Def
-│ * ParentName.PropertyName Type
+│ * ParentName.PropertyName integer
 │   Nested
 
-▄ 🔓Allow Tool Name
+▄ 🧰Tool Name
 
 ▄ 🛡️Shield Name
 
@@ -840,7 +842,6 @@ renders markdown renders them. A tty gets `m8`.
 * 📚 skill -> `:books:`
 * 🔝 top -> `:top:`
 * 🧭 system -> `:compass:`
-* 🔓 allow -> `:unlock:`
 * 🛡️ shield -> `:shield:`
 * 🏃 runner -> `:runner:`
 * 🧰 tool -> `:toolbox:`
@@ -848,7 +849,7 @@ renders markdown renders them. A tty gets `m8`.
 A sigil takes a value, a content block, or both — or, for the
 one that is a fence rather than a record, neither.
 
-* Value only: 🧠 📚 🔓 🔏 🟢
+* Value only: 🧠 📚 🔏 🟢
 * Content only: 🙋 🤖 💭 🧭
 * Both: 🧰 📲 🧾 🚫 🛡️ 🏃
 * Neither: 🔝
@@ -899,6 +900,12 @@ description on the lines indented under it. The name
 runs to the first space and the type is the rest of the
 line, so the last field may hold one safely and an enum
 keeps whatever spaces its values have.
+
+A type is JSON Schema's own and goes to the wire exactly
+as it is written, so it is lowercase: `string`, `number`,
+`integer`, `boolean`, `object`. There is no keyword for an
+enum — a type holding a `|` is one, and its values are what
+it lists.
 
 Type rules compose, so `Type[]` covers `object[]`.
 
@@ -1155,22 +1162,24 @@ not understanding what was asked for is never a reason
 to apply less than was asked for.
 
 `freeze-toolbox` is a composition too, and shows what
-the mechanism buys. A tool may hand back 🧰 and 🔓 —
+the mechanism buys. A tool may hand back 🧰 records —
 that is how a toolmaker works — and closing that
-channel is four filters rather than a rule:
+channel is three filters rather than a rule:
 
 ```m8
 ▄ 🛡️freeze-toolbox
 │ 🛡️filter-toolbox
-│ 🛡️filter-unlock
 │ 🛡️filter-brain
 │ 🛡️filter-books
 ```
 
-Each is a pipe through `m8 filter out SIGIL`. Including
-an agent or a skill *is* a way to acquire a toolbox, so
-🧠 and 📚 are named alongside 🧰 and 🔓 rather than
-being resolved to see what they happen to carry. What
+Each is a pipe through `m8 filter out SIGIL`. Both
+forms of 🧰 go with the one filter, which is the point
+of their sharing a sigil: there is no spelling of
+"define but do not offer" for a reply to reach for.
+Including an agent or a skill *is* a way to acquire a
+toolbox, so 🧠 and 📚 are named alongside 🧰 rather
+than being resolved to see what they happen to carry. What
 is not m8 at all is handed through untouched: most of
 what a tool says is text, and text has no records in it
 to take out.
@@ -1233,12 +1242,13 @@ One that builds its own:
 │ * spec string
 │   What the tool should do
 
-▄ 🔓toolmaker
+▄ 🧰toolmaker
 ```
 
-No 🛡 at all, so `toolmaker` may hand back 🧰 and 🔓
-records and they are honoured. The two live happily in
-one config, and neither can become the other.
+No 🛡 at all, so `toolmaker` may hand back 🧰 records
+— a definition, and the blockless one that offers it —
+and they are honoured. The two live happily in one
+config, and neither can become the other.
 
 ### Thinking it through
 

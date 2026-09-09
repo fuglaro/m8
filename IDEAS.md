@@ -171,7 +171,7 @@ m8 @/inbuilt/text-adventure-some-mit-flavour-one
 REJECTED IDEA: Change :receipt: to :outbox_tray:
 Change :computer: to :compass:
 
-# ====
+# ==== DONE
 Tools  2.0
 
 Locks change to Shields (Tool Wrappers)
@@ -271,12 +271,13 @@ CALL_ID is always put into the environment of a tool call, and propagates throug
 m8 call m8 -- PROGRAM
 — will call a program from the environment that creates m8. :receipt: :green_circle: :no_entry_sign: will have CALL_ID added if they don't already, and :green_circle: :no_entry_sign: will be added if missing.
 
-# ====
+# ==== DONE
+
 Skills 2.0
 
 #### :toolbox:load_skill
 > `m8` `call` `m8` `--` `m8` `load` `@{{MOB}}skills/{{SKILL}}`
-> * SKILL String
+> * SKILL string
 
 Skill file:
 ```md
@@ -294,7 +295,178 @@ New :top: sigil. If the very first sigil of the file being referenced, begins a 
 ^agent and :books: behaves as top (only giving the top section, if it exists)
 This behaviour recurses through deeper references.
 
+# ====
 
+Inbuilt optional toolbox - file interaction.
+
+#### :compass:
+> You are a helpful coding assistant working alongside the user,
+> who communicates concisely and clearly. 
+> Use the `view` tool to examine file and directory contents,
+> and the `edit` tool to make subsequent changes:
+> * A denial means your picture of the file is wrong,
+>   not that you should recount anything. View before retrying.
+
+#### :toolbox:view
+> > Lists lines of files or alphabetically sorted directory content. 
+> > File lines have a line number prefix (1-indexed): `=123|LINE`.
+> > An end of a file newline shows as an empty numbered line.
+> > Directory content lines are prefixed with `/` and have
+> > suffixes based on their types:
+> > * Directories suffix `/`.
+> > * Symlinks to directories suffix `/ ->DESTINATION`.
+> > * Symlinks to files suffix ` ->DESTINATION`.
+> > * Normal files suffix ` (SIZE)` in bytes.
+> `m8` `call` `view`
+> * path string
+>   The relative or absolute path to the file or directory to inspect.
+> * offset? number
+>   The number of lines into the result to start viewing.
+> * limit? number
+>   More lines than this are truncated
+>   with a final unnumbered `~~~` line. Defaults to 400.
+> * width? number
+>   Lines over this length truncate with `~~~`. Defaults to 400.
+> * grep? string
+>   Activates search mode for matching file lines.
+>   When `path` is a file this filters for lines with a match.
+>   When `path` is a directory,
+>   it switches to depth-first traversal, only returning files
+>   that include a match (shown as its path from `path` without
+>   suffix, to match how edit takes a context), then the matching
+>   file lines, and then a line indicating the number of
+>   occurrences in that file: `*6|STRING`.
+>   Directories starting with `.` and symlinks are not traversed.
+> * after? number
+>   Also include this many additional file lines after a matching
+>   grep file line.
+> * before? number
+>   Also include this many additional file lines before a matching
+>   grep file line.
+> * find? string
+>   Activates search mode for matching file or directory names,
+>   answering with directory content lines, suffixes and all.
+
+#### :toolbox:edit
+> > Modifies files, creating them and any missing
+> > parent directories if they don't exist.
+> `m8` `call` `edit`
+> * path string
+>   The relative or absolute path to a file or directory
+>   as the base context for edits.
+> * changes string
+>   Lines describing the changes to make.
+>   A context line sets the file subsequent lines apply to,
+>   relative to `path`:
+>   * `/subpath` sets a file.
+>   Contexts are independent and may appear in any order.
+>   Before any context line, the context is `path` itself,
+>   which must then be a file. A change reaching across files
+>   is a context each.
+>   Substitution lines replace text within the current file:
+>   * `*6|STRING` followed by `:SUBSTITUTION` lines replaces
+>     every occurrence of `STRING` with the substitution,
+>     failing unless exactly 6 are found in that file, as the
+>     view tool would give.
+>   * Search matches within lines only, but can substitute in
+>     any number, with multiple `:SUBSTITUTION` lines
+>     joining with newlines.
+>   Line edits apply to the current file:
+>   * `=123|LINE` asserts line 123 is `LINE`, and anchors an
+>     insert after it.
+>   * `-123|LINE` removes line 123, asserting it is `LINE`.
+>   * `|LINE` inserts `LINE` after the line referenced by the
+>     preceding `=` or `-`. Consecutive inserts land in order.
+>     Use `=0|` to anchor at the start of the file, and anchor
+>     to the last content line to append.
+>   All line numbers reference the file before any change is made,
+>   and must match what the view tool would give.
+>   All changes are validated first, then substitutions are applied,
+>   then removals and inserts. The entire edit fails unless every
+>   assertion holds, and fails if a substitution and a line edit
+>   affect the same line.
+
+On failure it reports what didn't hold, and only that. What
+was expected is what the edit asserted, so only the actual
+is reported. A denial is a rejection rather than a view, and
+says the picture of the file is stale, so it is not written
+in the form view gives and is never edited against:
+```
+Denied - line 333 is `foo foo`
+Denied - 4 occurrences of `getUser`
+```
+
+# ====
+
+M8_ARG_FOO=blah M8_ARG_BAR=grrr m8 call -k foo -a bar – echo
+–foo=blah grrr
+
+Also parsing out things.
+
+Ideally replacing the placeholder expansion defined in the inline code span toolbox language.
+
+# ====
+
+Tools for move, copy, delete.
+
+# ====
+
+So the paper gap is there. Nobody has measured how often a human edits a file while an agent has it in context, and nobody has compared edit-format robustness under that condition. The specific contribution you'd be making:
+Line-assertion as fine-grained OCC — sits between STORM's file-level versioning (over-rejects) and CRDT merging (silently produces semantic conflicts). Nobody occupies that middle.
+Human-in-the-loop concurrency, which the multi-agent literature systematically ignores because worktree isolation solves their version and can't solve yours.
+The transcription-vs-hallucination distinction — still unmeasured as far as any of these searches go, and it's the empirical claim the whole field's line-number rejection rests on.
+The cheapest credible experiment for #3 alone: same model, same tasks, your format vs. a search/replace baseline, with a scripted process making small edits to target files at random intervals to simulate a human. Measure denial rate, denial reason, and silent-wrong-edit rate. That last number is the one nobody has, and it's the one that would make the paper.
+
+# ====
+Attach binary files like images?
+
+# ====
+Allowed minions and peers?
+
+# ====
+How deal with Linux vs osx on sandbox
+
+# ====
+m8-st8 core and open areas. core can never be written to by a tool.
+defaults inside @/core/defaults/
+#### :brain:/core/defaults/
+# ====
+sandbox-exec with a process-exec filter
+
+# ====
+Allow some git commands by only unlocking .git when it's constrained. How does this mix with glob limited commands.
+
+# ====
+
+In  chat subagent forking with > > 
+
+# ====
+match workstreams with agents and mobs chats.
+
+# ====
+Concurrent edit resilient editing
+(stamp read state uuid? timestamp? Updated on write? Check opened? writeIf)
+====
+
+@.../ -> load all skills and sub-agent (if md) or all sub-agents in mob.
+Agents need to be able to advertise themselves as sub-agents though
+A way to call a sub agent in the sandox… and not.
+
+# ====
+# Tightening
+
+# ====
+ the anthropic-messages codec places a breakpoint on the last record before the first 🙋. That's derivable from the ledger alone, needs no new sigil, and matches the "stable prefix first" ordering you already have. A codec is allowed to know its own api's quirks; that's what a codec is.
+
+# ====
+Skill finder minion - auto post :raising_hand: minions?
+
+
+# ====
+
+sigil for loading a file and sending it as an attachment - like an image etc.
+use a reference.
+ensure it complies with sandboxing...
 
 
 

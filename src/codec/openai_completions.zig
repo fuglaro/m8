@@ -572,8 +572,9 @@ fn readTool(arena: Allocator, out: *std.ArrayList(doc.Record), t: std.json.Value
         .value = name,
         .content = try toolbox.render(arena, .md, tool),
     });
-    // Being on the wire at all is what it means for a tool to be unlocked.
-    try out.append(arena, .{ .sigil = .allow, .value = name });
+    // Being on the wire at all is what it means for a tool to be offered, and
+    // a 🧰 with no block is how that is said.
+    try out.append(arena, .{ .sigil = .tool, .value = name });
 }
 
 /// The fields that are the request's shape rather than something asked for.
@@ -695,14 +696,14 @@ test "a request decodes back to a ledger that encodes to the same request" {
 
     const back = try decode(arena, first);
     // 🧠 carries the model and everything that was asked for, so nothing has
-    // to be looked up to send it again. The 🧰/🔓 pair come back too.
+    // to be looked up to send it again. Both 🧰 records come back too.
     try testing.expectEqual(doc.Sigil.agent, back[0].sigil);
     try testing.expectEqualStrings(
         "/tiny,max_tokens:2048,reasoning_effort:high",
         back[0].value,
     );
     try testing.expectEqual(doc.Sigil.tool, back[1].sigil);
-    try testing.expectEqual(doc.Sigil.allow, back[2].sigil);
+    try testing.expectEqual(doc.Sigil.tool, back[2].sigil);
 
     // And what comes back off the wire goes out again unchanged.
     const m = (try modelform.parse(arena, back[0].value)).?;

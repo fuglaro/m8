@@ -65,7 +65,7 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
     const argv = try provider.resolve(arena, io, ctx.self, try config.coreDir(arena, ctx.env), p.cmd);
     const environ = try provider.environment(arena, p, ctx.env);
 
-    // Only what 🔓 named, and the last definition of a name wins.
+    // Only what a blockless 🧰 named, and the last definition of a name wins.
     const offered = try agent.offer(arena, def);
 
     // Locks come from the ledger and the command line together. Neither can

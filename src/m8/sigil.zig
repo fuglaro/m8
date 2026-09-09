@@ -46,8 +46,6 @@ pub const Sigil = enum {
     // half it is in from the first line rather than from the end of the file.
     top,
     system,
-    allow,
-    // 🔓 says a tool is available here; 🛡 says what it runs inside.
     // 🛡 is a wrapper a tool runs inside. With a block it is a definition,
     // without one it is an activation, and both only ever add — which is what
     // makes any combination safe and the order of no consequence to what is
@@ -56,6 +54,10 @@ pub const Sigil = enum {
     // 🏃 turns a code block into something runnable: an argv with {{CODE}} in
     // it. Defined before it is named, so a document reads in one pass.
     runner,
+    // 🧰 has the same two forms 🛡 has, for the same reason. With a block it
+    // defines a tool; with none it offers that tool here. Defining says only
+    // what a thing is, so what a reply hands back is inert until something
+    // already trusted names it — and one sigil means one filter closes both.
     tool,
 
     pub fn emoji(s: Sigil) []const u8 {
@@ -72,7 +74,6 @@ pub const Sigil = enum {
             .skill => "\u{1F4DA}", // 📚
             .top => "\u{1F51D}", // 🔝
             .system => "\u{1F9ED}", // 🧭
-            .allow => "\u{1F513}", // 🔓
             // Emitted with the selector, or a terminal shows it as text.
             .shield => "\u{1F6E1}\u{FE0F}", // 🛡️
             .runner => "\u{1F3C3}", // 🏃
@@ -99,7 +100,6 @@ pub const Sigil = enum {
             .skill => ":books:",
             .top => ":top:",
             .system => ":compass:",
-            .allow => ":unlock:",
             .shield => ":shield:",
             .runner => ":runner:",
             .tool => ":toolbox:",
@@ -124,7 +124,7 @@ pub const Sigil = enum {
     /// Whether a quoted block may follow.
     pub fn takesContent(s: Sigil) bool {
         return switch (s) {
-            .agent, .skill, .allow, .signature, .ok, .top => false,
+            .agent, .skill, .signature, .ok, .top => false,
             else => true,
         };
     }
@@ -245,7 +245,6 @@ test "every plain spelling is the gemoji shortcode for its own emoji" {
         .{ .sigil = .skill, .cp = 0x1F4DA, .word = ":books:" },
         .{ .sigil = .top, .cp = 0x1F51D, .word = ":top:" },
         .{ .sigil = .system, .cp = 0x1F9ED, .word = ":compass:" },
-        .{ .sigil = .allow, .cp = 0x1F513, .word = ":unlock:" },
         .{ .sigil = .shield, .cp = 0x1F6E1, .word = ":shield:" },
         .{ .sigil = .runner, .cp = 0x1F3C3, .word = ":runner:" },
         .{ .sigil = .tool, .cp = 0x1F9F0, .word = ":toolbox:" },

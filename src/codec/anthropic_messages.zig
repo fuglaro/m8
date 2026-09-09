@@ -829,8 +829,9 @@ fn readTool(arena: Allocator, out: *std.ArrayList(doc.Record), t: std.json.Value
             .properties = props.items,
         }),
     });
-    // Being on the wire at all is what it means for a tool to be unlocked.
-    try out.append(arena, .{ .sigil = .allow, .value = name });
+    // Being on the wire at all is what it means for a tool to be offered, and
+    // a 🧰 with no block is how that is said.
+    try out.append(arena, .{ .sigil = .tool, .value = name });
 }
 
 /// The fields that are the request's shape rather than something asked for.
@@ -1116,11 +1117,11 @@ test "a request decodes to a ledger and encodes back to the same request" {
     const records = try decode(arena, request);
 
     // What the wire held, as records. A 🧠 with the parameters it asked for,
-    // the tool and its 🔓, the 🧭, and then what was said.
+    // the tool and the 🧰 that offers it, the 🧭, and then what was said.
     try testing.expectEqual(sigil.Sigil.agent, records[0].sigil);
     try testing.expectEqualStrings("/claude-opus-5,max_tokens:2048", records[0].value);
     try testing.expectEqual(sigil.Sigil.tool, records[1].sigil);
-    try testing.expectEqual(sigil.Sigil.allow, records[2].sigil);
+    try testing.expectEqual(sigil.Sigil.tool, records[2].sigil);
     try testing.expectEqual(sigil.Sigil.system, records[3].sigil);
     try testing.expectEqual(sigil.Sigil.user, records[4].sigil);
     try testing.expectEqual(sigil.Sigil.thought, records[5].sigil);

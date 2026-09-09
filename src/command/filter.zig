@@ -46,12 +46,12 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 filter out SIGIL
         \\
         \\SIGIL is a sigil's plain spelling without the colons: `toolbox`,
-        \\`unlock`, `brain`. One kind per invocation, so a shield that wants
+        \\`brain`, `books`. One kind per invocation, so a shield that wants
         \\several stacks several:
         \\
         \\  ▄ 🛡️freeze-toolbox
         \\  │ 🛡️filter-toolbox
-        \\  │ 🛡️filter-unlock
+        \\  │ 🛡️filter-brain
         \\
         \\Read a line at a time and never holding more than one, so a tool may
         \\say more than there is memory for and this will not be what stops it.
