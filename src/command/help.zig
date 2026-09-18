@@ -10,11 +10,19 @@
 //! A page you were handed instead of what you asked for goes to stderr, where
 //! it cannot become part of somebody's document.
 //!
-//! The lists here are the registries themselves rather than a copy of them, so
-//! nothing can come to be advertised that m8 would not run.
+//! The lists here are the registry itself rather than a copy of it, so nothing
+//! can come to be advertised that m8 would not run. They are read from the
+//! tree, which is names and summaries: listing what m8 has is not a reason to
+//! hold every command that has it.
+//!
+//! A page lives beside the command whose page it is, so where the commands are
+//! programs this asks the program — `m8 help send` is `m8-send --help`. The
+//! alternative is a help command that holds every page, which is a copy of the
+//! whole of m8 to print a paragraph.
 
 const std = @import("std");
 const cmd = @import("../command.zig");
+const launch = @import("../launch.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
 
@@ -35,20 +43,38 @@ fn run(ctx: Ctx) !u8 {
         return 0;
     }
 
-    const c = cmd.findAny(ctx.args[0]) orelse {
-        try ctx.err.print("m8 help: '{s}' is not a command\n", .{ctx.args[0]});
-        try overview(ctx.err);
-        try ctx.err.flush();
-        return 1;
-    };
-
     // Whatever is left names something under it, and is that command's to
     // read: `m8 help providers url` is the url page.
+    if (launch.split) {
+        const node = anywhere(ctx.args[0]) orelse return unknown(ctx);
+        // `--help` first, because that is the flag the command answers; what
+        // follows it names whatever is under that command.
+        var argv: std.ArrayList([]const u8) = .empty;
+        try argv.append(ctx.arena, "--help");
+        try argv.appendSlice(ctx.arena, ctx.args[1..]);
+        return launch.under(ctx, .{ .spawn = node.program }, argv.items, .inherited);
+    }
+
+    const c = cmd.findAny(ctx.args[0]) orelse return unknown(ctx);
     var inner = ctx;
     inner.args = ctx.args[1..];
     try write(inner, c, ctx.out);
     try ctx.out.flush();
     return 0;
+}
+
+/// A command reached wherever it lives: at the top, or under `call` because it
+/// is an inbuilt tool. `help` is asked for a name and not for a path.
+fn anywhere(called: []const u8) ?cmd.Node {
+    if (cmd.byPath(&.{called})) |n| return n;
+    return cmd.byPath(&.{ "call", called });
+}
+
+fn unknown(ctx: Ctx) !u8 {
+    try ctx.err.print("m8 help: '{s}' is not a command\n", .{ctx.args[0]});
+    try overview(ctx.err);
+    try ctx.err.flush();
+    return 1;
 }
 
 /// One command's page, or its summary when that is the whole of it.
@@ -77,7 +103,7 @@ pub fn overview(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 — a composable shell harness
         \\
-        \\  m8 [-l LOCKS] [[@AGENT|+CHAT] MSG_CMD|RUN_CMD] [ARGS]
+        \\  m8 [[@AGENT|+CHAT|^SKILL] MSG_CMD|RUN_CMD] [ARGS]
         \\
         \\@mathy starts a chat named +mathy. Carry it on with +mathy, or
         \\with a plain m8, which continues whichever chat came last.
@@ -114,9 +140,9 @@ fn commands(w: *std.Io.Writer) !void {
 
 fn list(w: *std.Io.Writer, heading: []const u8, message: bool) !void {
     try w.print("\n{s}:\n\n", .{heading});
-    for (cmd.all) |c| {
-        if (c.takes.isMessage() != message) continue;
-        try w.print("  {s: <10} {s}\n", .{ c.name, c.summary });
+    for (cmd.tree) |n| {
+        if (n.spec.takes.isMessage() != message) continue;
+        try w.print("  {s: <10} {s}\n", .{ n.spec.name, n.spec.summary });
     }
 }
 
@@ -132,7 +158,7 @@ fn environment(w: *std.Io.Writer) !void {
         \\                    ~/.config/m8-st8
         \\  PATH              where a provider or tool named as a bare word
         \\                    is looked for, and where m8 finds itself
-        \\  TMPDIR            where a locked tool's own directory is made;
+        \\  TMPDIR            where a shielded tool's own directory is made;
         \\                    /tmp when unset
         \\  M8_PROVIDER_*     what a providers.json entry hands its command.
         \\                    See m8 help providers.
@@ -187,7 +213,8 @@ test "the overview lists every command" {
     try overview(&out.writer);
     const said = out.written();
 
-    for (cmd.all) |c| {
+    for (cmd.tree) |n| {
+        const c = n.spec;
         var seen: usize = 0;
         var at: usize = 0;
         while (std.mem.indexOfPos(u8, said, at, c.name)) |i| {

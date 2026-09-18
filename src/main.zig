@@ -40,6 +40,8 @@ const provider = @import("provider.zig");
 const session = @import("session.zig");
 const doc = @import("m8/doc.zig");
 const help = @import("command/help.zig");
+const harness = @import("harness.zig");
+const launch = @import("launch.zig");
 
 comptime {
     _ = @import("m8/sigil.zig");
@@ -57,6 +59,7 @@ comptime {
     _ = @import("codec.zig");
     _ = @import("config.zig");
     _ = @import("command.zig");
+    _ = @import("launch.zig");
     _ = @import("zmachine/zmachine.zig");
 }
 
@@ -75,6 +78,20 @@ pub fn main(init: std.process.Init) !u8 {
         init.environ_map,
         if (argv.len > 0) argv[0] else "m8",
     );
+
+    // The single binary installed under one of the command names *is* that
+    // command, the way a symlinked busybox is. Answering the same as the
+    // program of that name is what keeps one installation from behaving
+    // unlike the other. The lean launcher is only ever `m8`, and asking would
+    // cost it the registry it is built without.
+    if (!launch.split) {
+        if (command.byProgram(std.fs.path.basename(self))) |node|
+            return harness.leaf(
+                init,
+                command.at(node.path).?,
+                try command.named(arena, node.path, @ptrCast(args)),
+            );
+    }
 
     // Streaming, so writing is `write` from wherever the descriptor already
     // is rather than a position this process is keeping. A run inherits a
@@ -122,8 +139,13 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     // A name with nothing after it is still a consultation; so is a bare `m8`.
-    const helper = command.find(help.name).?;
-    var cmd = command.find(command.consult).?;
+    //
+    // What is read here is the *spec* of what was named — what it takes, and
+    // whether its arguments are prose. Nothing here needs the command itself,
+    // which is what lets the lean launcher assemble for a command it does not
+    // hold.
+    const helper = command.byPath(&.{help.name}).?;
+    var cmd = command.byPath(&.{command.consult}).?;
     var cmd_args: []const []const u8 = &.{};
     var asked_for_help = false;
     if (rest.len > 0) {
@@ -134,7 +156,7 @@ pub fn main(init: std.process.Init) !u8 {
             cmd_args = @ptrCast(rest[1..]);
             asked_for_help = true;
         } else {
-            cmd = command.find(rest[0]) orelse {
+            cmd = command.byPath(&.{rest[0]}) orelse {
                 try err.print("m8: '{s}' is not an agent, a chat, or a command\n", .{rest[0]});
                 try help.overview(err);
                 try err.flush();
@@ -146,10 +168,10 @@ pub fn main(init: std.process.Init) !u8 {
 
     // A run command takes no name, because there is no ledger for one to go
     // into. Saying so beats quietly dropping what was typed.
-    if (named and !cmd.takes.isMessage()) {
+    if (named and !cmd.spec.takes.isMessage()) {
         try err.print("m8 {s}: {s}, so there is nowhere to put a name\n", .{
-            cmd.name,
-            if (cmd.takes == .stdin) "takes stdin as it is" else "is handed no ledger",
+            cmd.spec.name,
+            if (cmd.spec.takes == .stdin) "takes stdin as it is" else "is handed no ledger",
         });
         try err.flush();
         return 1;
@@ -158,9 +180,9 @@ pub fn main(init: std.process.Init) !u8 {
     // `m8 COMMAND --help` is `m8 help COMMAND` too, read here so that no
     // command has to parse the flag and no two answer it differently. Not for
     // `--`, whose arguments are prose: there it is something somebody said.
-    if (!asked_for_help and !cmd.prompts and command.api.wantsHelp(cmd_args)) {
+    if (!asked_for_help and !cmd.spec.prompts and command.api.wantsHelp(cmd_args)) {
         var words: std.ArrayList([]const u8) = .empty;
-        try words.append(arena, cmd.name);
+        try words.append(arena, cmd.spec.name);
         try words.appendSlice(arena, cmd_args[1..]);
         cmd = helper;
         cmd_args = words.items;
@@ -169,14 +191,14 @@ pub fn main(init: std.process.Init) !u8 {
     // One command's arguments are prose. It is read here rather than there
     // because a prompt goes into the ledger, and the ledger is assembled here.
     var prompt: []const u8 = "";
-    if (cmd.prompts) {
+    if (cmd.spec.prompts) {
         prompt = try std.mem.join(arena, " ", cmd_args);
         cmd_args = &.{};
     }
 
     const dirs = try config.discover(arena, io, init.environ_map);
 
-    const assembled = gather(io, arena, dirs, name, named, as, prompt, cmd.takes) catch |e| {
+    const assembled = gather(io, arena, dirs, name, named, as, prompt, cmd.spec.takes) catch |e| {
         switch (e) {
             // Only the command line's own name reaches here; anything inside a
             // ledger is the command's business.
@@ -191,13 +213,34 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     // Nothing piped and nothing said is somebody finding out what m8 is.
-    if (cmd.prompts and assembled.said_nothing) {
+    if (cmd.spec.prompts and assembled.said_nothing) {
         try help.overview(err);
         try err.flush();
         return 1;
     }
 
-    return runCommand(init, io, arena, cmd, cmd_args, assembled.document, self, out, err);
+    // What the child is handed, which is the promise this launcher made when
+    // it decided what to assemble. A command that takes stdin as it arrives
+    // keeps the descriptor; everything else gets the bytes read for it.
+    const input: launch.Stdin = switch (cmd.spec.takes) {
+        .nothing => .inherited,
+        else => .{ .bytes = assembled.document },
+    };
+
+    // The one place this launcher's two builds differ. The branch is
+    // comptime: the lean one never names a command value, and so carries none
+    // of what a command value would drag in behind it.
+    const reach: launch.Reach = if (launch.split)
+        .{ .spawn = cmd.program }
+    else
+        .{ .call = command.at(cmd.path).? };
+
+    // What a complaint names. The command under this one parses its own
+    // arguments, so this launcher reaches `shield ask` by calling `shield` —
+    // but `m8 shield ask:` says more than `m8 shield:` and costs nothing.
+    const called = try command.named(arena, cmd.path, cmd_args);
+
+    return harness.run(io, arena, init.environ_map, reach, called, cmd_args, input, self, out, err);
 }
 
 /// Read what this kind of command is handed.
@@ -231,66 +274,4 @@ fn gather(
             try command.api.readDocument(io, arena, &in_buf),
         ),
     };
-}
-
-/// Commands take their arguments verbatim; they parse their own.
-fn runCommand(
-    init: std.process.Init,
-    io: std.Io,
-    arena: std.mem.Allocator,
-    c: command.Command,
-    args: []const []const u8,
-    input: []const u8,
-    self: []const u8,
-    out: *std.Io.Writer,
-    err: *std.Io.Writer,
-) !u8 {
-    var tty_storage: command.api.TtyFiles = undefined;
-    const tty = command.api.openTty(io, &tty_storage);
-
-    const status = c.run(.{
-        .arena = arena,
-        .io = io,
-        .mode = if (std.Io.File.stdout().isTty(io) catch false) .m8 else .md,
-        .env = init.environ_map,
-        .self = self,
-        .args = args,
-        .in = input,
-        .out = out,
-        .err = err,
-        .tty = tty,
-    }) catch |e| {
-        try out.flush();
-        if (tty) |t| try t.w.flush();
-        switch (e) {
-            error.UnknownAgent => try err.writeAll("m8: that ledger names an agent that is not there\n"),
-            error.IncludeLoops => try err.writeAll(
-                "m8: an agent includes one that leads back to it\n",
-            ),
-            error.LineageLoops => try err.writeAll(
-                "m8: a turn in that chat names one that leads back to it\n",
-            ),
-            error.TopMisplaced => try err.writeAll(
-                "m8: a top opens and closes at the head of a file, or there is none\n",
-            ),
-            error.TopUnclosed => try err.writeAll(
-                "m8: a top was opened and nothing closed it\n",
-            ),
-            error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
-            error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),
-            error.NoProvider => try err.writeAll(
-                "m8: that ledger names a model but not whose; say which, as `m8 send PROVIDER`\n",
-            ),
-            else => try err.print("m8 {s}: {s}\n", .{ c.name, @errorName(e) }),
-        }
-        try err.flush();
-        return 1;
-    };
-
-    try out.flush();
-    if (tty) |t| try t.w.flush();
-    // A command that answered with a status rather than an error still said
-    // why on the way, and this is the one place both are on their way out.
-    try err.flush();
-    return status;
 }

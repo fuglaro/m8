@@ -3,7 +3,7 @@
 //! Config directories are searched nearest first: every `.m8-st8/` from the
 //! working directory upward, the way git finds `.git`, then the user's own.
 //!
-//! `core/` is the exception. It holds the files that decide what a lock
+//! `core/` is the exception. It holds the files that decide what a restriction
 //! *means* — the sandbox profile and the environment allowlist — and a
 //! project directory arrives with `git clone`, so only the user's own config
 //! is consulted for it.
@@ -91,6 +91,75 @@ fn exists(io: std.Io, path: []const u8) bool {
     var d = std.Io.Dir.cwd().openDir(io, path, .{}) catch return false;
     d.close(io);
     return true;
+}
+
+/// Where a mob keeps its scratch. Inside a config directory rather than beside
+/// one, so everything a mob needs travels with it.
+///
+/// Keeping it out of a version control system is the repository's business
+/// rather than m8's — this one carries a `.gitignore` in its own config
+/// directory as the suggestion.
+pub const tmp_dir_name = ".tmp-dir";
+
+fn hasFile(io: std.Io, path: []const u8) bool {
+    var f = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    f.close(io);
+    return true;
+}
+
+/// Which config directory holds `rel`, nearest first.
+///
+/// `read` answers with the bytes. This answers with where they came from, for
+/// anything that has to write beside a file rather than read it.
+pub fn where(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    rel: []const u8,
+) !?[]const u8 {
+    for (dirs) |dir| {
+        if (hasFile(io, try std.fs.path.join(arena, &.{ dir, rel }))) return dir;
+    }
+    return null;
+}
+
+/// A mob's scratch directory, made before a tool runs.
+///
+/// Persistence is the whole of why it is here. A tool that writes a file and
+/// answers with its path is only useful if the next call can open it, and a
+/// directory of one call's own means it never can. Nothing removes it: a tool
+/// tidies up after itself or leaves what was meant to last, and resetting a
+/// mob is the user's to reach for.
+///
+/// The path is real rather than reached through a symlink, because a config
+/// directory is found by walking up from `currentPath`, which is resolved
+/// already — which is what the profile's `TMP` has to match, and what an
+/// inherited `TMPDIR` on macOS does not.
+pub fn mobTmp(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    agent: []const u8,
+) !?[]const u8 {
+    if (dirs.len == 0) return null;
+
+    // The mob is where the agent lives, so one named below the top keeps its
+    // scratch below the top too. A ledger handed straight in names no agent,
+    // and takes the nearest config's own.
+    var base = dirs[0];
+    var mob: []const u8 = "";
+    if (agent.len > 0) {
+        const file = try std.fmt.allocPrint(arena, "{s}.md", .{agent});
+        if (try where(arena, io, dirs, file)) |found| {
+            base = found;
+            mob = std.fs.path.dirname(agent) orelse "";
+        }
+    }
+
+    const tmp = try std.fs.path.join(arena, &.{ base, tmp_dir_name, mob });
+    try std.Io.Dir.cwd().createDirPath(io, tmp);
+    // No trailing slash, ever, so no tool has to strip one.
+    return std.mem.trimEnd(u8, tmp, "/");
 }
 
 /// Read a file from the nearest config directory that has one.

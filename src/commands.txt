@@ -1,0 +1,34 @@
+# The split set: one program per command, named by its path.
+#
+# Read twice — by `build.zig`, which has no way to walk a comptime tree, and
+# by the registry's own test, which checks this against the tree it builds. So
+# a command added to the registry and not to this file is a failing test rather
+# than a program nobody ships.
+#
+# Blank lines and lines starting with # are ignored.
+
+--
+cat
+encode
+decode
+parse
+send
+call
+call args
+call ask
+call edline
+call edline view
+call edline edit
+call munge
+call munge read
+call munge write
+call munge scan
+shield
+shield secure
+shield ask
+shield check
+filter
+providers
+providers url
+providers inbuilt
+help

@@ -1,19 +1,21 @@
-//! Locks: the sandbox profile, and the environment a child is given.
+//! Restrictions: the sandbox profile, and the environment a child is given.
 //!
 //! `core/mac-sandbox.sb` grants everything and then tags the lines that each
-//! lock takes away. A lock only ever subtracts, so any combination is safe and
-//! the order never matters — which is why `-l` can be repeated without a
-//! precedence rule to remember. Where a lock needs to *deny* something, the
-//! profile denies it unconditionally and tags a conditional allow instead, so
-//! the invariant holds even for those.
+//! restriction takes away. A restriction only ever subtracts, so any
+//! combination is safe and the order never matters — which is why a 🛡 may
+//! name them in any order and compose with another without a precedence rule
+//! to remember. Where a restriction needs to *deny* something, the profile
+//! denies it unconditionally and tags a conditional allow instead, so the
+//! invariant holds even for those.
 //!
 //! A line ending in `;;!! !a !b` is dropped when `a` or `b` is active. Levels
-//! like `sandbox` are not expanded into the locks they compose; they carry
-//! their own tags, so resolving stays a single pass with no lookup table.
+//! like `sandbox` are not expanded into the restrictions they compose; they
+//! carry their own tags, so resolving stays a single pass with no lookup
+//! table.
 //!
 //! Both files may be overridden from `core/` in the user's own config, and
 //! only from there: a project directory arrives with `git clone`, and these
-//! two files decide what a lock means rather than what runs under it.
+//! two files decide what a restriction means rather than what runs under it.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -51,7 +53,8 @@ pub const all = [_]Restriction{
     .{ .name = "contain-env", .summary = "the environment is rebuilt, not inherited" },
 };
 
-/// Locks the sandbox profile cannot express, and that m8 applies itself.
+/// Restrictions the sandbox profile cannot express, and that m8 applies
+/// itself.
 pub fn isKernel(name: []const u8) bool {
     return if (find(name)) |r| r.kernel else false;
 }
@@ -68,8 +71,8 @@ pub fn find(name: []const u8) ?Restriction {
     return null;
 }
 
-/// The profile with every line the active locks take away removed. `src` is
-/// the profile text, so a caller may pass an override from `core/`.
+/// The profile with every line the active restrictions take away removed.
+/// `src` is the profile text, so a caller may pass an override from `core/`.
 pub fn resolve(arena: Allocator, src: []const u8, active: []const []const u8) Allocator.Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var it = std.mem.splitScalar(u8, src, '\n');
@@ -100,8 +103,8 @@ pub fn profile(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map
 }
 
 /// Likewise for the environment allowlist. An override replaces the bundled
-/// list rather than extending it, so what a lock permits is always readable
-/// from one file.
+/// list rather than extending it, so what a restriction permits is always
+/// readable from one file.
 pub fn envAllowed(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
     return (try config.core(arena, io, env, "contain-env-allowed.txt")) orelse env_allowed;
 }
@@ -121,7 +124,11 @@ pub fn envPasses(src: []const u8, name: []const u8) bool {
     return false;
 }
 
-/// A directory of this run's own, which is a locked tool's TMPDIR and HOME.
+/// A directory of this call's own, for what m8 writes rather than what a tool
+/// does. The two are not the same place: a tool's TMPDIR belongs to its mob
+/// and outlives the call, so a resolved profile written there would be one
+/// name two calls at once would both write, and the loser would run under the
+/// winner's restrictions.
 pub fn makeTmp(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
     const base = env.get("TMPDIR") orelse "/tmp";
     var word: [8]u8 = undefined;
@@ -142,6 +149,9 @@ pub fn exec(
     env: *const std.process.Environ.Map,
     argv: []const []const u8,
     active: []const []const u8,
+    /// This call's own directory, where the resolved profile is written.
+    own: []const u8,
+    /// What the profile is told TMP is: the tool's, not m8's.
     tmp: []const u8,
 ) ![]const []const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -149,7 +159,7 @@ pub fn exec(
     const cwd = try arena.dupe(u8, buf[0..len]);
     const parent = std.fs.path.dirname(cwd) orelse "/";
 
-    const path = try std.fs.path.join(arena, &.{ tmp, "resolved.sb" });
+    const path = try std.fs.path.join(arena, &.{ own, "resolved.sb" });
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = path,
         .data = try resolve(arena, try profile(arena, io, env), active),
@@ -203,7 +213,7 @@ fn res(arena: Allocator, active: []const []const u8) ![]const u8 {
     return resolve(arena, template, active);
 }
 
-test "every kernel lock is tagged somewhere in the profile" {
+test "every kernel restriction is tagged somewhere in the profile" {
     for (all) |r| {
         if (!r.kernel) continue;
         const tag = try std.fmt.allocPrint(testing.allocator, "!{s}", .{r.name});
@@ -212,13 +222,13 @@ test "every kernel lock is tagged somewhere in the profile" {
     }
 }
 
-test "no locks leaves the profile alone" {
+test "no restrictions leaves the profile alone" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     try testing.expectEqualStrings(template, try res(a.allocator(), &.{}));
 }
 
-test "a lock takes away only the lines it is tagged on" {
+test "a restriction takes away only the lines it is tagged on" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const out = try res(a.allocator(), &.{"airgap"});
@@ -227,7 +237,7 @@ test "a lock takes away only the lines it is tagged on" {
     try testing.expect(std.mem.indexOf(u8, out, "(allow process-exec)") != null);
 }
 
-test "locks only subtract, so combining them commutes" {
+test "restrictions only subtract, so combining them commutes" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -237,7 +247,7 @@ test "locks only subtract, so combining them commutes" {
     try testing.expect(one.len < template.len);
 }
 
-test "a tampering lock removes the allow, never the deny" {
+test "a tampering restriction removes the allow, never the deny" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -253,7 +263,11 @@ test "a tampering lock removes the allow, never the deny" {
     try testing.expect(std.mem.indexOf(u8, on, "(deny file-write* (regex #\"" ++ "(^|/)\\.git($|/)") != null);
 }
 
-test "the core deny survives every lock, and comes last" {
+/// The broad pair the two permanent rules are written against.
+const broad_deny = "(deny file-write* (regex #\"(^|/)\\.?m8-st8($|/)\"))";
+const broad_allow = "(allow file-write* (regex #\"(^|/)\\.?m8-st8($|/)\"))";
+
+test "the core deny survives every restriction, and comes last" {
     const core_rule = "m8-st8/core($|/)";
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
@@ -267,9 +281,32 @@ test "the core deny survives every lock, and comes last" {
         const out = try res(arena, active);
         const at = std.mem.indexOf(u8, out, core_rule) orelse return error.CoreRuleMissing;
         // Last matching rule wins, so it must follow the allow it overrides.
-        if (std.mem.lastIndexOf(u8, out, "(allow file-write* (regex")) |allow| {
+        // The allow it overrides rather than the last one there is: the
+        // scratch rule below it is an allow that is meant to come after.
+        if (std.mem.indexOf(u8, out, broad_allow)) |allow| {
             try testing.expect(at > allow);
         }
+    }
+}
+
+test "the mob's scratch stays writable under every restriction" {
+    // The pair to the core deny: m8 guarantees a tool can write here, so no
+    // combination of flags may take it away, and it has to follow the deny
+    // that would otherwise carry it off with the rest of a config directory.
+    const scratch_rule = "m8-st8/\\.tmp-dir($|/)";
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    for ([_][]const []const u8{
+        &.{},
+        &.{"jail"},
+        &.{"no-edit-m8-st8"},
+        &.{ "no-writes", "private", "airgap" },
+    }) |active| {
+        const out = try res(arena, active);
+        const at = std.mem.indexOf(u8, out, scratch_rule) orelse return error.ScratchRuleMissing;
+        const deny = std.mem.indexOf(u8, out, broad_deny) orelse return error.DenyMissing;
+        try testing.expect(at > deny);
     }
 }
 
@@ -290,7 +327,7 @@ test "the env allowlist passes what it names and nothing else" {
 // component anchor in them broke twice under hand testing before it was
 // right, and nothing about the regex text says whether it holds.
 
-fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, locks: []const []const u8, script: []const u8) !bool {
+fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []const u8, script: []const u8) !bool {
     var a: std.heap.ArenaAllocator = .init(gpa);
     defer a.deinit();
     const arena = a.allocator();
@@ -298,7 +335,7 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, locks: []const []c
     const path = try std.fs.path.join(arena, &.{ dir, "resolved.sb" });
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = path,
-        .data = try resolve(arena, template, locks),
+        .data = try resolve(arena, template, active),
     });
 
     var child = try std.process.spawn(io, .{
@@ -339,7 +376,7 @@ test "a config directory cannot be staged elsewhere and renamed in" {
     defer threaded.deinit();
     const io = threaded.io();
 
-    const dir = try scratch(testing.allocator, io, "m8-lock-rename");
+    const dir = try scratch(testing.allocator, io, "m8-restriction-rename");
     defer testing.allocator.free(dir);
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
 
@@ -350,7 +387,7 @@ test "a config directory cannot be staged elsewhere and renamed in" {
         "mkdir -p staging && echo x > staging/evil.md"));
     try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
         "mv staging .m8-st8"));
-    // And the same for core, with a lock that never mentions it.
+    // And the same for core, with a restriction that never mentions it.
     try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"},
         "mkdir -p .m8-st8 2>/dev/null; mv staging .m8-st8/core"));
 }
@@ -361,7 +398,7 @@ test "a config directory cannot be reached through a symlink" {
     defer threaded.deinit();
     const io = threaded.io();
 
-    const dir = try scratch(testing.allocator, io, "m8-lock-symlink");
+    const dir = try scratch(testing.allocator, io, "m8-restriction-symlink");
     defer testing.allocator.free(dir);
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
 
@@ -373,13 +410,13 @@ test "a config directory cannot be reached through a symlink" {
         "mkdir -p .m8-st8 2>/dev/null; ln -s elsewhere .m8-st8/core"));
 }
 
-test "a lock leaves ordinary work alone" {
+test "a restriction leaves ordinary work alone" {
     if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    const dir = try scratch(testing.allocator, io, "m8-lock-control");
+    const dir = try scratch(testing.allocator, io, "m8-restriction-control");
     defer testing.allocator.free(dir);
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
 

@@ -12,9 +12,9 @@
 //! the answer. A `key` is nothing special to m8; it is passed through, and
 //! whether it means anything is between you and the command.
 //!
-//! Locks are not applied here. That is safe rather than generous: a lock is a
-//! sandbox the child is launched inside, and `sandbox-exec` is one way — a
-//! provider inherits whatever m8 is already inside and can never shed it. So
+//! Shields are not applied here. That is safe rather than generous: a shield
+//! is the process a child is launched inside, and `sandbox-exec` is one way —
+//! a provider inherits whatever m8 is already inside and can never shed it. So
 //! this only ever means m8 adds nothing, which is what lets a jailed agent
 //! still reach its own model. Trust is held where the command is written
 //! down: `core/`, which a cloned project cannot reach.

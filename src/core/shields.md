@@ -1,22 +1,20 @@
 #### :runner:bash
-> `bash` `-c` `{{CODE}}` `bash`
+> `bash` `-e` `-c` `{{CODE}}` `bash`
 
 #### :shield:deny
 > `false`
 
 #### :shield:ask
-> ```bash
-> exec "$M8_SELF" shield ask -- "$@"
-> ```
+> `m8` `shield` `ask` `--`
 
 #### :shield:secure
 > ```bash
-> exec "$M8_SELF" shield secure "${SECURES}" -- "$@"
+> exec {{M8}} shield secure "${SECURES}" -- "$@"
 > ```
 
 #### :shield:check
 > ```bash
-> exec "$M8_SELF" shield check "${CHECKS}" -- "$@"
+> exec {{M8}} shield check "${CHECKS}" -- "$@"
 > ```
 
 #### :shield:contain-reads
@@ -47,13 +45,13 @@
 > :shield:secure SECURES contain-env
 
 #### :shield:filter-toolbox
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8_SELF" filter out toolbox`
+> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} filter out toolbox`
 
 #### :shield:filter-brain
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8_SELF" filter out brain`
+> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} filter out brain`
 
 #### :shield:filter-books
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8_SELF" filter out books`
+> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} filter out books`
 
 #### :shield:freeze-toolbox
 > :shield:filter-toolbox

@@ -57,6 +57,12 @@
 ;;   core/ with an editor, since none of this applies to you, but
 ;;   nothing running under the sandbox can reach it — including a
 ;;   process trying to widen the profile it is already inside.
+;;
+;; Always allowed, in every mode, and the pair to that:
+;;   writing to .tmp-dir/ in a config directory. It is the mob's
+;;   scratch, which m8 makes before a tool runs and guarantees is
+;;   writable. It carries no tag either, so no combination of
+;;   flags can take it away.
 
 ;; Must be exectuted with parameters.
 ;; TMPDIR should be pre-created and set inside a safe area like:
@@ -154,10 +160,14 @@
 (deny file-write* (regex #"(^|/)\.?m8-st8($|/)"))
 (allow file-write* (regex #"(^|/)\.?m8-st8($|/)"))      ;;!! !no-edit-m8-st8
 
-;; Last, so it wins over the allow above, and untagged, so nothing can
-;; subtract it. core/ decides what a lock means, which is what makes this
-;; file safe to override from config.
+;; Last, so they win over the allow above, and untagged, so nothing can
+;; subtract either. core/ decides what a restriction means, which is what makes
+;; this file safe to override from config. .tmp-dir/ is the mob's scratch,
+;; which m8 guarantees a tool can write — it holds no definitions, so the one
+;; directory always open inside a config directory is the one that says
+;; nothing about what runs.
 (deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))
+(allow file-write* (regex #"(^|/)\.?m8-st8/\.tmp-dir($|/)"))
 
 ;; --- non-local internet access ---
 (allow network*)                      ;;!! !airgap
@@ -171,4 +181,26 @@
   (remote ip "localhost:*")           ;;!! !no-loop
   (local unix-socket)                 ;;!! !no-loop
   (remote unix-socket))               ;;!! !no-loop
+
+;; --- name resolution ---
+;; After the deny above, so it survives no-loop. macOS resolves through
+;; mDNSResponder, so no-loop otherwise leaves a tool with the internet allowed
+;; and no way to name anything on it.
+;;
+;; Tagged !airgap: a lookup is a message to a resolver, so a jailed tool with
+;; one has a channel out whether or not it can open a connection.
+;;
+;; Both ways to the resolver are allowed, because which one is taken is the
+;; OS version's business: the socket, and the two named XPC services that
+;; `private` otherwise revokes. On a macOS wanting the newer spelling, the
+;; socket is
+;;   (remote unix-socket (path-literal "/private/var/run/mDNSResponder"))
+;;
+;; Named services rather than (allow system-socket), which is every system
+;; socket there is and far past what resolving a name asks for.
+(allow network-outbound                                     ;;!! !airgap
+  (literal "/private/var/run/mDNSResponder"))               ;;!! !airgap
+(allow mach-lookup                                          ;;!! !airgap
+  (global-name "com.apple.dnssd.service")                   ;;!! !airgap
+  (global-name "com.apple.SystemConfiguration.configd"))    ;;!! !airgap
 

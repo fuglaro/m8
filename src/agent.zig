@@ -2,7 +2,7 @@
 //!
 //! This is a projection and nothing else. The ledger is the truth — every
 //! record, in the order it was written — and a request needs less than that:
-//! which model, which locks, which tools, and which of those the agent has
+//! which model, which shields, which tools, and which of those the agent has
 //! actually offered. Nothing here is ever written back.
 //!
 //! What a turn *said* is not in here. That belongs to the ledger, and to
@@ -36,8 +36,8 @@ pub const Definition = struct {
     /// Every 🧰 that carried none, which names a tool to offer. A tool reaches
     /// the model only if it is named here.
     allowed: []const []const u8 = &.{},
-    /// Every 🛡 that carried a block. Cumulative like locks and for the same
-    /// reason: a second definition of a name stacks a wrapper, so including
+    /// Every 🛡 that carried a block. Cumulative, because a shield is a
+    /// wrapper: a second definition of a name stacks one, so including
     /// something can tighten and can never un-define.
     shields: []const shield.Definition = &.{},
     /// Every 🛡 that carried a value alone, in the order met. Activation order
@@ -159,7 +159,7 @@ fn hasShield(d: Definition, name: []const u8) bool {
     return false;
 }
 
-test "a definition yields its model, locks and tools" {
+test "a definition yields its model, shields and tools" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -174,7 +174,7 @@ test "a definition yields its model, locks and tools" {
         \\#### :shield:jail
         \\
         \\#### :toolbox:say
-        \\> `echo` `{{text:}}`
+        \\> `echo` `{{M8_ARG_TEXT|}}`
         \\> * text string
         \\> > Echoes.
         \\

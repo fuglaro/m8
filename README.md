@@ -41,7 +41,7 @@ Where things are:
 * **Commands** — the command line, assembling a ledger,
   encoding, calling.
 * **Language and Schema**, **Sigils**, **Types**,
-  **Command Templates** — the format, in enough detail
+  **Carrying the Call** — the format, in enough detail
   to write a parser from.
 * **Shields** — what a tool runs inside.
 * **Configs** — where agents, mobs, models and providers
@@ -129,21 +129,25 @@ it cannot read back. The readable output is a dead end
 and the real record lives elsewhere, in a format meant
 for machines. Here the readable output is the record.
 
-### Four formats were always one
+### The formats were always one
 
-An agent definition, a transcript, a wire request and a
-tool exchange are one sequence of records seen at four
-moments. A definition is a ledger nobody has answered
-yet. A transcript is one that has been. A request is
-that ledger projected onto what a model can be told. A
-call and its answer are records in it like any other.
+An agent definition, a transcript, a wire request, a
+tool exchange and a permission policy are one sequence
+of records seen at five moments. A definition is a
+ledger nobody has answered yet. A transcript is one that
+has been. A request is that ledger projected onto what a
+model can be told. A call and its answer are records in
+it like any other. A 🛡 is a record as well, written in
+the agent or the 🧰 it restricts.
 
-Keeping them apart costs four parsers. A template
+Keeping them apart costs a parser each. A template
 language turns config into a prompt. A serialiser turns
 history into a request. An adapter turns the response
 back into history. A schema dialect describes tools and
-matches none of the other three. Four things to learn,
-four to version, four places to lose something.
+matches none of the other three. A policy file says what
+a tool may do, in a dialect of its own, and none of the
+other four ever reads it. Five things to learn, five to
+version, five places to lose something.
 
 One grammar removes all of that. What is left can be
 piped, diffed, hand-edited, committed, mailed and
@@ -196,10 +200,12 @@ year.
 ### What a distribution gets
 
 * MIT.
-* One binary from `zig build`. `build.zig.zon` declares
-  no dependencies. Nothing vendored, nothing fetched at
-  build time, no libcurl, no OpenSSL, nothing to
-  CVE-track that is not the toolchain.
+* One binary from `zig build`, or a program per command
+  from `zig build split` — the same sources either way,
+  and below. `build.zig.zon` declares no dependencies.
+  Nothing vendored, nothing fetched at build time, no
+  libcurl, no OpenSSL, nothing to CVE-track that is not
+  the toolchain.
 * No daemon, no database, no account, no telemetry, no
   bundled weights, and no network needed to build or
   test. `inbuilt` answers locally, so the loop, tool
@@ -213,6 +219,45 @@ for thirty years, because it is the shape of `grep` and
 `jq`. Single-binary agent runtimes exist. Single-binary
 agent runtimes whose entire state is files you can read
 do not.
+
+### One registry, two builds
+
+Composable is a claim about the command line, and it is
+cheap to make while every command is one binary calling
+itself. So m8 builds both ways from one registry, and
+the split set is the guardrail rather than the
+optimisation.
+
+* `zig build` is the single binary. A launcher reaching
+  a command calls it.
+* `zig build split` is a program per command — `m8-cat`,
+  `m8-call-edline-view`, `m8--` — and a launcher that
+  holds none of them. Reaching a command is spawning it.
+
+The difference is one comptime branch. What a launcher
+reads is a command's *spec* — its name, what it takes,
+and whether its arguments are prose — and a spec holds
+no function pointer, so a launcher knows every command
+without carrying one. The whole registry costs it two
+kilobytes.
+
+A command that reaches into another command's module
+still compiles. It shows up in the split set, as a leaf
+that is suddenly carrying a stack it has no business
+carrying — so the sizes in `zig-out/bin` are a reading
+of the architecture. Most commands sit within a few
+kilobytes of a hello-world against this std, and the
+ones that do not say why: TLS is in the command that
+posts to a url, the codecs are in the ones that speak to
+a model, and a nested agent turn is in the shield that
+asks one.
+
+Nothing about the command line changes between the two,
+and a distribution picks by what it is packaging rather
+than by what it gets. Symlink `m8-cat` to the single
+binary and it *is* `m8-cat`, the way busybox is: same
+output, same status, so the uber download and the split
+package behave alike.
 
 ### The field
 
@@ -595,6 +640,49 @@ a question to the person and appends their answer to the
 document, so the next command in the pipe sees it. An
 inbuilt tool is never typed as a command of its own.
 
+`view` and `edit` are two more, reached under one name as
+`m8 call edline view` and `m8 call edline edit`. They are
+scoped together because they are one language rather than
+two tools. What `view` answers with is what `edit` takes:
+a file line is `=123|LINE`, a grep over a directory names
+each file the way an edit context names it, and a count of
+what matched is the line an edit substitutes against. An
+edit says a line back before changing it, so a change built
+on a stale picture of a file is refused rather than applied
+to whatever is at that number now.
+
+That is a bet, and it is the reason there is no matching
+across lines. Elsewhere a block of surrounding context is
+how a tool says "this one, not the other five", because it
+will not trust a line number. m8 says it with the number
+and checks it, so a denial is how a model finds out its
+picture went out of date — never something to edit against.
+
+`munge` is the other side of that bet, as `m8 call munge
+read`, `write` and `scan`. Where `edline` makes the
+coordinate exact and refuses a stale one, `munge` makes it
+coarse: a page is about 100 lines, every answer says which
+pages it gave and how to ask for the next, and nothing is
+ever asserted against a page. Precision lives in the
+strings read out of one, so a page number that has drifted
+still names the right part of the file.
+
+What that buys is forgiveness with a receipt. A block is
+matched down a ladder — indentation, then all whitespace,
+then an argument whose escaping doubled in transport, then
+a line number pasted on the front, then a quarter of a
+block once its ends hold — and whatever was forgiven is
+named in what comes back, because forgiveness nobody is
+told about is how a near miss lands on the wrong code. A
+block that matches twice is still refused: `pages` is how
+a model says which one it meant, rather than pasting more
+of the file around it.
+
+`scan` answers in the same terms, over the files a glob
+names, with its own small regex engine — no captures, no
+matching across lines, and linear time by construction
+rather than by a timeout.
+
 ## Language and Schema
 
 Agent definition:
@@ -605,7 +693,7 @@ Agent definition:
 ▄ 🧰Tool Name
 │ │ Tool Description
 │ 🛡️Shield Name
-│ `cmd` `{{PropertyName:--flag}}` `{{Other}}`
+│ `m8` `call` `args` `cmd` `{{M8_ARG_PROPERTYNAME|--flag}}`
 │ * PropertyName string
 │   Property Description
 │ * Other? integer
@@ -665,6 +753,7 @@ Query:
 ▄ 📲Called Tool Name,Call ID
 │ * Argument Name `value`
 │ * Argument Name
+│ * Argument Name
 │   ```
 │   a value over
 │   more than one line
@@ -704,6 +793,14 @@ ends it, so the newline before that fence is framing
 rather than something the value said — which is how a
 value that really does end in one is written as a blank
 line before the close.
+
+The empty string is the name with nothing after it at
+all: no span, no block. Models hand an optional argument
+an empty string rather than leave it out, often enough
+that the block spelling would cost three lines of
+document to say nothing. An empty block still reads as
+the empty string, so a model that writes one is
+understood either way.
 
 Neither form escapes anything, and neither has to.
 Backticks are CommonMark's, so a span opens with a run
@@ -923,74 +1020,13 @@ There is no oneOf. A discriminator enum with optional
 fields constrains better, and lets the tool return a real
 error instead of a schema rejection.
 
-## Command Templates
+## Carrying the Call
 
-A tool written as an argv — backtick spans, one element
-each — may carry placeholders, expanded against the JSON
-of the call. Each span is wrapped in backticks, so it
-renders as code wherever the document does.
-
-Given `{"with": ["check", "sandbox"], "cmd_str": "echo hi"}`:
-
-```
-{{cmd_str}}       --cmd_str "echo hi"
-{{cmd_str:-c}}    -c "echo hi"
-{{with:-w}}       -w check -w sandbox
-{{with:}}         check sandbox
-```
-
-A placeholder is a whole element and expands to as
-many as it needs, so
-
-```
-["runner", "{{with:-w}}", "--", "bash", "{{cmd_str:-c}}"]
-```
-
-runs
-
-```
-["runner", "-w", "check", "-w", "sandbox", "--", "bash", "-c", "echo hi"]
-```
-
-The flag is `--` and the key unless you name one.
-Naming replaces that leading `--key` and nothing
-else, so anything beneath it still chains. Naming
-nothing drops the flag and leaves the values.
-
-On `{"opts": {"a": 1, "b": {"c": 2}}}`:
-
-```
-{{opts:-o}}       -o.a 1 -o.b.c 2
-{{opts:}}         1 2
-```
-
-Objects expand their leaves and join the keys with
-a `.`. Arrays expand in full, repeating the prefix
-once per element, at whatever depth they occur and
-whatever they hold. On `{"opts": [{"a": 1}, {"a": 2}]}`:
-
-```
-{{opts:-o}}       -o.a 1 -o.a 2
-```
-
-An array carries no index. That is the one place
-the shape is lost, and it is what a POSIX command
-wants.
-
-A required argument and an optional one expand alike.
-They differ only when the key is missing: a required one
-is refused by m8 before a command is built, an optional
-one is simply left out.
-
-None of this applies to a tool written as a fenced
-block, and that is the point of the two forms. A
-placeholder is safe here because it is a whole argv
-element and can never become syntax; substituted into a
-script it would be a command line the model got to
-write. So a block carries no placeholders at all, and
-what the call said reaches it as `M8_ARG_*` — named,
-inert, and read by whatever language the block is in
-the way that language already reads its environment.
+What a call said reaches its tool in the environment,
+and nowhere else. A tool written as an argv is the words
+it was written as, one written as a fenced block is the
+script it was written as, and m8 hands either to its
+command unchanged.
 
 ```m8
 ▄ 🧰search
@@ -1002,7 +1038,7 @@ the way that language already reads its environment.
 │   what to look for
 ```
 
-What a block is handed:
+What a tool is handed:
 
 * `M8_ARG_<NAME>` per scalar, the name uppercased, when
   it is already a portable identifier.
@@ -1011,19 +1047,63 @@ What a block is handed:
   of its own and lives here rather than in a mangled
   variable that might collide.
 * `M8_CALL_ID`, which call this is.
-* `M8_SELF`, where the m8 that launched it lives.
 
 An argument that was not supplied is unset rather than
 empty, which is the whole of what optional means to
-whatever reads it.
+whatever reads it. A required one that is missing is
+refused before a command is built at all.
 
-* `null` and `false` omit the key entirely.
-* `true` emits the flag with no value.
-* `{{{...}}}` is a literal `{{...}}`.
-* `{{}}` passes the whole JSON as one string. It is
-  the last resort for a command this cannot say,
-  and expects a script on the other side that would
-  rather read JSON than flags.
+### Commands That Want Flags
+
+A shell reads its environment. `curl` and `git` do not,
+and turning variables back into flags for them is a
+command's own business rather than the framework's.
+`m8 call args` is the one m8 ships for it.
+
+```m8
+▄ 🧰bash
+│ │ Run a bash command.
+│ `m8` `call` `args` `bash` `-euo` `pipefail` `{{M8_ARG_COMMAND|-c}}`
+│ * command string
+│   The bash command to run.
+```
+
+Given `M8_ARG_COMMAND=echo hi`:
+
+```
+{{M8_ARG_COMMAND}}       --command "echo hi"
+{{M8_ARG_COMMAND|-c}}    -c "echo hi"
+{{M8_ARG_COMMAND|}}      "echo hi"
+{{M8_ARG_DEEP?--deep}}   --deep, when the value is exactly true
+{{M8_ARGS}}              the whole call as JSON, one argument
+```
+
+The flag a bare placeholder carries is the argument's
+own name, which is what the variable was made from in
+the first place. `M8_ARGS` is the call rather than an
+argument, and stands alone.
+
+A placeholder is a whole argument and is never spliced
+into a larger one, so a value cannot become syntax in
+what runs.
+
+* An unset variable leaves nothing behind. An empty one
+  is a value a command was given, and is passed as an
+  empty argument.
+* Only `?` reads a value: `true` emits the flag, `false`
+  emits nothing, and anything else is an error naming
+  what arrived, because a call that looked like it
+  succeeded while ignoring what was asked is worse than
+  one that failed.
+* Only a word opening `{{M8_ARG` is looked at, so the
+  braces a templating language meant for itself survive
+  — `m8 call args awk '{{print $1}}' f` runs the awk
+  program it was handed.
+
+None of this is privileged. An argv is passed on as it
+was written, so a toolbox naming some other expander
+works the same way, and deleting `args` leaves the
+framework whole.
 
 ## Shields
 
@@ -1067,9 +1147,9 @@ them stack.
 ▄ 🏃bash
 │ `bash` `-c` `{{CODE}}` `bash`
 
-▄ 🛡️ask
+▄ 🛡️secure
 │ ```bash
-│ exec "$M8_SELF" shield ask -- "$@"
+│ exec {{M8}} shield secure "${SECURES}" -- "$@"
 │ ```
 ```
 
@@ -1079,9 +1159,21 @@ names it, so a document reads in one pass, and defining
 one twice is an error rather than a question.
 
 Every wrapper is handed the command it wraps as
-arguments, and `M8_SELF` is where this m8 lives — a
-block is a script m8 does not read, so it is given the
-path rather than expected to find one.
+arguments, and two spellings say "the m8 that is
+running", because a wrapper is m8 two different ways.
+
+* A wrapper whose first word is `m8` *is* an m8 command,
+  and that word becomes this m8's path. `🛡️ask` is
+  `` `m8` `shield` `ask` `--` `` and nothing else.
+* A wrapper that mentions m8 inside a word says `{{M8}}`
+  and that becomes the path. A script is bytes m8 does
+  not read, so a pipe through `m8 filter` needs somewhere
+  to write where m8 is.
+
+Said in the argv either way, so the path reaches the
+wrapper that asked for it rather than every process
+underneath. The tool's own argv is untouched: it is not
+a wrapper.
 
 Nothing inserts an argv0 for you. `bash -c` binds `$0`
 to the first argument after the script, which is why
@@ -1238,7 +1330,7 @@ One that builds its own:
 
 ▄ 🧰toolmaker
 │ │ Write a new tool and return its definition.
-│ `make-tool` `{{spec}}`
+│ `m8` `call` `args` `make-tool` `{{M8_ARG_SPEC|}}`
 │ * spec string
 │   What the tool should do
 
@@ -1653,7 +1745,7 @@ HOME              that, when XDG_CONFIG_HOME says nothing:
                   ~/.config/m8-st8
 PATH              where a provider or tool named as a bare
                   word is looked for, and where m8 finds itself
-TMPDIR            where a locked tool's own directory is made;
+TMPDIR            where a shielded tool's own directory is made;
                   /tmp when unset
 ```
 

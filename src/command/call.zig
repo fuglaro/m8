@@ -18,12 +18,13 @@
 
 const std = @import("std");
 const api = @import("api.zig");
+const launch = @import("../launch.zig");
 const doc = @import("../m8/doc.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "call",
-    .summary = "run a command under the locks in force",
+    .summary = "run an m8 command, or a program",
     // A spawned program owns stdin. Reading it here would take the bytes it
     // is waiting for; an m8 command that wants the document gets it below.
     .takes = .nothing,
@@ -56,12 +57,6 @@ fn run(ctx: Ctx) !u8 {
             continue;
         }
         if (std.mem.eql(u8, word, "--help") or std.mem.eql(u8, word, "-h")) return help(ctx);
-        // `-l` used to live here. It covers the whole run now, so it belongs
-        // before the command rather than after it.
-        if (std.mem.eql(u8, word, "-l") or std.mem.eql(u8, word, "--lock")) {
-            try ctx.err.writeAll("m8 call: put -l before call, it covers the whole run\n");
-            return usage(ctx, Error.NothingToRun);
-        }
         break;
     }
 
@@ -72,6 +67,17 @@ fn run(ctx: Ctx) !u8 {
     }
 
     if (!env_program) {
+        // Where the commands are programs, reaching one is running it — and
+        // the flag, the document and the page all arrive the way they would
+        // have anyway, because a command out here answers for itself.
+        if (launch.split) {
+            const node = @import("../command.zig").callableNode(rest[0]) orelse {
+                try ctx.err.print("m8 call: no command named '{s}'\n", .{rest[0]});
+                return usage(ctx, Error.UnknownCommand);
+            };
+            return launch.under(ctx, .{ .spawn = node.program }, rest[1..], .inherited);
+        }
+
         const inner = @import("../command.zig").findCallable(rest[0]) orelse {
             try ctx.err.print("m8 call: no command named '{s}'\n", .{rest[0]});
             return usage(ctx, Error.UnknownCommand);
@@ -348,12 +354,24 @@ fn help(ctx: Ctx) !u8 {
 
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     // Whatever is left names something `call` can reach: `m8 help call ask`
-    // and `m8 call ask --help` are the same page.
+    // and `m8 call ask --help` are the same page. A page lives beside its
+    // command, so where the commands are programs this asks the program.
     if (ctx.args.len > 0) {
-        if (@import("../command.zig").findCallable(ctx.args[0])) |inner| {
+        if (@import("../command.zig").callableNode(ctx.args[0])) |node| {
+            if (launch.split) {
+                var argv: std.ArrayList([]const u8) = .empty;
+                try argv.append(ctx.arena, "--help");
+                try argv.appendSlice(ctx.arena, ctx.args[1..]);
+                _ = try launch.under(ctx, .{ .spawn = node.program }, argv.items, .inherited);
+                return;
+            }
             var sub = ctx;
             sub.args = ctx.args[1..];
-            return @import("help.zig").write(sub, inner, w);
+            return @import("help.zig").write(
+                sub,
+                @import("../command.zig").findCallable(ctx.args[0]).?,
+                w,
+            );
         }
     }
     try w.writeAll(
@@ -371,13 +389,15 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
     );
     // What `call` accepts, asked rather than restated, so this cannot come to
-    // advertise something it would refuse.
+    // advertise something it would refuse. Read off the tree, because saying
+    // what may be reached is not a reason to hold every command that may be.
     const cmd = @import("../command.zig");
     try w.writeAll("\ncommands:\n\n");
-    for (cmd.native) |c| try w.print("  {s: <15} {s}\n", .{ c.name, c.summary });
-    for (cmd.all) |c| {
-        if (!cmd.callable(c)) continue;
-        try w.print("  {s: <15} {s}\n", .{ c.name, c.summary });
+    for (cmd.byPath(&.{"call"}).?.children) |n|
+        try w.print("  {s: <15} {s}\n", .{ n.spec.name, n.spec.summary });
+    for (cmd.tree) |n| {
+        if (cmd.callableNode(n.spec.name) == null) continue;
+        try w.print("  {s: <15} {s}\n", .{ n.spec.name, n.spec.summary });
     }
     try w.writeAll("\nm8 call NAME --help is that one's page.\n");
 }

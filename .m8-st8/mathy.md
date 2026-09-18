@@ -1,4 +1,4 @@
-#### :brain:local/Ternary-Bonsai-8B-mlx-2bit
+#### :brain:local/Ternary-Bonsai-1.7B-mlx-2bit
 
 #### :compass:
 > You are a mathematics expert that will answer questions,

@@ -48,6 +48,11 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
         doc.detect(ctx.in) orelse .md,
     );
 
+    // A mob's own scratch, made before any tool runs. Worked out once: it
+    // belongs to the mob rather than to a call, which is what lets a tool
+    // write a file and answer with a path the next call can open.
+    const scratch = (try config.mobTmp(arena, io, dirs, expanded.origin)) orelse "";
+
     var records: std.ArrayList(doc.Record) = .empty;
     try records.appendSlice(arena, expanded.records);
 
@@ -68,10 +73,10 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
     // Only what a blockless 🧰 named, and the last definition of a name wins.
     const offered = try agent.offer(arena, def);
 
-    // Locks come from the ledger and the command line together. Neither can
-    // loosen the other; a lock only ever removes.
-    // What m8 ships with is underneath, so `jail` means something before any
-    // agent is read, and an agent stands on it rather than beside it.
+    // Shields come from the ledger alone, and stack rather than replace: a
+    // second one can only tighten. What m8 ships with is underneath, so `jail`
+    // means something before any agent is read, and an agent stands on it
+    // rather than beside it.
     const shields = try (shield.Set{
         .defs = def.shields,
         .runners = def.runners,
@@ -94,7 +99,7 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
     // them. What it already asked for and never got is owed before anything
     // new is said, and nothing already answered is run a second time.
     for (try ledger.outstanding(arena, records.items)) |asked| {
-        for (try answer(ctx, shields, offered, .{
+        for (try answer(ctx, scratch, shields, offered, .{
             .id = ledger.callId(asked.value),
             .name = ledger.callName(asked.value),
             .arguments = try toolbox.parseArgs(arena, .md, asked.content orelse ""),
@@ -167,7 +172,7 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
 
             // The answer comes from the tool, not the model, and was already
             // checked against what a tool may say.
-            for (try answer(ctx, shields, offered, c)) |record| {
+            for (try answer(ctx, scratch, shields, offered, c)) |record| {
                 try show(arena, out, mode, &written, record);
                 try records.append(arena, record);
                 try turn.append(arena, record);
@@ -223,6 +228,7 @@ fn settled(
 /// try something else.
 fn answer(
     ctx: Ctx,
+    scratch: []const u8,
     shields: shield.Set,
     tools: []const toolbox.Tool,
     c: codec.Call,
@@ -253,17 +259,16 @@ fn answer(
             return failure(arena, c.id, "'{s}' is required", .{prop.name});
     }
 
-    // Two ways to say how a tool runs, and the difference is where the
-    // call's values go. An argv takes them as whole elements; a block takes
-    // none at all and reads them out of the environment.
+    // Two ways to say how a tool runs, and neither carries what the call
+    // said: an argv is the words it was written as, a block is the script it
+    // was written as, and the values reach both in the environment.
     const argv = switch (tool.command) {
         .none => unreachable,
-        .argv => |a| toolbox.expand(arena, a, args, c.arguments) catch |e|
-            return failure(arena, c.id, "{s}", .{@errorName(e)}),
+        .argv => |a| a,
         .block => |b| shield.through(arena, shields.runners, b) catch |e|
             return failure(arena, c.id, "{s}", .{@errorName(e)}),
     };
-    if (argv.len == 0) return failure(arena, c.id, "the command expanded to nothing", .{});
+    if (argv.len == 0) return failure(arena, c.id, "the command is empty", .{});
 
 
     // A tool's own 🛡 activate on top of whatever the agent already turned
@@ -277,8 +282,14 @@ fn answer(
     const wrapped = try shield.wrap(arena, stood.wrappers, argv, ctx.self);
 
     var env: std.ArrayList(api.EnvVar) = .empty;
-    try env.append(arena, .{ .key = shield.self_var, .value = ctx.self });
     try env.appendSlice(arena, stood.env);
+    // The mob's scratch, and a home that is not the person's for whatever
+    // wants to drop a dotfile beside what it wrote. Both are made by m8, so a
+    // tool neither creates one nor finds a trailing slash on it.
+    if (scratch.len > 0) {
+        try env.append(arena, .{ .key = "TMPDIR", .value = scratch });
+        try env.append(arena, .{ .key = "HOME", .value = scratch });
+    }
     // What the tool's own definition adds, which is neither the machine's nor
     // the call's and so is written down once rather than supplied every time.
     if (tool.env_var.len > 0) try env.append(arena, .{
@@ -333,11 +344,9 @@ fn answer(
 /// Put a candidate command line to an agent. Null when it answered `allow`,
 /// otherwise whatever it said instead.
 ///
-/// The locks in force are passed through, so a checker is never more capable
-/// than what invoked it — otherwise a jailed agent reaches the world by
-/// talking its own checker into it. Its reply is never streamed and never
-/// reaches the receipt; it exists to decide, not to be read.
-/// `m8 shield check AGENT -- CMD...`, which is what 🛡check expands into.
+/// Its reply is never streamed and never reaches the receipt; it exists to
+/// decide, not to be read. `m8 shield check AGENT -- CMD...`, which is what
+/// 🛡check expands into.
 ///
 /// Nothing is passed through to make the checker less capable than its caller.
 /// It does not need to be: a shield is a wrapper, so the checker already runs

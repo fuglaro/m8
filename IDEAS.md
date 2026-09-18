@@ -1,276 +1,3 @@
-
-# ==== DONE
-
-```
-# Shell accessible m8 parser that expands whole chats ledgers.
-m8 +mathy encode m8
-m8 +mathy encode m8 >full-ledger-copy.md # raw when not tty
-m8 decode m8 # null operation
-
-# Shell accessible api conversion.
-# Can be lossy as it can forget the target model through an encode/decode.
-m8 +mathy encode openai
-m8 encode openai-completions <full-ledger-copy.md >openai.json
-m8 decode openai-completions <openai.json # reverses operation
-
-# Shell accessible redirect to provider interaction.
-m8 decode openai-completions <openai.json | m8 send [PROVIDER/MODEL]
-```
-
-Command line inclusions like +mathy and what comes after -- are appended to any stdin.
-Providers api entry should change from openai to openai-completions.
-  It makes the api field and the codec name the same namespace.
-  The codec should own the URL suffix too.
-  Allow models to override the provider api key with their own api key.
-m8 is always a ledger: retain record order, shift any reordering/combining to model apis,
-  because every api encoding are projections of it.
-m8 is truth: avoid dropping things from the history.
-Fix: "Tool calls are dropped from history" - tool calls should stay in m8.
-  Calls that have already been responded to are not called again.
-
-
-# ==== DONE
-
-`m8 [-l LOCKS] [@AGENT|+CHAT] [COMMAND [ARGS]] [-- PROMPT]` -> sorry, is confusing things.
-I need to separate some concepts so I'm not asking for spaghetti:
-```
-  m8 [-l LOCKS] [[@AGENT|+CHAT] MSG_CMD|RUN_CMD] [ARGS]
-
-msg_cmds:
-  --     consults an agent...
-  cat    ...
-  encode ...
-  send   ...
-
-  Respects stdin as m8 or raw prompt and assembles a ledger and prompt.
-
-
-run_cmds:
-  call   ...
-  ... 
-```
-And maybe we should just move ask as a native inbuilt inder the call cmd:
-```
-m8 call ask ...
-```
-
-Assembly of ledger (with `STDIN | m8 [@/+NAME] -- PROMPT`):
- - no STDIN: assembles `NAME(fallback to last chat) → -- prompt`
- - detected m8 STDIN: assembles `NAME(no fallback) → STDIN → [-- prompt](runs even without)`
- - other STDIN: assembles `NAME(no fallback) → [-- prompt](runs even without) + STDIN appended to prompt`
-We detect on initial ligature, so the detected m8 STDIN can still error on malformed.
-
-# ==== DONE
-
-can't run, and it reports that honestly rather than silently.
-The one real loss. openai → m8 → openai is byte-identical except max_tokens, which came from your provider config and isn't on the wire.
-
-
-
-* New model only form starts with @/: `@/local/Ternary-Bonsai-1.7B-mlx-2bit,context:32768,max_tokens:8192`
-* Parameters are expected to be the provider api's form.
-* Considered an unnammed agent so not chat is automatically made.
-* No longer falls back to a model if an agent isn't found with the old form.
-* Models can no longer have their own api defined, it can only be defined at a provider level.
-* Multiple providers can be defined each with a different api to give access to multi-api-providers.
-* Users can always make agents with matching names that simply reference the
-  model so an agent form is accessible `@Ternary-Bonsai-1.7B-mlx-2bit` or even
-  like it was by making a mob `@local/Ternary-Bonsai-1.7B-mlx-2bit`.
-* providers.json no longer supports the models entry. Much simpler and everything moves into m8.
-* Chamge to `m8 send PROVIDER` since we don't need to specify the model anymore.
-* When doing this migrate .m8-st8 and make the agent aliases
-  like `@local/Ternary-Bonsai-1.7B-mlx-2bit` for compatibility.
-
-# ==== DONE
-
-Consider:
-m8 → openai → m8 also loses 🔌 — so a decoded tool
-Won't do. By design.
-
-# ==== DONE
-
-COMMAND PROVIDERS
-
-Support custom providers and api converters with plugin commands in core m8-st8.
-
-* Move providers.json under m8-st8/core/.
-* Change the providers.json format so it runs via commands
-  which takes api-formatted request as stdin
-  and outputs the response in it's own api-format e.g: `m8 providers PROVIDER`
-* Passes provider args as env vars on launch with M8_PROVIDER_ prefix.
-  All args matching a specific format are provided in the env on top of the inherited env:
-    * When values are strings.
-    * When keys are lowercase with hyphen,
-      and they convert to uppercase with underscores in the env var name.
-* Has a fallback approach to finding the command path to run:
-  * If the command starts with the "m8" value, it is expanded to the full path
-    of the m8 executable that launched it.
-  * Otherwise if the first value in cmd starts with a "/", it runs as a full path executable.
-  * Otherwise if the first value exists as a file relative to m8-st8/core/,
-    it runs as the full path to that file, and if that file is not executable, it errors.
-  * Otherwise if the first value contains no "/", it is PATH-searched.
-  * Otherwise failure.
-* Providers may fail with a return code and stderr message if, for example, the api is not supported.
-* Failure mode is an exit non-zero, propagated.
-* Support an overridable default src/core/providers.json similar to the other core configs:
-  ```
-    "inbuilt": {
-      "cmd": ["m8", "providers", "inbuilt"],
-      "api": "m8",
-    }
-  ```
-* Args `cmd` and `api` become the only special ones known to m8:
-  * Both are used for knowing the command and formatting to encode and parse,
-    while cmd is not passed through while api is, purely due to format expectatons.
-  * Any `key` arg (M8_PROVIDER_KEY) is provided from the providers.json to the command verbatim,
-    if it is a string, and is not considered any kind of special parameter,
-    except to the provider command itself, if it expects it.
-* Current providers in providers.json get a cmd added of `["m8", "providers", "url"]`.
-* Get rid of Codec.suffix and move it to the providers.json config.
-  For current configs, migrate by extening the url with "chat/completions".
-* Providers SHOULD support streaming, and all included ones in m8 do, if it's possible.
-* Support direct accesss to default url providers with `m8 providers url`.
-* Add response parsing back to m8 with new `m8 parse API` RUN_CMD.
-  * Internal defined only with cli over it, since custom API support,
-    can only be done with custom providers that speak m8.
-  * If the response API format supports streaming, the parse command
-    MUST support streaming to m8.
-  * If response API can give both streaming and non-streaming forms,
-    the response must be inspected to determine parse mode.
-* Add test models to inbuilt provider (`m8 providers inbuilt`):
-  * `m8 @/inbuilt/echo` says back last ledger entry.
-  * `m8 @/inbuilt/you-are` always responds "I know you are but what am I?"
-  * `m8 @/inbuilt/runner` calls tools for last message (if a user messge)
-     for lines matching `RUN;;;toolname;;;property=val;;;...`
-     without support for escaping separators.
-* Locks do not apply to provider commands.
-* Document appropriately, including noting:
-  * rule: mobs travel with agents; providers are yours.
-  * Provider commands are exclued from locks,
-    since trust is managed at the protected core folder level,
-    and details about why it is safe.
-  * a provider declaring api: "m8" receives the whole ledger, 🔌 and 🔒 included,
-    rather than a projection of it.
-
-# ==== DONE
-
-Hone Prior Art into existance justification and put into README.
-  Done as ## Why. PRIOR-ART.md removed.
-
-# ==== DONE
-
-additional fun inbuilt models
-
-```
-m8 @/inbuilt/elisa  # responses as that old school AI bot.
-m8 @/inbuilt/text-adventure-some-mit-flavour-one
-```
-
-# ==== DONE
-
-REJECTED IDEA: Change :receipt: to :outbox_tray:
-Change :computer: to :compass:
-
-# ==== DONE
-Tools  2.0
-
-Locks change to Shields (Tool Wrappers)
-
-#### :runner:bash
-> `m8` `call` `bash` `-c` `{{CODE}}` `bash`
-— runner (value) resolves inline codes into an executable command, substituting {{CODE}}, for subsequent code blocks on interpretation of the code block, forked from searching the PATH, and executing without an interpreter)
-
-#### :shield:deny
-> `false`
-#### :shield:ask
-> ```bash
-> exec m8 shield ask -- "$@"
-> ```
-— the block quote form just defines the shield, it must still be subsequently activated.
-— the block quote form defines wrapper commands for tools.
-— a shield can be defined multiple times and acts cumulatively as stacked wrappers.
-— the block quote can contain lines of inline codes defining wrapper commands.
-— the block quote can contain a code block which must define a language that refers to a previously defined runner.
-— subsequent shields and the toolbox command will be suffixed as arguments.
-— multiple shields defined with the same name stack cumulatively.
-— multiple commands stack cumulatively.
-
-#### :shield:deny
-#### :shield:ask
-— shield sigils without a block quote  enable the shield without changing its definition.
-— shields like "ask" may be activated last to avoid the user being queried about long shield wrapper prefix lists.
-
-#### :shield:filter-toolbox
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | m8 filter out toolbox`
-#### :shield:filter-unlock
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | m8 filter out unlock`
-— filter also filters out entire :brain: sigils if they contain anything filtered out.
-
-#### :shield:secure
-> ```bash
-> exec m8 shield secure "${SECURES}" -- "$@"
-> ```
-#### :shield:secure SECURES airgap
-#### :shield:secure SECURES no-writes
-— shield sigils with additional values (space separated) activate the shield and append those values to that environment variable, which is passed to the shield wrapper with the env command.
-
-#### :shield:sandbox
-> :shield:secure SECURES private contain-writes no-loop no-edit-git no-edit-m8-st8 contain-env
-#### :shield:jail
-> :shield:sandbox
-> :shield:airgap
-> :shield:no-loop
-— shields can also be defined as a composition of other shields.
-
-Toolbox syntax changes.
-
-#### :toolbox:tool
-> > DESCRIPTION
-> :shield:ask
-> ```bash
-> grep -r "$M8_ARG_PATTERN" .
-> ```
-> * pattern string
->   what to look for
-> * ignore_case? boolean
->   optional, so unset rather than empty when not supplied
-— first, the blocked quote is the description
-— then, additional shields (no block quote form)
-— then, a code block or inline blocks is the command to run.
-— then arguments as bullet points, NAME<?> TYPE, then description on continuation lines.
-— name is up to the first space, type is the rest of the line, so an enum may hold a space.
-— ? on the name carries optional, replacing :package: and :gift:. Type carries [] and | as before.
-— a toolbox inherits all previously activated shields and can activate further shields.
-— arguments never substitute into the command. Nothing m8 builds ever contains model text.
-— inline code form: {{ARG}} raw expands as separate arguments, one argv element per value.
-— code block form: no placeholders. Arguments arrive in the environment instead, so the block
-  is run verbatim and any language reads them natively.
-— M8_ARG_<NAME> per scalar: the name uppercased, when it is a portable identifier
-  ([A-Za-z_][A-Za-z0-9_]*). Optional and not supplied means unset, not empty.
-— M8_ARGS always carries the whole call as JSON, which is what nested, dotted and [] arguments
-  use. No flattening, no separator to collide with.
-— a name with no portable env spelling gets no scalar var and lives in M8_ARGS only. Two names
-  colliding on one env name is an error when the toolbox is defined, not at call time.
-
-#### :toolbox:tool ENV_VAR appending-value
-— similar to shields, toolboxes can have environment variables added with appending values (space separated).
-
-#### :call:tool CALLID
-> * argument `value`
-> * argument
->   ```
->   value line
->   value line
->   ```
-— code block values always drop one newline at the end.
-
-Locks are therefore no longer needed as arguments to m8.
-
-CALL_ID is always put into the environment of a tool call, and propagates through contain_env.
-
-m8 call m8 -- PROGRAM
-— will call a program from the environment that creates m8. :receipt: :green_circle: :no_entry_sign: will have CALL_ID added if they don't already, and :green_circle: :no_entry_sign: will be added if missing.
-
 # ==== DONE
 
 Skills 2.0
@@ -294,6 +21,356 @@ New :top: sigil. If the very first sigil of the file being referenced, begins a 
 @agent and :brain: behaves as load (omitting any top on each file read) 
 ^agent and :books: behaves as top (only giving the top section, if it exists)
 This behaviour recurses through deeper references.
+
+# ==== DONE
+
+So I'm thinking of, to keep us constrained to clean, separate, modular architectural guardrails - and to really fully acknowledge the "composable"
+mission statement, of forcing us to build separate commands, with a lightweight sub command launcher.
+e.g:
+
+m8-call-edline
+m8-call--
+m8-shield-secure
+m8-shield-check
+m8--
+m8
+
+# ==== DONE
+MUNGE EDITING TOOLS
+
+#### :toolbox:read
+> > Read the contents of a text file.
+> > Read the whole file, or use pages to read a range at a time
+> > or a number of pages starting at a string match anchor.
+> `m8` `call` `munge` `read`
+> * path String
+>   Path of the file to read (relative, absolute, or ~).
+> * pages? String
+>   Page range to read e.g. "10-10" or "11-20" or "21-100", or
+>   "2@string_match" to read 2 pages starting at string_match.
+>   About 100 lines per page, fewer when lines are very long.
+#### :toolbox:read BYTE_CAP 16000
+—
+* Pages terminate on every 100th line, or every 10000th character after the previous 100th line. If a line that started in the last third of a page would have the page end mid-line, the whole line is pushed into the next page.
+* Page range parsing has a zero-failure parsing system: extracts out every digit sequence regardless of separators, and takes the lowest and highest numbers. A leading non-digit character makes it start at 1, while a trailing non-digit character makes it give the remainder.
+* The anchor form, if it is valid, overrides parsing. It splits on the first @ and expects a positive or negative number on the left. Negative numbers give that many pages above.
+* In anchor form, if the match is in the first 10 lines of the page, the previous page is included. For negative page counts, it does it for the last 10 lines and the subsequent page. Similarly, if only 1 page is requested, and it is in the last (or first for negative counts) 10 lines of the page, the count will be treated as if it was 2.
+* A user message is appended after the content tool response:
+```
+[Pages 11-20 of 1-34. Lines 1101-2000. Use pages="21-30" to continue.]
+[Pages 11-20 of 1-34. Lines 1084-2100. Opens mid-line 1180. Use pages="21-30" to continue.]
+[Pages 11-20 of 1-34. Lines 1101-1908. Ends mid-line 2140. Use pages="21-30" to continue.]
+[Pages 11-20 of 1-34. Lines 1084-1870. Opens mid-line 1180, ends mid-line 2140. Use pages="21-30" to continue.]
+[Pages 30-34 of 1-34. Lines 3399-3712. Opens mid-line 3399. End of file.]
+[Pages 30-34 of 1-34. Lines 3401-3712. End of file.]
+[Pages 21-23 of 1-34. Lines 2001-2300. Returning fewer pages due to a 16000 byte cap. Use pages="24-33" to continue.]
+```
+* Continuation suggestion uses the same number of pages as requested.
+* When pages are omitted, the user message is not given unless the BYTE_CAP is exceeded: `[Pages 1-23 of 1-34. Lines 1-4395. Returning fewer pages due to 16000 byte cap.]`
+* Error responses guide the model: `[Pages 45-46 of 1-34: out of scope.]`
+* Edmung is a single self-contained tool with multiple modes.
+
+#### :toolbox:list
+> > List the contents of a directory.
+> `m8` `call` `munge` `read`
+> * path String
+>   Path of the directory to inspect (relative, absolute, or ~).
+>   Use "." for the project root.
+#### :toolbox:list BYTE_CAP 16000
+* Returns a simple view of the contents of the directory.
+—
+```
+path/dir/
+path/small_file (12KB, 4400 lines, 1-44 pages)
+path/large_file (23MB)
+path/symlink -> dest
+```
+* Just gives size if the file is over BYTE_CAP*100 or if it is a binary file, and nothing if it is a special file.
+* Uses the same underlying command as read tool, but just acts this way when given a directory instead of a file. Both tools will give the other result if given the wrong path type. Pages would be respected, but are not given as an option on this tool.
+
+#### :toolbox:edit
+> > Edit a file. Either replace exact matches of an old_string, or
+> > leave old_string empty to append into a new or existing file.
+> > Must only match once if using multiple lines to replace.
+> > Pages may be used to scope matches.
+> `m8` `call` `munge` `write`
+> * path String
+>   Path of the file to edit or create (relative, absolute, or ~).
+> * old_string? String
+>   The text to replace. Omit to write or append.
+> * new_string String
+>   The text to insert.
+> * pages? String
+>   Page range to scope the matches during replace e.g.
+>   "10-10" or "11-20" or "21-100", or "2@string_match" to
+>   scope within 2 pages starting at string match.
+—
+```
+[Replaced 1 match on page 30]
+[Replaced 1 match on page 30. Matched ignoring indentation]
+[Replaced 1 match across pages 30-31]
+[Replaced 4 matches across pages 3-9]
+[DENIED: Found 2 matches but multi-line replacements must be unique]
+[Created a new file with 2 pages]
+[Appended to page 40]
+[Appended to pages 40-43]
+[Removed 1 match on page 30]
+```
+—
+* Reciept acknowledges any fuzzy matching it performed.
+* When appending, always appends to a new line.
+* Appending or writing new files always ensures a trailing newline.
+* Creates new files and leading directories as needed.
+* Fuzzy matches with compounding forgiveness:
+  * Exact matches.
+  * Trailing and leading line whitespace equivalence.
+  * Total whitespace equivalence.
+  * Unescape \n, \t, \r and escaped quotes — but only when the block holds no real newline.
+  * If a match line starts with "number:", also matches if that prefix is treated as a line number within 100 lines away.
+  * Multi-line block forgiveness - a 25% line mismatch rate is tolerated within the first and last whole lines of at least 8 non-whitespace characters.
+
+#### :toolbox:grep
+> > Grep search per-line inside files that match a glob.
+> > Glob wildcards will not expand "." prefixed directories.
+> `m8` `call` `munge` `scan`
+> * regex  String
+>   Regex to search with using a Perl-style pattern (no
+>   backrefs, lookaround, or multi-line matching).
+> * glob String
+>   Glob match for files with ** and * expansion (relative,
+>   absolute, or ~) e.g. "src/**/*.js" or "**".
+—
+```
+path/to/file.ext (2KB, 3433 lines, 1-34 pages) has 5 matches:
+* 4 matches on pages 30-32 in lines:
+    2998:…prefixed/suffixed for mid-line page breaks…
+    3055:line with matching string.
+    3166:another line with matching string.
+    3211:last line with a match on consecutive matching pages.
+* 1 match on pages 34-34 in lines:
+    3423:last line of file with match.
+path/to/another/file.ext (564B, 233 lines, 1-2 pages) has 1 match:
+* 1 match on pages 1-1 in lines:
+    34:line with a matching string.
+```
+* Skips binary files.
+* Fast scans but still a simple tool.
+* Doesn't descend into directories prefixed with a ".", or symlinks to directories, when matching * or ** patterns.
+* Glob silently supports {a,b} and ? syntax.
+—
+* Includes a bundled regex that is fast, simple and small.
+- Single line, whole-match offsets only. No capture slots.
+- Byte-oriented. ASCII `\w \d \s`, ASCII-only `(?i)`.
+- Syntax: literals, `.`, `[a-z]`, `[[:alpha:]]`, `\d \w \s \D \W \S`, `^ $ \b \B`, `|`, `(...)`, `(?:...)`, `* + ? {n} {n,} {n,m}`, lazy `*? +? ??`, inline `(?i)` and `(?i:...)`.
+- Leftmost-first alternation, not leftmost-longest.
+- Parse → AST → bytecode → Pike VM.
+- AST arena-allocated, freed after compile. Bytecode persists.
+- Five ops: `byte`, `class`, `split`, `jmp`, `match`. Classes as 256-bit bitsets in a side table.
+- `{n,m}` expands by duplicating the subtree.
+- `Thread = struct { pc: u32, start: u32 }` — 8 bytes, copy to fork.
+- Two preallocated thread lists sized to program length, swapped per byte.
+- Sparse set for pc dedupe; clear is `len = 0`. Bounds threads to program size → O(n×m).
+- No allocation in the match loop. No timeout needed — linear time is structural.
+- Prefilter: extract required leading literal from AST, `std.mem.indexOf` to candidates, run VM only there.
+- Whole pattern literal → skip compilation, `indexOf` and return.
+- `^` anchored → try position 0 only. No required literal → run VM from each position.
+- Return compile errors verbatim; name the unsupported construct.
+- Defer: lazy DFA, Aho-Corasick multi-literal, `\p{...}`, Unicode case folding, capture groups.
+- Reject patterns containing literal `\n` at compile time — never silently return no matches.
+—
+
+#### :toolbox:glob
+> > Glob scan for matching file paths.
+> > Glob wildcards will not expand "." prefixed directories.
+> `m8` `call` `munge` `scan`
+> * glob String
+>   Glob match for files with ** and * expansion (relative,
+>   absolute, or ~) e.g. "src/**/*.js" or "**".
+* Uses the same underlying command as grep which changes the output format when the regex is omitted: 
+```
+path/to/file.ext (2KB, 3433 lines, 1-34 pages)
+path/to/another/file.ext (564B, 233 lines, 1-2 pages)
+path/to/large/binary/file (23MB)
+```
+
+—
+
+# ====
+
+
+Try to squash out remaining {{CODE}} and {{M8}} framework level placeholders.
+
+# ====
+
+
+Saw a harness use PositiveInt as a type, and altough clearly a hint, shouldn't we also use Pascal Case for type? Make sure the providers sanity check or clean type so we don't get a kick back.
+
+# ====
+
+m8 to enforce required params regardless of whether the command does. So required for some models and not others!
+
+tool extension skills - Scaling flexibility by what we tell the model.
+
+# ====
+
+All inbuilt tools take args as well as envs (M8_ARG_FOO=blah or --foo blah),
+so one can be driven by hand from a shell.
+
+Parameter expansion itself is settled below, under M8 CALL ARGS.
+
+# ====
+
+Make toolbox activation only when providing no value or quoted block so we can template the setting of env vars.
+Make sure that value mechanism of setting of env vars also prefixes M8_ARG_
+
+Cleanup in pagey -> `BYTE_CAP 16000` sits on the definition header of toolbox.
+
+Want 2 modes to toolbox.
+1: stack on definition.
+2: activate.
+
+Adding an env var is 1, not 2.
+
+# ====
+
+#### :toolbox:bash
+> > Run a bash command.
+> `m8` `call` `args` `bash` `-euo` `pipefail` `{{M8_ARG_COMMAND|-c}}`
+> * command String
+>   The bash command to run.
+
+# ==== DONE
+
+M8 CALL ARGS
+
+A call is carried one way, in the environment. A tool's argv reaches its command
+verbatim, and `m8 call args` is what turns an environment back into flags for a
+command that wants them.
+
+It is an example rather than a dependency. Delete it and the framework still
+works — every inbuilt tool already reads `M8_ARG_*` directly — so anything else
+may fill the same slot, which is the whole claim about being composable.
+
+A placeholder is a whole argv element and expands from the environment:
+
+```
+{{M8_ARG_COMMAND}}       --command VALUE
+{{M8_ARG_COMMAND|-c}}    -c VALUE
+{{M8_ARG_COMMAND|}}      VALUE
+{{M8_ARG_DEEP?--deep}}   --deep, only when the value is exactly `true`
+{{M8_ARGS}}              the whole call as JSON, one element
+```
+
+* Matching is on the `M8_ARG` prefix, which covers both names in one test and
+  cannot collide with a templating language's own braces — `m8 call args awk
+  '{{print $1}}' f` passes through untouched. That is also what retires the
+  `{{{…}}}` literal escape, which existed for exactly that collision.
+* `|` also separates enum values in a type, in a different position, so there is
+  no parse conflict — but it is the one character in this language doing two
+  unrelated jobs.
+* Unset omits the element entirely. An empty string emits the flag and an empty
+  element. Keeping them apart is the whole of what optional means to a command.
+* `?` is strict: `true` emits the flag alone, `false` and unset omit it, and
+  anything else is an error naming what arrived. Silent omission would let a
+  call look like it succeeded while ignoring what was asked, which is worse than
+  failing. `callEnv` writes JSON `true` and JSON `"true"` to the same bytes, so
+  a stringly-typed provider still passes.
+* Only `?` reads a value. Every other form passes any bytes through.
+* No flags of its own, ever, so the first word is always the command and there
+  is no `--` to remember.
+
+Objects and arrays have no environment spelling and get no expansion here.
+Structure lives in `M8_ARGS` and is read with jq inside a block, which keeps
+`args` free of a JSON parser.
+
+Taking expansion out of the framework is one arm of one switch:
+
+* `converse.zig` — the `.argv` case becomes the argv, unchanged.
+* `toolbox.zig` — `expand`, `emit`, `pushFlag`, `scalar` and their tests go, and
+  `{{}}` for the whole call goes with them.
+* Required-property enforcement stays. It is the one part of carrying a call
+  that belongs to the framework.
+* `{{CODE}}` and `{{M8}}` stay for now, so `{{…}}` means m8's own word rather
+  than a call's, and a reader can tell which layer acts on a placeholder from
+  its name alone. Squashing those two is its own idea above.
+* Errors move from load time to call time. That is the trade and it is accepted;
+  a broken definition failing loudly on use is not worth a validation pass.
+
+A shield must not clobber `M8_*`, or it breaks the tool and every shield inside
+it. Once the environment is the only way a call is carried, that contract wants
+saying in `shield`'s help and the README's shield section, with the inbuilt
+shields tested against it. `contain-env` allowing `M8_*` is one instance of the
+rule rather than the rule itself, and user-defined shields can only be told.
+
+—
+# ====
+
+#### :toolbox:webfetch
+> > Download a web page for viewing.
+> ```bash
+> out=$(mktemp "$TMPDIR/$(printf %s "$M8_ARG_URL" | tr -cs A-Za-z0-9 - | cut -c1-200).XXXXXX")
+> curl -fsSL --max-time 30 --max-filesize 10000000 -o "$out" "$M8_ARG_URL"
+> echo "Downloaded for viewing at: ${out#"$PWD"/}"
+> ```
+> * url String
+>   The url of the page to download.
+
+* `mktemp` picks the name and creates the file in one atomic step, so two
+  fetches at once cannot land on one path. Six X, because busybox's `mktemp`
+  is a wrapper over `mkstemp`, which wants exactly that many.
+* Announcing the path only after the fetch succeeds is what keeps a reader
+  from ever seeing a half-written file, and `-e` on the 🏃 is what makes the
+  separate `echo` line say so.
+* The slug is a label rather than a reference, so two urls sharing one costs
+  nothing. `cut` leaves room for the suffix.
+* `mktemp` over `uuidgen`, which is util-linux and absent from busybox.
+
+# ==== DONE
+
+MOB TMPDIR
+
+A mob's own scratch directory, under `.m8-st8/.tmp-dir/`, with a subdirectory
+per mob. m8 makes it before a tool runs and never removes it. Persistence is
+the whole point: a tool that writes a file and answers with its path is only
+useful if the next call can open it, and a directory of this call's own means
+it never can.
+
+* Made unconditionally, as a contract of the framework rather than a side
+  effect of building a sandbox invocation, so a tool has one whether it stands
+  inside a 🛡 or not.
+* Guaranteed to exist, and guaranteed without a trailing slash, so a tool needs
+  neither a `mkdir` nor a `${TMPDIR%/}` of its own.
+* Built by m8 from the mob's own location rather than inherited, so it is a real
+  path rather than one reached through a symlink — which is what the profile's
+  `TMP` has to match, and what an inherited macOS `/var/folders` TMPDIR does
+  not, so TMP is not actually writable today.
+* The throwaway HOME points at the same directory, so a tool wanting a dotfile
+  or a cache has somewhere real to put it and never reaches the person's own.
+* No cleanup. A tool tidies up after itself or leaves something meant to last;
+  resetting a mob is the eraser, and it is the user's to reach for.
+* Keeping it out of version control is a repository's business rather than
+  m8's. A `.gitignore` inside the config directory is the suggestion, and this
+  repo carries one: the rule travels with the folder, and a project root needs
+  nothing said in it.
+
+The profile needs a carve-out, because `no-edit-m8-st8` denies writing to any
+path holding `m8-st8` — which would make the one directory m8 guarantees
+writable the one directory a tool may never write. It reads as one statement
+alongside the permanent deny already there:
+
+* `core/` is never writable, and no flag subtracts that.
+* `.tmp-dir/` is always writable, and no flag subtracts that either.
+* Everything between them is writable until `no-edit-m8-st8` is active.
+
+The cost is that `.tmp-dir` becomes a reserved name inside a config directory.
+
+Open: how the per-mob subdirectory is spelled for a mob nested below the top.
+
+# ====
+
+Nudge the model to make multiple calls in a single response.
+Nudge it to use string match anchors when doing multiple changes in the same file.
+
 
 # ====
 
@@ -395,6 +472,38 @@ in the form view gives and is never edited against:
 Denied - line 333 is `foo foo`
 Denied - 4 occurrences of `getUser`
 ```
+
+# ====
+
+The bet — line addressing rather than multi-line matching.
+
+A search stays within a line. Other formats match across
+lines because they refuse line numbers, and a block of
+surrounding context is how they say "this one, not the other
+five". m8 says that with the number and asserts it, so a
+multi-line search is a second mechanism for a job already
+done — and the one imported to work around the bet.
+
+What the bet protects is the correspondence. `*6|getUser`
+out of a view grep is the same line going into an edit, and
+that holds because a count is of a single-line literal. A
+search spanning lines either drags grep across them too, or
+makes the correspondence conditional, and "sometimes
+identical" is a weaker thing to have built.
+
+The bet is on models rather than on the format, so an
+evaluation settles it and an argument does not. Adding a
+multi-line search later stays compatible, and removing one
+does not, so it waits until something forces it.
+
+What forces it is a file of identical lines with a change
+wanted to one of them. Nothing within a line separates them
+and only the number can, so a model either reaches for a
+line edit, widens until it finds it cannot, or tries to
+spell a search across lines and is denied. A first wrong
+attempt says nothing. A second of the same shape after a
+denial is the format failing to teach itself, and is what a
+multi-line search would be bought with.
 
 # ====
 
@@ -737,7 +846,8 @@ Maybe we just make a folder of example setups.
 # ====
 Rename CALL_ID with propper prefix M8_CALL_ID
 
-# ====
+# ==== DONE
 
-Consider removing support for inline code line injection of {{ARG}} formats
-now that we went with env pass-ins.
+Inline `{{ARG}}` injection in an argv comes out of the framework. The
+environment is the only way a call is carried, and `m8 call args` expands it
+from outside. Specified above under M8 CALL ARGS.

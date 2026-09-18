@@ -13,8 +13,8 @@ const std = @import("std");
 const sigil = @import("m8/sigil.zig");
 const Sigil = sigil.Sigil;
 
-/// Honoured from a model's own output. Not a lock: there is no setting that
-/// widens this, because a reply granting itself a tool is never a feature.
+/// Honoured from a model's own output. Not a restriction: there is no setting
+/// that widens this, because a reply granting itself a tool is never a feature.
 pub fn fromModel(s: Sigil) bool {
     return switch (s) {
         .bot, .thought, .signature, .call => true,
@@ -50,7 +50,7 @@ pub fn refuse(records: []const @import("m8/doc.zig").Record, allowed: *const fn 
 
 const testing = std.testing;
 
-test "a model may not produce a definition, whatever the locks" {
+test "a model may not produce a definition, whatever the shields" {
     for ([_]Sigil{ .tool, .agent, .skill, .system, .shield, .runner }) |s|
         try testing.expect(!fromModel(s));
     for ([_]Sigil{ .bot, .thought, .signature, .call }) |s|

@@ -7,10 +7,10 @@
 //! a fence are how it runs. Every kind is told apart by its own shape, so none
 //! of it depends on the order they were written in.
 //!
-//! Two ways to say how it runs, and the difference is not decoration. An argv
-//! may carry a placeholder because a value expands to a whole element and can
-//! never become syntax. A script cannot say that, so a fenced block carries no
-//! placeholder at all and what the call said reaches it as `M8_ARG_*`.
+//! Two ways to say how it runs, and neither of them carries what the call
+//! said: an argv is the words it was written as, a block is the script it was
+//! written as, and both reach their command unchanged. A call arrives in the
+//! environment as `M8_ARG_*`, whichever of the two it is.
 //!
 //! One level down, the quote that doc.zig stripped is still there — a nested
 //! content line arrives as `> text`.
@@ -27,10 +27,6 @@ const markdown = @import("m8/markdown.zig");
 pub const Error = error{
     /// A property line had no type.
     MissingType,
-    /// A placeholder was opened and not closed.
-    UnclosedPlaceholder,
-    /// A required argument was not supplied and has no default.
-    MissingProperty,
     /// Two properties would be the same environment variable. Caught where the
     /// tool is written rather than when a model happens to supply both.
     ClashingProperty,
@@ -49,13 +45,12 @@ pub const Property = struct {
 pub const Command = union(enum) {
     /// Nothing said. A tool read back off a wire is an interface only.
     none,
-    /// Backtick spans on one line, one argv element each. `{{ARG}}`
-    /// expands here and only here, into whole elements, so nothing a model
-    /// supplies is ever parsed as anything.
+    /// Backtick spans on one line, one argv element each, handed on as
+    /// they were written. A command wanting flags rather than variables
+    /// says so itself — `m8 call args` is the one m8 ships.
     argv: []const []const u8,
-    /// A fenced block, run through the 🏃 its language names. No
-    /// placeholders at all: what the call said arrives as `M8_ARG_*`, so
-    /// the script m8 hands over is the script that was written.
+    /// A fenced block, run through the 🏃 its language names. The script m8
+    /// hands over is the script that was written.
     block: shield.Fence,
 };
 
@@ -70,10 +65,9 @@ pub const Tool = struct {
     /// still take away what it said; nothing can add to it.
     speaks: []const u8 = "",
     description: []const u8 = "",
-    /// How it runs. Two spellings, and the difference is not decoration:
-    /// an argv can carry a value that came from a model, because a value is
-    /// a whole element and can never become syntax. A block cannot, so it
-    /// carries none — its arguments arrive in the environment instead.
+    /// How it runs. Two spellings, and neither is handed what the call
+    /// said — that arrives in the environment either way, which is the one
+    /// mechanism there is.
     command: Command = .none,
     /// Further 🛡 this tool stands inside, on top of whatever the agent
     /// already activated. It can only add — which is the whole rule.
@@ -88,9 +82,9 @@ pub const Tool = struct {
 
 /// What a call is handed under, in the environment rather than in the command.
 ///
-/// Nothing m8 builds ever contains model text, so a value cannot become syntax
-/// in whatever runs it. Named rather than positional, so a tool in any
-/// language reads them the way that language already reads its environment.
+/// Named rather than positional, so a tool in any language reads them the way
+/// that language already reads its environment, and a value carries no
+/// position for a command line to have to keep.
 pub const arg_prefix = "M8_ARG_";
 /// The whole call as JSON, always. Nested, dotted and arrayed arguments have
 /// no env spelling of their own and live here instead — no flattening, and no
@@ -177,15 +171,18 @@ pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const 
             continue;
         }
 
-        if (std.mem.startsWith(u8, trimmed, "*")) {
-            try props.append(arena, try property(arena, trimmed[1..]));
-            continue;
-        }
-
-        // Indented under a bullet, so it belongs to that argument.
+        // Indented under a bullet, so it belongs to that argument — whatever
+        // it starts with. A description that runs to a list of its own would
+        // otherwise turn every item of it into an argument nobody declared,
+        // and the model would be asked for six things that do not exist.
         if (props.items.len > 0 and line.len > 0 and (line[0] == ' ' or line[0] == '\t')) {
             const last = &props.items[props.items.len - 1];
             last.description = try join(arena, last.description, trimmed);
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, trimmed, "*")) {
+            try props.append(arena, try property(arena, trimmed[1..]));
             continue;
         }
 
@@ -262,107 +259,6 @@ pub fn callEnv(
 fn join(arena: Allocator, a: []const u8, b: []const u8) ![]const u8 {
     if (a.len == 0) return arena.dupe(u8, b);
     return std.fmt.allocPrint(arena, "{s}\n{s}", .{ a, b });
-}
-
-/// The 🔌 value is wrapped in backticks so it renders as code wherever the
-
-// ------------------------------------------------------------- the template
-
-const open = "{{";
-const close = "}}";
-
-/// Expand a 🔌 template against the JSON of a call.
-///
-/// A placeholder is a whole element and expands to as many arguments as it
-/// needs, which is why it can never be spliced into a larger string.
-pub fn expand(
-    arena: Allocator,
-    template: []const []const u8,
-    args: std.json.Value,
-    raw_args: []const u8,
-) ![]const []const u8 {
-    var out: std.ArrayList([]const u8) = .empty;
-    for (template) |text| {
-
-        // `{{{...}}}` is a literal `{{...}}`.
-        if (std.mem.startsWith(u8, text, "{{{") and std.mem.endsWith(u8, text, "}}}")) {
-            try out.append(arena, text[1 .. text.len - 1]);
-            continue;
-        }
-        if (!std.mem.startsWith(u8, text, open) or !std.mem.endsWith(u8, text, close)) {
-            try out.append(arena, text);
-            continue;
-        }
-
-        const inner = text[open.len .. text.len - close.len];
-        // `{{}}` hands the whole call over as one argument, for a command
-        // that would rather read JSON than flags.
-        if (inner.len == 0) {
-            try out.append(arena, raw_args);
-            continue;
-        }
-
-        var key = inner;
-        var flag: []const u8 = undefined;
-        if (std.mem.indexOfScalar(u8, inner, ':')) |cut| {
-            key = inner[0..cut];
-            flag = inner[cut + 1 ..];
-        } else {
-            flag = try std.fmt.allocPrint(arena, "--{s}", .{key});
-        }
-
-        const value = if (args == .object) args.object.get(key) else null;
-        // A missing key is simply absent. Whether that is allowed is the
-        // property's business, not the template's.
-        if (value) |v| try emit(arena, &out, flag, "", v);
-    }
-    return out.items;
-}
-
-/// Walk to the leaves, joining keys with a `.` and repeating the flag once per
-/// array element. An array carries no index; that is what a POSIX command
-/// wants, and the one place the shape is lost.
-fn emit(
-    arena: Allocator,
-    out: *std.ArrayList([]const u8),
-    flag: []const u8,
-    suffix: []const u8,
-    v: std.json.Value,
-) !void {
-    switch (v) {
-        .object => |o| {
-            var it = o.iterator();
-            while (it.next()) |e| {
-                try emit(arena, out, flag, try std.fmt.allocPrint(arena, "{s}.{s}", .{ suffix, e.key_ptr.* }), e.value_ptr.*);
-            }
-        },
-        .array => |a| for (a.items) |item| try emit(arena, out, flag, suffix, item),
-        // Absent rather than empty: a flag that is not passed is how a command
-        // is told nothing, and `false` is how JSON says the same.
-        .null => {},
-        .bool => |b| if (b) try pushFlag(arena, out, flag, suffix),
-        else => {
-            try pushFlag(arena, out, flag, suffix);
-            try out.append(arena, try scalar(arena, v));
-        },
-    }
-}
-
-/// With no flag there is nothing to hang a dotted path on, so bare values are
-/// all that is left.
-fn pushFlag(arena: Allocator, out: *std.ArrayList([]const u8), flag: []const u8, suffix: []const u8) !void {
-    if (flag.len == 0) return;
-    try out.append(arena, try std.fmt.allocPrint(arena, "{s}{s}", .{ flag, suffix }));
-}
-
-fn scalar(arena: Allocator, v: std.json.Value) ![]const u8 {
-    return switch (v) {
-        .string => |s| s,
-        .integer => |i| try std.fmt.allocPrint(arena, "{d}", .{i}),
-        .float => |f| try std.fmt.allocPrint(arena, "{d}", .{f}),
-        .number_string => |s| s,
-        else => "",
-    };
 }
 
 // -------------------------------------------------------------- the schema
@@ -655,13 +551,18 @@ pub fn renderArgs(arena: Allocator, mode: Mode, args: []const u8) ![]const u8 {
         // value, not an escaped copy of it.
         const raw = if (e.value_ptr.* == .string) e.value_ptr.*.string else text.written();
 
-        // One line with no backtick in it fits beside its name. Anything else
-        // needs a block, and a block is the only place a value may hold
-        // whatever it likes.
+        // The empty string is the name with nothing after it. A model that
+        // has nothing to pass for an optional parameter can still pass it, and
+        // a bare bullet says so in one line rather than three.
+        if (raw.len == 0) {
+            try w.print("* {s}\n", .{e.key_ptr.*});
+            continue;
+        }
+
         // One line fits beside its name, whatever is in it: a span carries a
         // backtick by opening with a longer run. Only more than one line
         // needs a block.
-        if (std.mem.indexOfScalar(u8, raw, '\n') == null and raw.len > 0) {
+        if (std.mem.indexOfScalar(u8, raw, '\n') == null) {
             try w.print("* {s} ", .{e.key_ptr.*});
             try markdown.writeSpan(w, raw);
             try w.writeByte('\n');
@@ -705,11 +606,19 @@ pub fn parseArgs(arena: Allocator, mode: Mode, content: []const u8) ![]const u8 
             continue;
         }
 
-        // Nothing beside it, so the value is the block underneath. A bullet
-        // with neither is a name that was given nothing, which is not the same
-        // as a name given an empty string.
-        const opening = lines.next() orelse break;
-        if (!markdown.opensFence(opening)) continue;
+        // Nothing beside it, so the value is the block underneath — and a
+        // bullet with no block under it is the empty string, which is the
+        // spelling `renderArgs` writes. The block form still reads the same,
+        // so a model that writes one is understood either way.
+        const opening = lines.peek() orelse {
+            try obj.put(arena, key, .{ .string = "" });
+            break;
+        };
+        if (!markdown.opensFence(opening)) {
+            try obj.put(arena, key, .{ .string = "" });
+            continue;
+        }
+        _ = lines.next();
         const f = try markdown.readFence(arena, opening, &lines);
         try obj.put(arena, key, valueOf(arena, f.code));
     }
@@ -729,90 +638,11 @@ fn valueOf(arena: Allocator, text: []const u8) std.json.Value {
 
 const testing = std.testing;
 
-fn expandTest(arena: Allocator, template: []const u8, json: []const u8) ![]const []const u8 {
-    const args = try std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{});
-    // The tests were written against the JSON spelling a 🔌 used to carry;
-    // the words are what mattered, so they are read out and handed over.
-    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, template, .{});
-    var argv: std.ArrayList([]const u8) = .empty;
-    for (parsed.array.items) |e| try argv.append(arena, e.string);
-    return expand(arena, argv.items, args, json);
-}
-
-fn expectArgv(got: []const []const u8, want: []const []const u8) !void {
-    try testing.expectEqual(want.len, got.len);
-    for (want, got) |w, g| try testing.expectEqualStrings(w, g);
-}
-
-test "a placeholder takes the flag from its key, or from what it is given" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-    const json = "{\"with\": [\"check\", \"sandbox\"], \"cmd_str\": \"echo hi\"}";
-
-    try expectArgv(try expandTest(arena, "[\"{{cmd_str}}\"]", json), &.{ "--cmd_str", "echo hi" });
-    try expectArgv(try expandTest(arena, "[\"{{cmd_str:-c}}\"]", json), &.{ "-c", "echo hi" });
-    try expectArgv(try expandTest(arena, "[\"{{with:-w}}\"]", json), &.{ "-w", "check", "-w", "sandbox" });
-    try expectArgv(try expandTest(arena, "[\"{{with:}}\"]", json), &.{ "check", "sandbox" });
-}
-
-test "the worked example from the README" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const got = try expandTest(
-        a.allocator(),
-        "[\"m8\", \"call\", \"{{with:-w}}\", \"--\", \"bash\", \"{{cmd_str:-c}}\"]",
-        "{\"with\": [\"check\", \"sandbox\"], \"cmd_str\": \"echo hi\"}",
-    );
-    try expectArgv(got, &.{ "m8", "call", "-w", "check", "-w", "sandbox", "--", "bash", "-c", "echo hi" });
-}
-
-test "objects expand their leaves, and naming nothing leaves the values" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-    const json = "{\"opts\": {\"a\": 1, \"b\": {\"c\": 2}}}";
-    try expectArgv(try expandTest(arena, "[\"{{opts:-o}}\"]", json), &.{ "-o.a", "1", "-o.b.c", "2" });
-    try expectArgv(try expandTest(arena, "[\"{{opts:}}\"]", json), &.{ "1", "2" });
-}
-
-test "an array of objects repeats the prefix and carries no index" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const got = try expandTest(a.allocator(), "[\"{{opts:-o}}\"]", "{\"opts\": [{\"a\": 1}, {\"a\": 2}]}");
-    try expectArgv(got, &.{ "-o.a", "1", "-o.a", "2" });
-}
-
-test "null and false omit the key, true emits the flag alone" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-    const json = "{\"n\": null, \"f\": false, \"t\": true}";
-    try expectArgv(try expandTest(arena, "[\"{{n}}\"]", json), &.{});
-    try expectArgv(try expandTest(arena, "[\"{{f}}\"]", json), &.{});
-    try expectArgv(try expandTest(arena, "[\"{{t}}\"]", json), &.{"--t"});
-}
-
-test "a missing key is simply absent" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    try expectArgv(try expandTest(a.allocator(), "[\"x\", \"{{nope}}\", \"y\"]", "{}"), &.{ "x", "y" });
-}
-
-test "{{}} hands the whole call over, and {{{...}}} is a literal" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-    const json = "{\"a\":1}";
-    try expectArgv(try expandTest(arena, "[\"{{}}\"]", json), &.{json});
-    try expectArgv(try expandTest(arena, "[\"{{{cmd_str}}}\"]", json), &.{"{{cmd_str}}"});
-}
-
 test "a toolbox reads its template, properties and description" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const t = try parse(a.allocator(), .md, "shell",
-        \\`bash` `{{cmd:-c}}`
+        \\`m8` `call` `args` `bash` `{{M8_ARG_CMD|-c}}`
         \\:shield:jail
         \\* cmd string
         \\  The command to run
@@ -822,8 +652,8 @@ test "a toolbox reads its template, properties and description" {
         \\> Carefully.
     );
     try testing.expectEqualStrings("shell", t.name);
-    try testing.expectEqualStrings("bash", t.command.argv[0]);
-    try testing.expectEqualStrings("{{cmd:-c}}", t.command.argv[1]);
+    try testing.expectEqualStrings("m8", t.command.argv[0]);
+    try testing.expectEqualStrings("{{M8_ARG_CMD|-c}}", t.command.argv[4]);
     try testing.expectEqualStrings("Run a command.\nCarefully.", t.description);
     try testing.expectEqual(@as(usize, 1), t.shields.len);
     try testing.expectEqualStrings("jail", t.shields[0].name);
@@ -920,7 +750,7 @@ test "a tool survives being rendered and read back, in either spelling" {
     const arena = a.allocator();
 
     const src =
-        \\`m8` `call` `{{with:-w}}` `--` `bash` `{{cmd:-c}}`
+        \\`m8` `call` `args` `bash` `{{M8_ARG_CMD|-c}}`
         \\:shield:jail
         \\* cmd string
         \\  What to run.
@@ -967,6 +797,29 @@ test "call arguments survive a trip through the document and back" {
         try testing.expectEqual(want.object.get("depth").?.integer, got.object.get("depth").?.integer);
         try testing.expectEqual(want.object.get("on").?.bool, got.object.get("on").?.bool);
         try testing.expectEqual(@as(usize, 2), got.object.get("deep").?.object.get("a").?.array.items.len);
+    }
+}
+
+test "an empty string is the name and nothing after it" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // What gets written: a bare bullet, with no span and no block.
+    try testing.expectEqualStrings(
+        \\* old_string
+        \\* path `HAIKU.md`
+    , try renderArgs(arena, .md, "{\"old_string\":\"\",\"path\":\"HAIKU.md\"}"));
+
+    // What gets read: the same, and the block spelling a model may write
+    // instead, and a bare bullet does not swallow the line after it.
+    for ([_][]const u8{
+        "* old_string\n* path `HAIKU.md`",
+        "* old_string\n  ```\n\n  ```\n* path `HAIKU.md`",
+    }) |src| {
+        const got = try std.json.parseFromSliceLeaky(std.json.Value, arena, try parseArgs(arena, .md, src), .{});
+        try testing.expectEqualStrings("", got.object.get("old_string").?.string);
+        try testing.expectEqualStrings("HAIKU.md", got.object.get("path").?.string);
     }
 }
 

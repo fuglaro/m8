@@ -29,8 +29,7 @@ pub const Ctx = struct {
     /// Empty when a command was run straight from the shell.
     call_id: []const u8 = "",
     /// What a call hands its tool, in the environment rather than in the
-    /// command. Nothing m8 builds contains model text, so a value can never
-    /// become syntax in whatever runs it.
+    /// command, which is the one way a call is carried.
     ///
     /// Added after the environment has been rebuilt, so `contain-env` filters
     /// what was inherited and never what this call is saying.
@@ -99,6 +98,25 @@ pub const Takes = enum {
     }
 };
 
+/// What a launcher needs to know about a command, which is not what the
+/// command does.
+///
+/// The separation is the whole of how one registry serves two builds. A
+/// launcher reads a `Spec` to decide what goes on a child's stdin and what to
+/// call it; it never touches `run`. Nothing in here is a function pointer, so
+/// a launcher that only reads specs links none of the implementations — the
+/// registry costs it a couple of kilobytes rather than the whole stack.
+///
+/// Two places say the same thing, and that is deliberate: a command declares
+/// what it expects, a launcher promises it, and keeping the two in step is a
+/// maintainer's job rather than something the type system hides.
+pub const Spec = struct {
+    name: []const u8,
+    summary: []const u8,
+    takes: Takes = .ledger,
+    prompts: bool = false,
+};
+
 pub const Command = struct {
     name: []const u8,
     summary: []const u8,
@@ -122,6 +140,17 @@ pub const Command = struct {
     /// `ctx.args` are the words after the command's own name, so a command
     /// with subcommands under it can hand out the page for one of them.
     help: ?*const fn (Ctx, *std.Io.Writer) anyerror!void = null,
+
+    /// The half of this a launcher reads. Comptime, so taking it leaves `run`
+    /// unreferenced and the implementation out of the binary.
+    pub fn spec(c: Command) Spec {
+        return .{
+            .name = c.name,
+            .summary = c.summary,
+            .takes = c.takes,
+            .prompts = c.prompts,
+        };
+    }
 };
 
 /// Whether the next word is asking for a page rather than naming anything.

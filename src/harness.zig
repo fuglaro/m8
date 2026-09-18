@@ -1,0 +1,171 @@
+//! What every m8 binary does around a command, whichever binary it is.
+//!
+//! A command is handed a `Ctx` and answers with a status. Building that from a
+//! process — the writers, the terminal, the document — is the same work in the
+//! single binary and in a split-out command, so it is written once here and
+//! every root calls it.
+//!
+//! It is also where an error becomes something a person reads. A command
+//! returns the error that names what went wrong and says nothing about
+//! spelling; the sentence belongs out here, so two commands failing the same
+//! way cannot say it two ways.
+
+const std = @import("std");
+const api = @import("command/api.zig");
+const provider = @import("provider.zig");
+const launch = @import("launch.zig");
+const doc = @import("m8/doc.zig");
+
+/// A command with its process around it: the whole of a split-out binary.
+///
+/// Stdin is read for anything that expects a document, because out here there
+/// is no command line to assemble one from — whatever reaches this process on
+/// stdin is what the launcher promised it.
+///
+/// `called` is the path that reached this command, spelled the way it was
+/// typed — `shield ask` rather than `shield` — because that is what a
+/// complaint names, and the two builds saying different things about the same
+/// failure is the one difference worth not having.
+pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
+    const arena = init.arena.allocator();
+    const io = init.io;
+    const argv = try init.minimal.args.toSlice(arena);
+    const args: []const []const u8 = @ptrCast(argv[@min(1, argv.len)..]);
+
+    var out_buf: [64 * 1024]u8 = undefined;
+    var stdout = std.Io.File.stdout().writerStreaming(io, &out_buf);
+    var err_buf: [4 * 1024]u8 = undefined;
+    var stderr = std.Io.File.stderr().writerStreaming(io, &err_buf);
+    const out = &stdout.interface;
+    const err = &stderr.interface;
+
+    const self = try m8Path(arena, io, init.environ_map, argv);
+
+    var tty_storage: api.TtyFiles = undefined;
+    var ctx: api.Ctx = .{
+        .arena = arena,
+        .io = io,
+        .mode = mode(io),
+        .env = init.environ_map,
+        .self = self,
+        .args = args,
+        .in = "",
+        .out = out,
+        .err = err,
+        .tty = api.openTty(io, &tty_storage),
+    };
+
+    // The flag is m8's wherever it is written, so a command split out answers
+    // it the way the launcher above it would have.
+    if (c.help) |page| if (!c.prompts and api.wantsHelp(args)) {
+        ctx.args = args[1..];
+        try page(ctx, out);
+        try out.flush();
+        return 0;
+    };
+
+    var in_buf: [64 * 1024]u8 = undefined;
+    // Stdin belongs to whatever a `.nothing` command hands it to.
+    if (c.takes != .nothing) ctx.in = try api.readDocument(io, arena, &in_buf);
+
+    return finish(ctx, called, c.run(ctx));
+}
+
+/// A launcher running the command it was given.
+///
+/// Commands take their arguments verbatim; they parse their own. Whether the
+/// command is called or spawned is `launch`'s business, and either way what is
+/// built here is the launcher's own context — a child process inherits from
+/// it rather than being handed it.
+pub fn run(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    env: *const std.process.Environ.Map,
+    reach: launch.Reach,
+    name: []const u8,
+    args: []const []const u8,
+    input: launch.Stdin,
+    self: []const u8,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+) !u8 {
+    var tty_storage: api.TtyFiles = undefined;
+    const ctx: api.Ctx = .{
+        .arena = arena,
+        .io = io,
+        .mode = mode(io),
+        .env = env,
+        .self = self,
+        .args = &.{},
+        .in = "",
+        .out = out,
+        .err = err,
+        .tty = api.openTty(io, &tty_storage),
+    };
+    return finish(ctx, name, launch.under(ctx, reach, args, input));
+}
+
+/// Everything on its way out, and whatever went wrong said once.
+fn finish(ctx: api.Ctx, name: []const u8, result: anyerror!u8) !u8 {
+    const status = result catch |e| {
+        try ctx.out.flush();
+        if (ctx.tty) |t| try t.w.flush();
+        try explain(ctx.err, name, e);
+        try ctx.err.flush();
+        return 1;
+    };
+
+    try ctx.out.flush();
+    if (ctx.tty) |t| try t.w.flush();
+    // A command that answered with a status rather than an error still said
+    // why on the way, and this is the one place both are on their way out.
+    try ctx.err.flush();
+    return status;
+}
+
+/// Where the m8 launcher is, from where this binary is.
+///
+/// A split-out command is installed beside the launcher, so the launcher is
+/// its sibling named `m8`. Worked out here rather than inherited, so a command
+/// run straight from a shell knows it too.
+fn m8Path(
+    arena: std.mem.Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+    argv: []const []const u8,
+) ![]const u8 {
+    const me = try provider.selfPath(arena, io, env, if (argv.len > 0) argv[0] else "m8");
+    if (std.mem.eql(u8, std.fs.path.basename(me), "m8")) return me;
+    return launch.sibling(arena, me, "m8");
+}
+
+/// The spelling to write in, decided once and carried into every writer.
+pub fn mode(io: std.Io) doc.Mode {
+    return if (std.Io.File.stdout().isTty(io) catch false) .m8 else .md;
+}
+
+/// What went wrong, in a sentence. One place, so two commands failing the same
+/// way cannot say it two ways.
+pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
+    switch (e) {
+        error.UnknownAgent => try err.writeAll("m8: that ledger names an agent that is not there\n"),
+        error.IncludeLoops => try err.writeAll(
+            "m8: an agent includes one that leads back to it\n",
+        ),
+        error.LineageLoops => try err.writeAll(
+            "m8: a turn in that chat names one that leads back to it\n",
+        ),
+        error.TopMisplaced => try err.writeAll(
+            "m8: a top opens and closes at the head of a file, or there is none\n",
+        ),
+        error.TopUnclosed => try err.writeAll(
+            "m8: a top was opened and nothing closed it\n",
+        ),
+        error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
+        error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),
+        error.NoProvider => try err.writeAll(
+            "m8: that ledger names a model but not whose; say which, as `m8 send PROVIDER`\n",
+        ),
+        else => try err.print("m8 {s}: {s}\n", .{ name, @errorName(e) }),
+    }
+}

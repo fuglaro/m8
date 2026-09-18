@@ -97,10 +97,23 @@ fn through(ctx: Ctx, r: *std.Io.Reader, wanted: sigil.Sigil) !u8 {
     var dropping = false;
 
     while (true) {
-        const raw = r.takeDelimiterInclusive('\n') catch |e| switch (e) {
-            error.EndOfStream => break,
+        // A last line with no newline on it is still a line. The reader says
+        // end of stream for that and for nothing left alike, so what is still
+        // in hand is what tells the two apart — and a tool that ended on a
+        // `printf` with no `\n` would otherwise have its last line dropped
+        // here, with the call still reported as having succeeded.
+        var last = false;
+        var raw: []const u8 = undefined;
+        if (r.takeDelimiterInclusive('\n')) |line| {
+            raw = line;
+        } else |e| switch (e) {
+            error.EndOfStream => {
+                raw = r.buffered();
+                if (raw.len == 0) break;
+                last = true;
+            },
             else => return e,
-        };
+        }
         const line = std.mem.trimEnd(u8, raw, "\n");
 
         if (mode == null) {
@@ -115,7 +128,9 @@ fn through(ctx: Ctx, r: *std.Io.Reader, wanted: sigil.Sigil) !u8 {
             // text has no records in it to take out.
             if (mode == null) {
                 try ctx.out.writeAll(raw);
-                _ = try r.streamRemaining(ctx.out);
+                // Unless this was the tail held in hand, which is not
+                // consumed and would be written a second time.
+                if (!last) _ = try r.streamRemaining(ctx.out);
                 break;
             }
         }
@@ -128,6 +143,61 @@ fn through(ctx: Ctx, r: *std.Io.Reader, wanted: sigil.Sigil) !u8 {
 
         if (!dropping) try ctx.out.writeAll(raw);
         try ctx.out.flush();
+        if (last) break;
     }
     return 0;
+}
+
+// ---------------------------------------------------------------- tests
+
+const testing = std.testing;
+
+/// Run the filter over some bytes, the way a shield's pipe does.
+fn filtered(arena: std.mem.Allocator, in: []const u8, wanted: sigil.Sigil) ![]const u8 {
+    var r: std.Io.Reader = .fixed(in);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var err: std.Io.Writer.Allocating = .init(arena);
+    _ = try through(.{
+        .arena = arena,
+        .io = undefined,
+        .mode = .md,
+        .env = undefined,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &err.writer,
+        .tty = null,
+    }, &r, wanted);
+    return out.written();
+}
+
+test "a last line with no newline on it is still written" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // What a tool ending on `printf` with no `\n` says. Dropping it lost a
+    // tool's answer with the call still reported as having succeeded.
+    try testing.expectEqualStrings("hello", try filtered(arena, "hello", .tool));
+    try testing.expectEqualStrings("one\ntwo", try filtered(arena, "one\ntwo", .tool));
+
+    // And written once: the tail is held rather than consumed, so the text
+    // path must not also stream what it has already said.
+    try testing.expectEqualStrings("x\ny", try filtered(arena, "x\ny", .tool));
+}
+
+test "text goes through whole, and a record still goes" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    try testing.expectEqualStrings("one\ntwo\n", try filtered(arena, "one\ntwo\n", .tool));
+    try testing.expectEqualStrings(
+        "#### :robot:\n> kept",
+        try filtered(arena, "#### :toolbox:x\n> gone\n\n#### :robot:\n> kept", .tool),
+    );
+    try testing.expectEqualStrings(
+        "#### :robot:\n> kept\n",
+        try filtered(arena, "#### :toolbox:x\n> gone\n\n#### :robot:\n> kept\n", .tool),
+    );
 }
