@@ -1,199 +1,73 @@
-# ==== DONE
 
-Skills 2.0
+# ====
 
-#### :toolbox:load_skill
-> `m8` `call` `m8` `--` `m8` `load` `@{{MOB}}skills/{{SKILL}}`
-> * SKILL string
+m8 threads list (or something) - analyses all chats for danglings, forks, and dates and gives a thread branches - perhaps with summary etc) like git log --graph --decorate --oneline --all
 
-Skill file:
-```md
-#### :top:
-#### :compass:
-> Load the tight-docs skill when working on documentation or comments.
-#### :top:
-#### :raising_hand:
-> Skill content…
-```
+# ====
 
-New :top: sigil. If the very first sigil of the file being referenced, begins a top header section until the next :top: sigil. Subsequent tops in a single file is an error.
+│ The main gaps I noticed:
+│
+│ 1. **No first-class file deletion**
+│
+│    I had to use `bash rm` to remove the three obsolete Zig files. Deletion is a normal refactoring operation and deserves a dedicated tool, perhaps:
+│
+│    ```text
+│    delete(path, require_exists=true)
+│    ```
+│
+│    Ideally it would refuse directories, show the file size, and require an explicit path rather than accepting a shell expression.
+│
+│ 3. **Generated artifacts can become misleading**
+│
+│    After `zig build split`, the old `m8-call-edline*` binaries remained in `zig-out/bin`, even though they were no longer built. The source was correct, but a later directory listing could false
+ly suggest the command still existed.
+│
+│    A build-aware harness could either:
+│    - expose a clean build operation, or
+│    - report stale generated artifacts separately from current outputs.
+│
+│ 4. **Shell commands have broad destructive power**
+│
+│    `bash` was useful for deletion and testing, but it is also the least constrained tool. For a harness intended for agents, I’d consider:
+│    - a confirmation mode for destructive commands,
+│    - a distinction between read-only and mutating shell commands,
+│    - optional command timeouts,
+│    - explicit reporting of files changed by a command.
+│
 
-@agent and :brain: behaves as load (omitting any top on each file read) 
-^agent and :books: behaves as top (only giving the top section, if it exists)
-This behaviour recurses through deeper references.
+│ On concurrent work, I agree that the harness cannot know which edits belong to whom. The most useful protection is therefore not ownership tracking but optimistic conflict detec
+tion:
+│
+│ - read/search records the content or hash it observed;
+│ - edit refuses if the file changed since that observation;
+│ - edits report the before/after state;
+│ - unrelated files and unrelated regions are left alone.
+│
+│ Exact old-text replacement already gives you much of that behavior, but a file-level compare-and-swap would close the race between reading and writing. That seems more valuable
+than adding Git-specific concepts.
+│
+│ For binary grep results, omitting their contents by default makes sense, especially for an agent. I’d avoid making them disappear completely, though. A compact notice such as:
+│
+│ ```text
+│ (binary skipped: image.png)
+│ ```
+│
+│ prevents “no results” from being confused with “nothing was searched.” An explicit mode could later allow:
+│
+│ - `skip` — default;
+│ - `report` — identify binary files that would otherwise match;
+│ - `search` — search their raw bytes.
+│
+│ That keeps the default output useful without making the harness decide what a repository considers important. Also, binary detection should remain conservative—typically a NUL-b
+yte check or similar heuristic—because many useful files are technically binary but still meaningfully searchable.
 
-# ==== DONE
+# ====
 
-So I'm thinking of, to keep us constrained to clean, separate, modular architectural guardrails - and to really fully acknowledge the "composable"
-mission statement, of forcing us to build separate commands, with a lightweight sub command launcher.
-e.g:
+Remove edline. I like munge better.
 
-m8-call-edline
-m8-call--
-m8-shield-secure
-m8-shield-check
-m8--
-m8
+# ====
 
-# ==== DONE
-MUNGE EDITING TOOLS
-
-#### :toolbox:read
-> > Read the contents of a text file.
-> > Read the whole file, or use pages to read a range at a time
-> > or a number of pages starting at a string match anchor.
-> `m8` `call` `munge` `read`
-> * path String
->   Path of the file to read (relative, absolute, or ~).
-> * pages? String
->   Page range to read e.g. "10-10" or "11-20" or "21-100", or
->   "2@string_match" to read 2 pages starting at string_match.
->   About 100 lines per page, fewer when lines are very long.
-#### :toolbox:read BYTE_CAP 16000
-—
-* Pages terminate on every 100th line, or every 10000th character after the previous 100th line. If a line that started in the last third of a page would have the page end mid-line, the whole line is pushed into the next page.
-* Page range parsing has a zero-failure parsing system: extracts out every digit sequence regardless of separators, and takes the lowest and highest numbers. A leading non-digit character makes it start at 1, while a trailing non-digit character makes it give the remainder.
-* The anchor form, if it is valid, overrides parsing. It splits on the first @ and expects a positive or negative number on the left. Negative numbers give that many pages above.
-* In anchor form, if the match is in the first 10 lines of the page, the previous page is included. For negative page counts, it does it for the last 10 lines and the subsequent page. Similarly, if only 1 page is requested, and it is in the last (or first for negative counts) 10 lines of the page, the count will be treated as if it was 2.
-* A user message is appended after the content tool response:
-```
-[Pages 11-20 of 1-34. Lines 1101-2000. Use pages="21-30" to continue.]
-[Pages 11-20 of 1-34. Lines 1084-2100. Opens mid-line 1180. Use pages="21-30" to continue.]
-[Pages 11-20 of 1-34. Lines 1101-1908. Ends mid-line 2140. Use pages="21-30" to continue.]
-[Pages 11-20 of 1-34. Lines 1084-1870. Opens mid-line 1180, ends mid-line 2140. Use pages="21-30" to continue.]
-[Pages 30-34 of 1-34. Lines 3399-3712. Opens mid-line 3399. End of file.]
-[Pages 30-34 of 1-34. Lines 3401-3712. End of file.]
-[Pages 21-23 of 1-34. Lines 2001-2300. Returning fewer pages due to a 16000 byte cap. Use pages="24-33" to continue.]
-```
-* Continuation suggestion uses the same number of pages as requested.
-* When pages are omitted, the user message is not given unless the BYTE_CAP is exceeded: `[Pages 1-23 of 1-34. Lines 1-4395. Returning fewer pages due to 16000 byte cap.]`
-* Error responses guide the model: `[Pages 45-46 of 1-34: out of scope.]`
-* Edmung is a single self-contained tool with multiple modes.
-
-#### :toolbox:list
-> > List the contents of a directory.
-> `m8` `call` `munge` `read`
-> * path String
->   Path of the directory to inspect (relative, absolute, or ~).
->   Use "." for the project root.
-#### :toolbox:list BYTE_CAP 16000
-* Returns a simple view of the contents of the directory.
-—
-```
-path/dir/
-path/small_file (12KB, 4400 lines, 1-44 pages)
-path/large_file (23MB)
-path/symlink -> dest
-```
-* Just gives size if the file is over BYTE_CAP*100 or if it is a binary file, and nothing if it is a special file.
-* Uses the same underlying command as read tool, but just acts this way when given a directory instead of a file. Both tools will give the other result if given the wrong path type. Pages would be respected, but are not given as an option on this tool.
-
-#### :toolbox:edit
-> > Edit a file. Either replace exact matches of an old_string, or
-> > leave old_string empty to append into a new or existing file.
-> > Must only match once if using multiple lines to replace.
-> > Pages may be used to scope matches.
-> `m8` `call` `munge` `write`
-> * path String
->   Path of the file to edit or create (relative, absolute, or ~).
-> * old_string? String
->   The text to replace. Omit to write or append.
-> * new_string String
->   The text to insert.
-> * pages? String
->   Page range to scope the matches during replace e.g.
->   "10-10" or "11-20" or "21-100", or "2@string_match" to
->   scope within 2 pages starting at string match.
-—
-```
-[Replaced 1 match on page 30]
-[Replaced 1 match on page 30. Matched ignoring indentation]
-[Replaced 1 match across pages 30-31]
-[Replaced 4 matches across pages 3-9]
-[DENIED: Found 2 matches but multi-line replacements must be unique]
-[Created a new file with 2 pages]
-[Appended to page 40]
-[Appended to pages 40-43]
-[Removed 1 match on page 30]
-```
-—
-* Reciept acknowledges any fuzzy matching it performed.
-* When appending, always appends to a new line.
-* Appending or writing new files always ensures a trailing newline.
-* Creates new files and leading directories as needed.
-* Fuzzy matches with compounding forgiveness:
-  * Exact matches.
-  * Trailing and leading line whitespace equivalence.
-  * Total whitespace equivalence.
-  * Unescape \n, \t, \r and escaped quotes — but only when the block holds no real newline.
-  * If a match line starts with "number:", also matches if that prefix is treated as a line number within 100 lines away.
-  * Multi-line block forgiveness - a 25% line mismatch rate is tolerated within the first and last whole lines of at least 8 non-whitespace characters.
-
-#### :toolbox:grep
-> > Grep search per-line inside files that match a glob.
-> > Glob wildcards will not expand "." prefixed directories.
-> `m8` `call` `munge` `scan`
-> * regex  String
->   Regex to search with using a Perl-style pattern (no
->   backrefs, lookaround, or multi-line matching).
-> * glob String
->   Glob match for files with ** and * expansion (relative,
->   absolute, or ~) e.g. "src/**/*.js" or "**".
-—
-```
-path/to/file.ext (2KB, 3433 lines, 1-34 pages) has 5 matches:
-* 4 matches on pages 30-32 in lines:
-    2998:…prefixed/suffixed for mid-line page breaks…
-    3055:line with matching string.
-    3166:another line with matching string.
-    3211:last line with a match on consecutive matching pages.
-* 1 match on pages 34-34 in lines:
-    3423:last line of file with match.
-path/to/another/file.ext (564B, 233 lines, 1-2 pages) has 1 match:
-* 1 match on pages 1-1 in lines:
-    34:line with a matching string.
-```
-* Skips binary files.
-* Fast scans but still a simple tool.
-* Doesn't descend into directories prefixed with a ".", or symlinks to directories, when matching * or ** patterns.
-* Glob silently supports {a,b} and ? syntax.
-—
-* Includes a bundled regex that is fast, simple and small.
-- Single line, whole-match offsets only. No capture slots.
-- Byte-oriented. ASCII `\w \d \s`, ASCII-only `(?i)`.
-- Syntax: literals, `.`, `[a-z]`, `[[:alpha:]]`, `\d \w \s \D \W \S`, `^ $ \b \B`, `|`, `(...)`, `(?:...)`, `* + ? {n} {n,} {n,m}`, lazy `*? +? ??`, inline `(?i)` and `(?i:...)`.
-- Leftmost-first alternation, not leftmost-longest.
-- Parse → AST → bytecode → Pike VM.
-- AST arena-allocated, freed after compile. Bytecode persists.
-- Five ops: `byte`, `class`, `split`, `jmp`, `match`. Classes as 256-bit bitsets in a side table.
-- `{n,m}` expands by duplicating the subtree.
-- `Thread = struct { pc: u32, start: u32 }` — 8 bytes, copy to fork.
-- Two preallocated thread lists sized to program length, swapped per byte.
-- Sparse set for pc dedupe; clear is `len = 0`. Bounds threads to program size → O(n×m).
-- No allocation in the match loop. No timeout needed — linear time is structural.
-- Prefilter: extract required leading literal from AST, `std.mem.indexOf` to candidates, run VM only there.
-- Whole pattern literal → skip compilation, `indexOf` and return.
-- `^` anchored → try position 0 only. No required literal → run VM from each position.
-- Return compile errors verbatim; name the unsupported construct.
-- Defer: lazy DFA, Aho-Corasick multi-literal, `\p{...}`, Unicode case folding, capture groups.
-- Reject patterns containing literal `\n` at compile time — never silently return no matches.
-—
-
-#### :toolbox:glob
-> > Glob scan for matching file paths.
-> > Glob wildcards will not expand "." prefixed directories.
-> `m8` `call` `munge` `scan`
-> * glob String
->   Glob match for files with ** and * expansion (relative,
->   absolute, or ~) e.g. "src/**/*.js" or "**".
-* Uses the same underlying command as grep which changes the output format when the regex is omitted: 
-```
-path/to/file.ext (2KB, 3433 lines, 1-34 pages)
-path/to/another/file.ext (564B, 233 lines, 1-2 pages)
-path/to/large/binary/file (23MB)
-```
-
-—
+Comptime elimination of OS specific code depending on target build.
 
 # ====
 
@@ -213,13 +87,6 @@ tool extension skills - Scaling flexibility by what we tell the model.
 
 # ====
 
-All inbuilt tools take args as well as envs (M8_ARG_FOO=blah or --foo blah),
-so one can be driven by hand from a shell.
-
-Parameter expansion itself is settled below, under M8 CALL ARGS.
-
-# ====
-
 Make toolbox activation only when providing no value or quoted block so we can template the setting of env vars.
 Make sure that value mechanism of setting of env vars also prefixes M8_ARG_
 
@@ -233,298 +100,8 @@ Adding an env var is 1, not 2.
 
 # ====
 
-#### :toolbox:bash
-> > Run a bash command.
-> `m8` `call` `args` `bash` `-euo` `pipefail` `{{M8_ARG_COMMAND|-c}}`
-> * command String
->   The bash command to run.
-
-# ==== DONE
-
-M8 CALL ARGS
-
-A call is carried one way, in the environment. A tool's argv reaches its command
-verbatim, and `m8 call args` is what turns an environment back into flags for a
-command that wants them.
-
-It is an example rather than a dependency. Delete it and the framework still
-works — every inbuilt tool already reads `M8_ARG_*` directly — so anything else
-may fill the same slot, which is the whole claim about being composable.
-
-A placeholder is a whole argv element and expands from the environment:
-
-```
-{{M8_ARG_COMMAND}}       --command VALUE
-{{M8_ARG_COMMAND|-c}}    -c VALUE
-{{M8_ARG_COMMAND|}}      VALUE
-{{M8_ARG_DEEP?--deep}}   --deep, only when the value is exactly `true`
-{{M8_ARGS}}              the whole call as JSON, one element
-```
-
-* Matching is on the `M8_ARG` prefix, which covers both names in one test and
-  cannot collide with a templating language's own braces — `m8 call args awk
-  '{{print $1}}' f` passes through untouched. That is also what retires the
-  `{{{…}}}` literal escape, which existed for exactly that collision.
-* `|` also separates enum values in a type, in a different position, so there is
-  no parse conflict — but it is the one character in this language doing two
-  unrelated jobs.
-* Unset omits the element entirely. An empty string emits the flag and an empty
-  element. Keeping them apart is the whole of what optional means to a command.
-* `?` is strict: `true` emits the flag alone, `false` and unset omit it, and
-  anything else is an error naming what arrived. Silent omission would let a
-  call look like it succeeded while ignoring what was asked, which is worse than
-  failing. `callEnv` writes JSON `true` and JSON `"true"` to the same bytes, so
-  a stringly-typed provider still passes.
-* Only `?` reads a value. Every other form passes any bytes through.
-* No flags of its own, ever, so the first word is always the command and there
-  is no `--` to remember.
-
-Objects and arrays have no environment spelling and get no expansion here.
-Structure lives in `M8_ARGS` and is read with jq inside a block, which keeps
-`args` free of a JSON parser.
-
-Taking expansion out of the framework is one arm of one switch:
-
-* `converse.zig` — the `.argv` case becomes the argv, unchanged.
-* `toolbox.zig` — `expand`, `emit`, `pushFlag`, `scalar` and their tests go, and
-  `{{}}` for the whole call goes with them.
-* Required-property enforcement stays. It is the one part of carrying a call
-  that belongs to the framework.
-* `{{CODE}}` and `{{M8}}` stay for now, so `{{…}}` means m8's own word rather
-  than a call's, and a reader can tell which layer acts on a placeholder from
-  its name alone. Squashing those two is its own idea above.
-* Errors move from load time to call time. That is the trade and it is accepted;
-  a broken definition failing loudly on use is not worth a validation pass.
-
-A shield must not clobber `M8_*`, or it breaks the tool and every shield inside
-it. Once the environment is the only way a call is carried, that contract wants
-saying in `shield`'s help and the README's shield section, with the inbuilt
-shields tested against it. `contain-env` allowing `M8_*` is one instance of the
-rule rather than the rule itself, and user-defined shields can only be told.
-
-—
-# ====
-
-#### :toolbox:webfetch
-> > Download a web page for viewing.
-> ```bash
-> out=$(mktemp "$TMPDIR/$(printf %s "$M8_ARG_URL" | tr -cs A-Za-z0-9 - | cut -c1-200).XXXXXX")
-> curl -fsSL --max-time 30 --max-filesize 10000000 -o "$out" "$M8_ARG_URL"
-> echo "Downloaded for viewing at: ${out#"$PWD"/}"
-> ```
-> * url String
->   The url of the page to download.
-
-* `mktemp` picks the name and creates the file in one atomic step, so two
-  fetches at once cannot land on one path. Six X, because busybox's `mktemp`
-  is a wrapper over `mkstemp`, which wants exactly that many.
-* Announcing the path only after the fetch succeeds is what keeps a reader
-  from ever seeing a half-written file, and `-e` on the 🏃 is what makes the
-  separate `echo` line say so.
-* The slug is a label rather than a reference, so two urls sharing one costs
-  nothing. `cut` leaves room for the suffix.
-* `mktemp` over `uuidgen`, which is util-linux and absent from busybox.
-
-# ==== DONE
-
-MOB TMPDIR
-
-A mob's own scratch directory, under `.m8-st8/.tmp-dir/`, with a subdirectory
-per mob. m8 makes it before a tool runs and never removes it. Persistence is
-the whole point: a tool that writes a file and answers with its path is only
-useful if the next call can open it, and a directory of this call's own means
-it never can.
-
-* Made unconditionally, as a contract of the framework rather than a side
-  effect of building a sandbox invocation, so a tool has one whether it stands
-  inside a 🛡 or not.
-* Guaranteed to exist, and guaranteed without a trailing slash, so a tool needs
-  neither a `mkdir` nor a `${TMPDIR%/}` of its own.
-* Built by m8 from the mob's own location rather than inherited, so it is a real
-  path rather than one reached through a symlink — which is what the profile's
-  `TMP` has to match, and what an inherited macOS `/var/folders` TMPDIR does
-  not, so TMP is not actually writable today.
-* The throwaway HOME points at the same directory, so a tool wanting a dotfile
-  or a cache has somewhere real to put it and never reaches the person's own.
-* No cleanup. A tool tidies up after itself or leaves something meant to last;
-  resetting a mob is the eraser, and it is the user's to reach for.
-* Keeping it out of version control is a repository's business rather than
-  m8's. A `.gitignore` inside the config directory is the suggestion, and this
-  repo carries one: the rule travels with the folder, and a project root needs
-  nothing said in it.
-
-The profile needs a carve-out, because `no-edit-m8-st8` denies writing to any
-path holding `m8-st8` — which would make the one directory m8 guarantees
-writable the one directory a tool may never write. It reads as one statement
-alongside the permanent deny already there:
-
-* `core/` is never writable, and no flag subtracts that.
-* `.tmp-dir/` is always writable, and no flag subtracts that either.
-* Everything between them is writable until `no-edit-m8-st8` is active.
-
-The cost is that `.tmp-dir` becomes a reserved name inside a config directory.
-
-Open: how the per-mob subdirectory is spelled for a mob nested below the top.
-
-# ====
-
 Nudge the model to make multiple calls in a single response.
 Nudge it to use string match anchors when doing multiple changes in the same file.
-
-
-# ====
-
-Inbuilt optional toolbox - file interaction.
-
-#### :compass:
-> You are a helpful coding assistant working alongside the user,
-> who communicates concisely and clearly. 
-> Use the `view` tool to examine file and directory contents,
-> and the `edit` tool to make subsequent changes:
-> * A denial means your picture of the file is wrong,
->   not that you should recount anything. View before retrying.
-
-#### :toolbox:view
-> > Lists lines of files or alphabetically sorted directory content. 
-> > File lines have a line number prefix (1-indexed): `=123|LINE`.
-> > An end of a file newline shows as an empty numbered line.
-> > Directory content lines are prefixed with `/` and have
-> > suffixes based on their types:
-> > * Directories suffix `/`.
-> > * Symlinks to directories suffix `/ ->DESTINATION`.
-> > * Symlinks to files suffix ` ->DESTINATION`.
-> > * Normal files suffix ` (SIZE)` in bytes.
-> `m8` `call` `view`
-> * path string
->   The relative or absolute path to the file or directory to inspect.
-> * offset? number
->   The number of lines into the result to start viewing.
-> * limit? number
->   More lines than this are truncated
->   with a final unnumbered `~~~` line. Defaults to 400.
-> * width? number
->   Lines over this length truncate with `~~~`. Defaults to 400.
-> * grep? string
->   Activates search mode for matching file lines.
->   When `path` is a file this filters for lines with a match.
->   When `path` is a directory,
->   it switches to depth-first traversal, only returning files
->   that include a match (shown as its path from `path` without
->   suffix, to match how edit takes a context), then the matching
->   file lines, and then a line indicating the number of
->   occurrences in that file: `*6|STRING`.
->   Directories starting with `.` and symlinks are not traversed.
-> * after? number
->   Also include this many additional file lines after a matching
->   grep file line.
-> * before? number
->   Also include this many additional file lines before a matching
->   grep file line.
-> * find? string
->   Activates search mode for matching file or directory names,
->   answering with directory content lines, suffixes and all.
-
-#### :toolbox:edit
-> > Modifies files, creating them and any missing
-> > parent directories if they don't exist.
-> `m8` `call` `edit`
-> * path string
->   The relative or absolute path to a file or directory
->   as the base context for edits.
-> * changes string
->   Lines describing the changes to make.
->   A context line sets the file subsequent lines apply to,
->   relative to `path`:
->   * `/subpath` sets a file.
->   Contexts are independent and may appear in any order.
->   Before any context line, the context is `path` itself,
->   which must then be a file. A change reaching across files
->   is a context each.
->   Substitution lines replace text within the current file:
->   * `*6|STRING` followed by `:SUBSTITUTION` lines replaces
->     every occurrence of `STRING` with the substitution,
->     failing unless exactly 6 are found in that file, as the
->     view tool would give.
->   * Search matches within lines only, but can substitute in
->     any number, with multiple `:SUBSTITUTION` lines
->     joining with newlines.
->   Line edits apply to the current file:
->   * `=123|LINE` asserts line 123 is `LINE`, and anchors an
->     insert after it.
->   * `-123|LINE` removes line 123, asserting it is `LINE`.
->   * `|LINE` inserts `LINE` after the line referenced by the
->     preceding `=` or `-`. Consecutive inserts land in order.
->     Use `=0|` to anchor at the start of the file, and anchor
->     to the last content line to append.
->   All line numbers reference the file before any change is made,
->   and must match what the view tool would give.
->   All changes are validated first, then substitutions are applied,
->   then removals and inserts. The entire edit fails unless every
->   assertion holds, and fails if a substitution and a line edit
->   affect the same line.
-
-On failure it reports what didn't hold, and only that. What
-was expected is what the edit asserted, so only the actual
-is reported. A denial is a rejection rather than a view, and
-says the picture of the file is stale, so it is not written
-in the form view gives and is never edited against:
-```
-Denied - line 333 is `foo foo`
-Denied - 4 occurrences of `getUser`
-```
-
-# ====
-
-The bet — line addressing rather than multi-line matching.
-
-A search stays within a line. Other formats match across
-lines because they refuse line numbers, and a block of
-surrounding context is how they say "this one, not the other
-five". m8 says that with the number and asserts it, so a
-multi-line search is a second mechanism for a job already
-done — and the one imported to work around the bet.
-
-What the bet protects is the correspondence. `*6|getUser`
-out of a view grep is the same line going into an edit, and
-that holds because a count is of a single-line literal. A
-search spanning lines either drags grep across them too, or
-makes the correspondence conditional, and "sometimes
-identical" is a weaker thing to have built.
-
-The bet is on models rather than on the format, so an
-evaluation settles it and an argument does not. Adding a
-multi-line search later stays compatible, and removing one
-does not, so it waits until something forces it.
-
-What forces it is a file of identical lines with a change
-wanted to one of them. Nothing within a line separates them
-and only the number can, so a model either reaches for a
-line edit, widens until it finds it cannot, or tries to
-spell a search across lines and is denied. A first wrong
-attempt says nothing. A second of the same shape after a
-denial is the format failing to teach itself, and is what a
-multi-line search would be bought with.
-
-# ====
-
-M8_ARG_FOO=blah M8_ARG_BAR=grrr m8 call -k foo -a bar – echo
-–foo=blah grrr
-
-Also parsing out things.
-
-Ideally replacing the placeholder expansion defined in the inline code span toolbox language.
-
-# ====
-
-Tools for move, copy, delete.
-
-# ====
-
-So the paper gap is there. Nobody has measured how often a human edits a file while an agent has it in context, and nobody has compared edit-format robustness under that condition. The specific contribution you'd be making:
-Line-assertion as fine-grained OCC — sits between STORM's file-level versioning (over-rejects) and CRDT merging (silently produces semantic conflicts). Nobody occupies that middle.
-Human-in-the-loop concurrency, which the multi-agent literature systematically ignores because worktree isolation solves their version and can't solve yours.
-The transcription-vs-hallucination distinction — still unmeasured as far as any of these searches go, and it's the empirical claim the whole field's line-number rejection rests on.
-The cheapest credible experiment for #3 alone: same model, same tasks, your format vs. a search/replace baseline, with a scripted process making small edits to target files at random intervals to simulate a human. Measure denial rate, denial reason, and silent-wrong-edit rate. That last number is the one nobody has, and it's the one that would make the paper.
 
 # ====
 Attach binary files like images?
@@ -547,7 +124,7 @@ Allow some git commands by only unlocking .git when it's constrained. How does t
 
 # ====
 
-In  chat subagent forking with > > 
+In chat subagent forking with > > 
 
 # ====
 match workstreams with agents and mobs chats.

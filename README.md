@@ -231,7 +231,7 @@ optimisation.
 * `zig build` is the single binary. A launcher reaching
   a command calls it.
 * `zig build split` is a program per command — `m8-cat`,
-  `m8-call-edline-view`, `m8--` — and a launcher that
+  `m8-call-munge-read`, `m8--` — and a launcher that
   holds none of them. Reaching a command is spawning it.
 
 The difference is one comptime branch. What a launcher
@@ -640,32 +640,12 @@ a question to the person and appends their answer to the
 document, so the next command in the pipe sees it. An
 inbuilt tool is never typed as a command of its own.
 
-`view` and `edit` are two more, reached under one name as
-`m8 call edline view` and `m8 call edline edit`. They are
-scoped together because they are one language rather than
-two tools. What `view` answers with is what `edit` takes:
-a file line is `=123|LINE`, a grep over a directory names
-each file the way an edit context names it, and a count of
-what matched is the line an edit substitutes against. An
-edit says a line back before changing it, so a change built
-on a stale picture of a file is refused rather than applied
-to whatever is at that number now.
-
-That is a bet, and it is the reason there is no matching
-across lines. Elsewhere a block of surrounding context is
-how a tool says "this one, not the other five", because it
-will not trust a line number. m8 says it with the number
-and checks it, so a denial is how a model finds out its
-picture went out of date — never something to edit against.
-
-`munge` is the other side of that bet, as `m8 call munge
-read`, `write` and `scan`. Where `edline` makes the
-coordinate exact and refuses a stale one, `munge` makes it
-coarse: a page is about 100 lines, every answer says which
-pages it gave and how to ask for the next, and nothing is
-ever asserted against a page. Precision lives in the
-strings read out of one, so a page number that has drifted
-still names the right part of the file.
+`munge` provides the file tools as `m8 call munge read`,
+`write` and `scan`. A page is about 100 lines, every answer
+says which pages it gave and how to ask for the next, and
+nothing is ever asserted against a page. Precision lives in
+the strings read out of one, so a page number that has
+drifted still names the right part of the file.
 
 What that buys is forgiveness with a receipt. A block is
 matched down a ladder — indentation, then all whitespace,

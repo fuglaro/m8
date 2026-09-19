@@ -45,7 +45,7 @@
 
 #### :toolbox:grep BYTE_CAP 16000
 > > Grep search inside files matching a glob.
-> > Glob wildcards ignore hidden directories.
+> > Glob descent skips hidden path components unless named explicitly.
 > > Omitting regex will just glob files.
 > `m8` `call` `munge` `scan`
 > * regex? string

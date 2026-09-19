@@ -16,9 +16,6 @@ send
 call
 call args
 call ask
-call edline
-call edline view
-call edline edit
 call munge
 call munge read
 call munge write

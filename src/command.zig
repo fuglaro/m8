@@ -50,7 +50,6 @@ const modules = .{
 const native_modules = .{
     @import("command/args.zig"),
     @import("command/ask.zig"),
-    @import("command/edline.zig"),
     @import("command/munge.zig"),
 };
 
@@ -111,7 +110,7 @@ pub fn findCallable(name: []const u8) ?Command {
 /// the implementations.
 pub const Node = struct {
     spec: Spec,
-    /// The words that reach it, `m8` aside: `call`, `edline`, `view`.
+    /// The words that reach it, `m8` aside: `call`, `munge`, `read`.
     path: []const []const u8,
     /// What it is called as a program of its own. A name that already opens
     /// with `-` joins without a separator, so the command whose arguments are
@@ -361,10 +360,10 @@ test "the tree names a program for every command" {
     // hyphens — and a name that is already punctuation keeps its own.
     try testing.expectEqualStrings("m8-cat", byPath(&.{"cat"}).?.program);
     try testing.expectEqualStrings("m8--", byPath(&.{consult}).?.program);
-    try testing.expectEqualStrings("m8-call-edline", byPath(&.{ "call", "edline" }).?.program);
+    try testing.expectEqualStrings("m8-call-munge", byPath(&.{ "call", "munge" }).?.program);
     try testing.expectEqualStrings(
-        "m8-call-edline-view",
-        byPath(&.{ "call", "edline", "view" }).?.program,
+        "m8-call-munge-read",
+        byPath(&.{ "call", "munge", "read" }).?.program,
     );
 
     // A tool reached through `call` that has a home at the top is one
@@ -372,7 +371,7 @@ test "the tree names a program for every command" {
     try testing.expect(byPath(&.{ "call", "cat" }) == null);
 
     // And back again, which is how a binary knows which command it is.
-    try testing.expectEqualStrings("edline", byProgram("m8-call-edline").?.spec.name);
+    try testing.expectEqualStrings("munge", byProgram("m8-call-munge").?.spec.name);
     try testing.expectEqualStrings(consult, byProgram("m8--").?.spec.name);
     try testing.expect(byProgram("m8-nosuch") == null);
 }
@@ -387,9 +386,9 @@ test "a complaint names the path the words reached, not the top of it" {
     try testing.expectEqualStrings("shield ask", both_words);
 
     // As deep as the words go, and no deeper than a command.
-    const deep = try named(a, &.{"call"}, &.{ "edline", "view", "x.md" });
+    const deep = try named(a, &.{"call"}, &.{ "munge", "read", "x.md" });
     defer a.free(deep);
-    try testing.expectEqualStrings("call edline view", deep);
+    try testing.expectEqualStrings("call munge read", deep);
 
     // A word that names nothing under it is the command's own argument.
     const top = try named(a, &.{"shield"}, &.{"bogus"});
@@ -422,8 +421,8 @@ test "what the tree names is what a split-out binary would run" {
     // The tree is read by a launcher and `commandAt` by the command's own
     // root. Two walks over one registry, so they are checked against each
     // other rather than trusted to stay in step.
-    try testing.expectEqualStrings("edline", comptime commandAt(words("call edline")).?.name);
-    try testing.expectEqualStrings("view", comptime commandAt(words("call edline view")).?.name);
+    try testing.expectEqualStrings("munge", comptime commandAt(words("call munge")).?.name);
+    try testing.expectEqualStrings("read", comptime commandAt(words("call munge read")).?.name);
     try testing.expectEqualStrings(consult, comptime commandAt(words(consult)).?.name);
     try testing.expect(comptime commandAt(words("call cat")) == null);
     try testing.expect(comptime commandAt(words("nosuch")) == null);
@@ -432,8 +431,8 @@ test "what the tree names is what a split-out binary would run" {
 test "the runtime walk reaches what the comptime one does" {
     // The single binary answering to a program name and a split-out binary
     // being that command must land on the same one.
-    try testing.expectEqualStrings("edline", at(&.{ "call", "edline" }).?.name);
-    try testing.expectEqualStrings("view", at(&.{ "call", "edline", "view" }).?.name);
+    try testing.expectEqualStrings("munge", at(&.{ "call", "munge" }).?.name);
+    try testing.expectEqualStrings("read", at(&.{ "call", "munge", "read" }).?.name);
     try testing.expectEqualStrings(consult, at(&.{consult}).?.name);
     try testing.expect(at(&.{ "call", "cat" }) == null);
     try testing.expect(at(&.{"nosuch"}) == null);
@@ -460,7 +459,7 @@ test "what call reaches is one rule, wherever it is read from" {
         if (by_node) |n| try testing.expectEqualStrings(c.name, n.spec.name);
     }
     try testing.expectEqualStrings("m8-cat", callableNode("cat").?.program);
-    try testing.expectEqualStrings("m8-call-edline", callableNode("edline").?.program);
+    try testing.expectEqualStrings("m8-call-munge", callableNode("munge").?.program);
     try testing.expect(callableNode("call") == null);
     try testing.expect(callableNode(consult) == null);
 }

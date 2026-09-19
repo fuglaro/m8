@@ -111,8 +111,7 @@ forty a's answers immediately, which is the point of not backtracking.
 * `**` never steps over a dotted segment, so a glob cannot reach into `.git`
   even though the walk would have skipped it anyway.
 
-README has a section on `munge` beside the `edline` one, as the other side of
-the same bet.
+README has a section on `munge`, documenting its page-based file tools.
 
 `scan` with no regex is the `:toolbox:glob` use case from IDEAS — the same
 command, answering the smaller question. Files are named with the line a search

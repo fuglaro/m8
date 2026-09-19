@@ -9,7 +9,7 @@ const std = @import("std");
 const command = @import("command.zig");
 const harness = @import("harness.zig");
 
-/// The path, spelled the way a command line spells it: `call edline view`.
+/// The path, spelled the way a command line spells it: `call munge read`.
 const which = @import("build_options").command;
 
 pub fn main(init: std.process.Init) !u8 {

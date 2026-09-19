@@ -1,10 +1,8 @@
 //! `munge` — reading, searching and changing files, all addressed in pages.
 //!
-//! The counterpart to `edline`, and the opposite bet. `edline` makes the
-//! coordinate exact and checks it, so a stale picture is refused. `munge`
-//! makes the coordinate coarse and lets the strings carry the precision, so a
-//! stale picture mostly still lands — a page number that has drifted by a line
-//! or two still names the right part of the file.
+//! `munge` makes the coordinate coarse and lets the strings carry the
+//! precision, so a stale picture mostly still lands — a page number that has
+//! drifted by a line or two still names the right part of the file.
 //!
 //! That is what pages buy. A page is stable enough to hand back and forth
 //! across edits, cheap enough to scope a search with, and vague enough that
