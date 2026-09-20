@@ -661,7 +661,17 @@ of the file around it.
 `scan` answers in the same terms, over the files a glob
 names, with its own small regex engine — no captures, no
 matching across lines, and linear time by construction
-rather than by a timeout.
+rather than by a timeout. `M8_ARG_PAGE_LINES` and
+`M8_ARG_PAGE_BYTES` set the source-file page shape.
+
+Scan has a second, distinct page coordinate: each result page
+contains the complete matches from one source-file page. Adjacent
+source pages are not merged, and a result group is never cut to fit
+`M8_ARG_BYTE_CAP`; an oversized group is returned whole. Use
+`M8_ARG_PAGES` to select result pages, not the source pages
+printed inside them. `BYTE_CAP` is applied between result
+pages, the first selected page is always retained, and the continuation
+trailer is not counted.
 
 ## Language and Schema
 
@@ -924,7 +934,11 @@ renders markdown renders them. A tty gets `m8`.
 * 🧰 tool -> `:toolbox:`
 
 A sigil takes a value, a content block, or both — or, for the
-one that is a fence rather than a record, neither.
+one that is a fence rather than a record, neither. 🧰 has three
+separate header forms: a content-bearing header defines a tool, a
+blockless header with a variable and values configures that tool,
+and a bare blockless header offers it. A definition header may not
+combine content and variable configuration.
 
 * Value only: 🧠 📚 🔏 🟢
 * Content only: 🙋 🤖 💭 🧭
@@ -1067,6 +1081,35 @@ A placeholder is a whole argument and is never spliced
 into a larger one, so a value cannot become syntax in
 what runs.
 
+### Definition variables
+
+A tool definition can supply fixed environment values without
+putting them on the definition header. Each value gets its own
+blockless header, and a final bare header offers the tool:
+
+```m8
+▄ 🧰read
+│ │ Read a file or directory.
+│ `m8` `call` `munge` `read`
+│ * path string
+
+▄ 🧰read PAGE_LINES 100
+▄ 🧰read PAGE_BYTES 10000
+▄ 🧰read BYTE_CAP 20000
+▄ 🧰read
+```
+
+Definition variables and call parameters share the `M8_ARG_*`
+namespace. If both provide the same name, their values are joined
+with a space, with definition values first and call values last.
+Shields use the same convention, so a shield's definition values
+also reach the tool under `M8_ARG_*` and participate in that merge.
+
+The three toolbox header forms are intentionally separate: content
+defines, a variable header configures, and a bare header offers.
+This keeps a definition readable when it has several defaults.
+
+
 * An unset variable leaves nothing behind. An empty one
   is a value a command was given, and is passed as an
   empty argument.
@@ -1129,7 +1172,7 @@ them stack.
 
 ▄ 🛡️secure
 │ ```bash
-│ exec {{M8}} shield secure "${SECURES}" -- "$@"
+│ exec {{M8}} shield secure "${M8_ARG_SECURES}" -- "$@"
 │ ```
 ```
 

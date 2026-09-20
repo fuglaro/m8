@@ -175,15 +175,53 @@ pub fn list(w: *std.Io.Writer) !void {
 /// A stream that stops without a final newline still gives up what it had. A
 /// whole JSON response arrives exactly that way — one line with nothing after
 /// it — so a reader that insisted on the delimiter would see nothing at all.
+///
+/// Nor is there a length a line stops being one at. A provider that ignored
+/// the streaming hint answers in a single line however long the reply is, and
+/// an event stream carrying a whole response object in one event is the same
+/// thing again — so how big a buffer happens to be is no business of the
+/// caller's.
 pub fn nextLine(arena: Allocator, r: *std.Io.Reader) !?[]const u8 {
     if (r.takeDelimiterInclusive('\n')) |line| {
         return line;
     } else |e| switch (e) {
         error.EndOfStream => {},
+        error.StreamTooLong => return try longLine(arena, r),
         else => return e,
     }
     const rest = try r.allocRemaining(arena, .unlimited);
     return if (rest.len == 0) null else rest;
+}
+
+/// A line that outgrew the reader's buffer, put back together.
+///
+/// A full buffer with no newline in it is the *start* of a line rather than a
+/// failure: take what is held, and go back for the rest. Only a line this
+/// long is copied — every other one is handed back where the reader already
+/// had it, which is what keeps the usual case free.
+fn longLine(arena: Allocator, r: *std.Io.Reader) ![]const u8 {
+    var line: std.ArrayList(u8) = .empty;
+    while (true) {
+        const held = r.buffered();
+        // Nothing held and still no delimiter is not a case the reader can
+        // produce; saying so beats spinning here if it ever did.
+        if (held.len == 0) return error.StreamTooLong;
+        try line.appendSlice(arena, held);
+        r.toss(held.len);
+
+        if (r.takeDelimiterInclusive('\n')) |rest| {
+            try line.appendSlice(arena, rest);
+            return line.items;
+        } else |e| switch (e) {
+            // The stream ended mid-line, which is still the line.
+            error.EndOfStream => {
+                try line.appendSlice(arena, try r.allocRemaining(arena, .unlimited));
+                return line.items;
+            },
+            error.StreamTooLong => continue,
+            else => return e,
+        }
+    }
 }
 
 // ---------------------------------------------------------------- tests
@@ -222,4 +260,48 @@ test "m8 encodes to itself and decodes back" {
     const c = find("m8").?;
     const records = try c.decode(arena, src);
     try testing.expectEqualStrings(src, try c.encode(arena, records, .{}));
+}
+
+/// A reader with a buffer smaller than what is going through it, which is the
+/// whole of what makes a long line long.
+fn narrow(src: *std.Io.Reader, buf: []u8) std.Io.Reader.Limited {
+    return src.limited(.unlimited, buf);
+}
+
+test "a line longer than the buffer is still one line" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // Three lines, the middle one several buffers wide.
+    const long = "x" ** 200;
+    const src = try std.fmt.allocPrint(arena, "one\n{s}\nthree\n", .{long});
+
+    var fixed: std.Io.Reader = .fixed(src);
+    var buf: [32]u8 = undefined;
+    var lim = narrow(&fixed, &buf);
+    const r = &lim.interface;
+
+    try testing.expectEqualStrings("one\n", (try nextLine(arena, r)).?);
+    try testing.expectEqualStrings(long ++ "\n", (try nextLine(arena, r)).?);
+    try testing.expectEqualStrings("three\n", (try nextLine(arena, r)).?);
+    try testing.expect((try nextLine(arena, r)) == null);
+}
+
+test "a long last line with no newline on it is still given up" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // A whole JSON response arrives exactly this way: one line, no newline,
+    // and nothing says how big it is.
+    const body = "{\"choices\":[" ++ ("y" ** 500) ++ "]}";
+
+    var fixed: std.Io.Reader = .fixed(body);
+    var buf: [64]u8 = undefined;
+    var lim = narrow(&fixed, &buf);
+    const r = &lim.interface;
+
+    try testing.expectEqualStrings(body, (try nextLine(arena, r)).?);
+    try testing.expect((try nextLine(arena, r)) == null);
 }

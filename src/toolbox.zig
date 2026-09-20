@@ -30,6 +30,10 @@ pub const Error = error{
     /// Two properties would be the same environment variable. Caught where the
     /// tool is written rather than when a model happens to supply both.
     ClashingProperty,
+    /// A definition-provided environment name was not a portable argument name.
+    BadEnvironmentName,
+    /// Definition, variable, and activation are separate header forms.
+    VariableOnDefinition,
 };
 
 pub const Property = struct {
@@ -77,6 +81,8 @@ pub const Tool = struct {
     /// definition says once rather than a call having to carry it.
     env_var: []const u8 = "",
     env_values: []const []const u8 = &.{},
+    /// Definition-level variables, allowing one `:toolbox:` header per value.
+    env_vars: []const api.EnvVar = &.{},
     properties: []const Property = &.{},
 };
 
@@ -140,7 +146,11 @@ pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const 
         rest.next() orelse "";
     const speaks = if (at == null) "" else rest.next() orelse "";
 
-    const env_var = rest.next() orelse "";
+    const raw_env_var = rest.next() orelse "";
+    const env_var = if (raw_env_var.len == 0)
+        ""
+    else
+        (try envName(arena, raw_env_var)) orelse return Error.BadEnvironmentName;
     var env_values: std.ArrayList([]const u8) = .empty;
     while (rest.next()) |v| try env_values.append(arena, v);
     const quote = doc.quote(mode);
@@ -213,6 +223,7 @@ pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const 
         .speaks = speaks,
         .env_var = env_var,
         .env_values = env_values.items,
+        .env_vars = if (env_var.len > 0) &.{.{ .key = env_var, .value = try std.mem.join(arena, " ", env_values.items) }} else &.{},
         .description = std.mem.trim(u8, description.items, "\n"),
         .command = command,
         .shields = shields.items,
@@ -910,7 +921,7 @@ test "a 🧰 may add a variable of its own, after whatever it answers in" {
     const both = try parse(arena, .md, "make,m8 SECURES airgap no-writes", "`sh`");
     try testing.expectEqualStrings("make", both.name);
     try testing.expectEqualStrings("m8", both.speaks);
-    try testing.expectEqualStrings("SECURES", both.env_var);
+    try testing.expectEqualStrings("M8_ARG_SECURES", both.env_var);
     try testing.expectEqual(@as(usize, 2), both.env_values.len);
     try testing.expectEqualStrings("no-writes", both.env_values[1]);
 
@@ -919,7 +930,7 @@ test "a 🧰 may add a variable of its own, after whatever it answers in" {
     const plain = try parse(arena, .md, "make LEVEL loud", "`sh`");
     try testing.expectEqualStrings("make", plain.name);
     try testing.expectEqualStrings("", plain.speaks);
-    try testing.expectEqualStrings("LEVEL", plain.env_var);
+    try testing.expectEqualStrings("M8_ARG_LEVEL", plain.env_var);
 
     const bare = try parse(arena, .md, "make", "`sh`");
     try testing.expectEqualStrings("make", bare.name);

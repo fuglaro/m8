@@ -32,13 +32,25 @@ pub const command: api.Command = .{
 /// A page ends on whichever of these comes first. Lines keep a page roughly
 /// the same shape as the file, and characters keep one long line from handing
 /// back a page nobody can afford.
-const lines_per_page = 100;
-const chars_per_page = 10000;
+const default_page_lines = 100;
+const default_page_bytes = 10000;
 
 /// How much a call may be handed at once, over which whole pages are dropped
-/// from the end rather than a page being cut. `BYTE_CAP` in the environment,
+/// from the end rather than a page being cut. `M8_ARG_BYTE_CAP` in the environment,
 /// which a 🧰 sets once rather than every call carrying it.
-const default_byte_cap = 16000;
+const default_byte_cap = 20000;
+
+pub const PageConfig = struct {
+    lines: usize = default_page_lines,
+    bytes: usize = default_page_bytes,
+};
+
+const ListingRow = struct {
+    full: []const u8,
+    kind: @TypeOf(@as(Dir.Entry, undefined).kind),
+    estimated_bytes: usize,
+    page: usize,
+};
 
 const max_file = 16 * 1024 * 1024;
 
@@ -52,19 +64,23 @@ fn run(ctx: Ctx) !u8 {
     const path = ctx.env.get("M8_ARG_PATH") orelse
         (if (ctx.args.len > 0) ctx.args[0] else null) orelse
         return refuse(ctx, "no path given", .{});
-    const cap = number(ctx, "BYTE_CAP") orelse default_byte_cap;
+    const cap = number(ctx, "M8_ARG_BYTE_CAP") orelse default_byte_cap;
+    const config = PageConfig{
+        .lines = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_LINES") orelse default_page_lines),
+        .bytes = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_BYTES") orelse default_page_bytes),
+    };
 
     // A symlink at the path itself is followed: somebody naming it means the
     // thing it points at.
     const st = Dir.cwd().statFile(ctx.io, path, .{}) catch
         return refuse(ctx, "cannot read {s}", .{path});
 
-    if (st.kind == .directory) return list(ctx, path, cap);
+    if (st.kind == .directory) return list(ctx, path, cap, config);
 
     const bytes = Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(max_file)) catch
         return refuse(ctx, "cannot read {s}", .{path});
 
-    const pages = try paginate(ctx.arena, bytes);
+    const pages = try paginateConfig(ctx.arena, bytes, config);
     const asked = ctx.env.get("M8_ARG_PAGES");
 
     const whole = Span{ .from = 0, .to = pages.len - 1 };
@@ -120,6 +136,10 @@ pub const Ask = union(enum) {
 /// rule that keeps most page edges on a line edge without ever letting one
 /// enormous line hold a page open.
 pub fn paginate(arena: Allocator, bytes: []const u8) ![]const Page {
+    return paginateConfig(arena, bytes, .{});
+}
+
+pub fn paginateConfig(arena: Allocator, bytes: []const u8, config: PageConfig) ![]const Page {
     var out: std.ArrayList(Page) = .empty;
 
     var at: usize = 0;
@@ -137,16 +157,16 @@ pub fn paginate(arena: Allocator, bytes: []const u8) ![]const Page {
         var held: usize = 0;
         opens_mid = false;
 
-        while (page.end < bytes.len and held < lines_per_page) {
+        while (page.end < bytes.len and held < config.lines) {
             const nl = std.mem.indexOfScalarPos(u8, bytes, page.end, '\n');
             const stop = if (nl) |i| i + 1 else bytes.len;
             const began = page.end - page.at;
 
-            if (stop - page.at > chars_per_page) {
-                if (began >= chars_per_page * 2 / 3) break;
+            if (stop - page.at > config.bytes) {
+                if (began >= config.bytes * 2 / 3) break;
                 // A line long enough to fill a page of its own is cut, and
                 // both pages say where the seam is.
-                page.end = page.at + chars_per_page;
+                page.end = page.at + config.bytes;
                 page.ends_mid = true;
                 opens_mid = true;
                 break;
@@ -223,6 +243,12 @@ pub fn select(spec: []const u8, pages: []const Page, bytes: []const u8) Ask {
     const trimmed = std.mem.trim(u8, spec, " \t");
     if (trimmed.len > 0 and !std.ascii.isAlphanumeric(trimmed[0])) lo = 1;
     if (trimmed.len > 0 and !std.ascii.isDigit(trimmed[trimmed.len - 1])) hi = pages.len;
+
+    // Page numbers are one-based. Be forgiving when a caller uses zero for
+    // the first page, without changing the other end of a range: `0-5` is
+    // the same request as `1-5`, not a six-page request.
+    if (lo.? == 0) lo = 1;
+    if (hi.? == 0) hi = 1;
 
     if (lo.? > pages.len) return .{ .beyond = .{ .from = lo.?, .to = hi.? } };
     return .{ .span = clamp(.{ .from = lo.? - 1, .to = hi.? - 1 }, pages.len) };
@@ -312,7 +338,7 @@ fn write(ctx: Ctx, bytes: []const u8, pages: []const Page, want: Span, cap: usiz
     const whole = !asked and !capped;
     if (!whole) {
         try ctx.out.print("[Pages {d}-{d} of 1-{d}. Lines {d}-{d}.", .{
-            want.from + 1, to + 1, pages.len,
+            want.from + 1,    to + 1,         pages.len,
             first.first_line, last.last_line,
         });
         if (first.opens_mid) try ctx.out.print(" Opens mid-line {d}.", .{first.first_line});
@@ -340,57 +366,125 @@ fn write(ctx: Ctx, bytes: []const u8, pages: []const Page, want: Span, cap: usiz
 /// Every line is something to call `read` with, spelled the way it would have
 /// to be spelled, and a file says how many pages it holds so that a model can
 /// choose a range before it has opened anything.
-fn list(ctx: Ctx, path: []const u8, cap: usize) !u8 {
+fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig) !u8 {
     var dir = Dir.cwd().openDir(ctx.io, path, .{ .iterate = true }) catch
         return refuse(ctx, "cannot read {s}", .{path});
     defer dir.close(ctx.io);
-
     var names: std.ArrayList(Dir.Entry) = .empty;
     var it = dir.iterate();
-    while (try it.next(ctx.io)) |e| try names.append(ctx.arena, .{
-        .name = try ctx.arena.dupe(u8, e.name),
-        .kind = e.kind,
-        .inode = e.inode,
-    });
+    while (try it.next(ctx.io)) |e| try names.append(ctx.arena, .{ .name = try ctx.arena.dupe(u8, e.name), .kind = e.kind, .inode = e.inode });
     std.mem.sort(Dir.Entry, names.items, {}, byName);
-
     const base = std.mem.trimEnd(u8, path, "/");
+    var rows: std.ArrayList(ListingRow) = .empty;
+    var page: usize = 0;
+    var estimate_held: usize = 0;
+    var line_count: usize = 0;
     for (names.items) |e| {
         const full = try std.fs.path.join(ctx.arena, &.{ base, e.name });
-        switch (e.kind) {
-            .directory => try ctx.out.print("{s}/\n", .{full}),
-            .sym_link => {
-                var buf: [Dir.max_path_bytes]u8 = undefined;
-                const n = Dir.cwd().readLink(ctx.io, full, &buf) catch {
-                    try ctx.out.print("{s} ->\n", .{full});
-                    continue;
-                };
-                try ctx.out.print("{s} -> {s}\n", .{ full, buf[0..n] });
-            },
-            .file => try ctx.out.print("{s}{s}\n", .{ full, try measure(ctx, full, cap) }),
-            // A device, a socket, a fifo: named, and nothing claimed about it.
-            else => try ctx.out.print("{s}\n", .{full}),
+        const estimate = listingEstimate(full, e.kind) + 1;
+        if (line_count > 0 and (line_count >= config.lines or estimate_held + estimate > config.bytes)) {
+            page += 1;
+            estimate_held = 0;
+            line_count = 0;
         }
+        try rows.append(ctx.arena, .{ .full = full, .kind = e.kind, .estimated_bytes = estimate, .page = page });
+        estimate_held += estimate;
+        line_count += 1;
     }
+    const count = if (rows.items.len == 0) 1 else page + 1;
+    const asked = ctx.env.get("M8_ARG_PAGES");
+    const markers = try ctx.arena.alloc(Page, count);
+    for (markers, 0..) |*marker, i| marker.* = .{ .at = i, .end = i, .first_line = i + 1, .last_line = i + 1 };
+    const selected = if (asked) |spec| select(spec, markers, "") else Ask.whole;
+    const span = switch (selected) {
+        .span => |s| s,
+        .whole => Span{ .from = 0, .to = count - 1 },
+        .beyond => |s| {
+            try ctx.out.print("[Pages {d}-{d} of 1-{d}: out of scope.]\n", .{ s.from, s.to, count });
+            try ctx.out.flush();
+            return 0;
+        },
+    };
+    // Estimates decide the cap boundary before any selected file is opened.
+    // Rendering below preserves that boundary even when metadata drifts.
+    var estimated_held: usize = 0;
+    var planned_to = span.from;
+    var capped = false;
+    while (planned_to <= span.to) : (planned_to += 1) {
+        var page_estimate: usize = 0;
+        for (rows.items) |row| {
+            if (row.page == planned_to) page_estimate += row.estimated_bytes;
+        }
+        if (planned_to > span.from and estimated_held + page_estimate > cap) {
+            capped = true;
+            planned_to -= 1;
+            break;
+        }
+        estimated_held += page_estimate;
+    }
+    if (planned_to > span.to) planned_to = span.to;
 
+    var output: std.Io.Writer.Allocating = .init(ctx.arena);
+    var last_page = span.from;
+    var p = span.from;
+    while (p <= planned_to) : (p += 1) {
+        // Render pages independently, retaining the pre-pass page coordinates.
+        // The estimate is deliberately the cap decision: actual metadata can
+        // drift, and a page admitted by the estimate must not be rendered only
+        // to be thrown away because its real spelling is wider.
+        const one = try renderDirectoryPage(ctx, rows.items, p, cap, config);
+        try output.writer.writeAll(one);
+        last_page = p;
+    }
+    try ctx.out.writeAll(output.written());
+
+    // A directory is a paginated document even when it has no entries.
+    try ctx.out.print("[Pages {d}-{d} of 1-{d}.", .{ span.from + 1, last_page + 1, count });
+    if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
+    if (last_page + 1 < count) {
+        const width = last_page - span.from + 1;
+        try ctx.out.print(" Use pages=\"{d}-{d}\" to continue.", .{
+            last_page + 2, @min(count, last_page + 1 + width),
+        });
+    } else if (rows.items.len == 0) try ctx.out.writeAll(" Empty directory.");
+    try ctx.out.writeAll("]\n");
     try ctx.out.flush();
     return 0;
 }
 
+fn renderDirectoryPage(ctx: Ctx, rows: []const ListingRow, page: usize, cap: usize, config: PageConfig) ![]const u8 {
+    var one: std.Io.Writer.Allocating = .init(ctx.arena);
+    for (rows) |row| if (row.page == page) switch (row.kind) {
+        .directory => try one.writer.print("{s}/\n", .{row.full}),
+        .file => try one.writer.print("{s}{s}\n", .{ row.full, try measure(ctx, row.full, cap, config) }),
+        .sym_link => {
+            var link: [Dir.max_path_bytes]u8 = undefined;
+            const n = Dir.cwd().readLink(ctx.io, row.full, &link) catch {
+                try one.writer.print("{s} -> (no longer here)\n", .{row.full});
+                continue;
+            };
+            try one.writer.print("{s} -> {s}\n", .{ row.full, link[0..n] });
+        },
+        else => try one.writer.print("{s}\n", .{row.full}),
+    };
+    return one.written();
+}
 /// What a file is worth saying in a listing.
 ///
 /// Pages cost a read, so they are only counted for something a read would
 /// plausibly be pointed at. Anything enormous, and anything binary, gets its
 /// size and nothing that pretends it is text.
-fn measure(ctx: Ctx, full: []const u8, cap: usize) ![]const u8 {
-    const st = Dir.cwd().statFile(ctx.io, full, .{}) catch return "";
+fn measure(ctx: Ctx, full: []const u8, cap: usize, config: PageConfig) ![]const u8 {
+    const st = Dir.cwd().statFile(ctx.io, full, .{}) catch
+        return std.fmt.allocPrint(ctx.arena, " (no longer here)", .{});
+    if (st.kind != .file) return std.fmt.allocPrint(ctx.arena, " ({s})", .{@tagName(st.kind)});
     if (st.size > listing_limit(cap)) return std.fmt.allocPrint(ctx.arena, " ({s})", .{try size(ctx.arena, st.size)});
 
     const bytes = Dir.cwd().readFileAlloc(ctx.io, full, ctx.arena, .limited(max_file)) catch return "";
     if (std.mem.indexOfScalar(u8, bytes, 0) != null)
         return std.fmt.allocPrint(ctx.arena, " ({s})", .{try size(ctx.arena, st.size)});
 
-    const pages = try paginate(ctx.arena, bytes);
+    const pages = try paginateConfig(ctx.arena, bytes, config);
     return std.fmt.allocPrint(ctx.arena, " ({s}, {d} lines, 1-{d} pages)", .{
         try size(ctx.arena, st.size),
         pages[pages.len - 1].last_line,
@@ -406,6 +500,18 @@ fn size(arena: Allocator, n: u64) ![]const u8 {
 
 fn byName(_: void, a: Dir.Entry, b: Dir.Entry) bool {
     return std.mem.lessThan(u8, a.name, b.name);
+}
+
+/// Cheap upper estimate used before any selected file is opened. The metadata
+/// suffix is deliberately representative rather than an artificial maximum;
+/// actual rendering is allowed to move above or below the page target.
+fn listingEstimate(full: []const u8, kind: @TypeOf(@as(Dir.Entry, undefined).kind)) usize {
+    return full.len + @as(usize, switch (kind) {
+        .directory => 2,
+        .sym_link => 64,
+        .file => 48,
+        else => 1,
+    });
 }
 
 // ------------------------------------------------------------------ plumbing
@@ -433,15 +539,19 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  path    the file or directory to read
         \\  pages   a range, "11-20", or "2@anchor" for pages at a match
         \\
-        \\A page is about 100 lines, or 10000 characters when lines are long.
+        \\A file page is about 100 lines, or 10000 characters when lines are
+        \\long. Directory pages use the same settings to group sorted entries
+        \\and their metadata into pages.
         \\Both tools are this command: a directory answers with its content, a
         \\file with its pages, whichever name was called.
         \\
-        \\Every answer that is not a whole small file ends with where it landed
-        \\and the `pages` value that continues it. A range is read as generously
-        \\as it can be — "10 to 12", "p11-20" and "21+" all name something.
+        \\Answers end with where they landed and the `pages` value that
+        \\continues them when more remains. A range is read as generously as it
+        \\can be — "10 to 12", "p11-20" and "21+" all name something.
         \\
-        \\  BYTE_CAP  bytes per answer, dropping whole pages  (default 16000)
+        \\  PAGE_LINES  logical page line target       (default 100)
+        \\  PAGE_BYTES  logical page byte target       (default 10000)
+        \\  BYTE_CAP    answer byte target, whole pages (default 20000)
         \\
     );
 }
@@ -454,6 +564,30 @@ fn lines(arena: Allocator, n: usize, text: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     for (0..n) |i| try out.print(arena, "{s} {d}\n", .{ text, i + 1 });
     return out.items;
+}
+
+test "page lines and bytes are independently configurable" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const body = "aaaa\nbbbb\ncccc\n";
+    const by_line = try paginateConfig(arena, body, .{ .lines = 1, .bytes = 10000 });
+    try testing.expectEqual(@as(usize, 3), by_line.len);
+    const by_byte = try paginateConfig(arena, body, .{ .lines = 100, .bytes = 6 });
+    try testing.expect(by_byte.len >= 2);
+    try testing.expectEqual(@as(usize, 1), by_byte[0].first_line);
+}
+
+test "a page larger than the byte cap remains whole" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const body = "the only page\n";
+    const pages = try paginateConfig(arena, body, .{ .lines = 100, .bytes = 1 });
+    try testing.expectEqual(@as(usize, 1), pages.len);
+    try testing.expectEqual(@as(usize, body.len), pages[0].end);
 }
 
 test "a page holds a hundred lines" {
@@ -520,6 +654,15 @@ test "a range is read as generously as it can be" {
     const plain = select("3-5", pages, body).span;
     try testing.expectEqual(@as(usize, 2), plain.from);
     try testing.expectEqual(@as(usize, 4), plain.to);
+
+    // Zero is a forgiving spelling of the one-based first page. Only the
+    // zero endpoint changes, so the range keeps its requested width.
+    const zero = select("0", pages, body).span;
+    try testing.expectEqual(@as(usize, 0), zero.from);
+    try testing.expectEqual(@as(usize, 0), zero.to);
+    const zero_range = select("0-5", pages, body).span;
+    try testing.expectEqual(@as(usize, 0), zero_range.from);
+    try testing.expectEqual(@as(usize, 4), zero_range.to);
 
     // Separators nobody agreed on, and both open ends.
     const prose = select("3 to 5", pages, body).span;

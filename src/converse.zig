@@ -216,6 +216,21 @@ fn settled(
     return out.items;
 }
 
+fn mergeEnv(arena: Allocator, vars: *std.ArrayList(api.EnvVar)) !void {
+    var i: usize = 0;
+    while (i < vars.items.len) : (i += 1) {
+        var j = i + 1;
+        while (j < vars.items.len) {
+            if (std.mem.eql(u8, vars.items[i].key, vars.items[j].key)) {
+                vars.items[i].value = try std.fmt.allocPrint(arena, "{s} {s}", .{
+                    vars.items[i].value, vars.items[j].value,
+                });
+                _ = vars.orderedRemove(j);
+            } else j += 1;
+        }
+    }
+}
+
 /// Run one call and hand back the records that answer it.
 ///
 /// A tool writes what it says as it says it and then how it went, so an answer
@@ -292,11 +307,14 @@ fn answer(
     }
     // What the tool's own definition adds, which is neither the machine's nor
     // the call's and so is written down once rather than supplied every time.
-    if (tool.env_var.len > 0) try env.append(arena, .{
+    if (tool.env_vars.len > 0) {
+        try env.appendSlice(arena, tool.env_vars);
+    } else if (tool.env_var.len > 0) try env.append(arena, .{
         .key = tool.env_var,
         .value = try std.mem.join(arena, " ", tool.env_values),
     });
     try env.appendSlice(arena, try toolbox.callEnv(arena, args, c.arguments, c.id));
+    try mergeEnv(arena, &env);
 
     var captured: std.Io.Writer.Allocating = .init(arena);
     var err_sink: std.Io.Writer.Allocating = .init(arena);

@@ -38,6 +38,7 @@ pub const Error = error{
     ShieldLoops,
     /// A definition that contributes no command at all.
     EmptyShield,
+    BadEnvironmentName,
 };
 
 /// The placeholder a runner puts a code block into.
@@ -161,11 +162,22 @@ pub fn project(
     return .{ .defs = defs.items, .runners = runners.items, .active = active.items };
 }
 
+fn envName(arena: Allocator, name: []const u8) (Error || Allocator.Error)![]const u8 {
+    if (std.mem.startsWith(u8, name, "M8_ARG_")) return arena.dupe(u8, name[0..]);
+    if (name.len == 0 or (!std.ascii.isAlphabetic(name[0]) and name[0] != '_')) return Error.BadEnvironmentName;
+    for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return Error.BadEnvironmentName;
+    const out = try arena.alloc(u8, "M8_ARG_".len + name.len);
+    @memcpy(out[0.."M8_ARG_".len], "M8_ARG_");
+    for (name, 0..) |c, i| out["M8_ARG_".len + i] = std.ascii.toUpper(c);
+    return out;
+}
+
 /// `NAME`, or `NAME VAR value...`. Space separated, so a value holds no space.
 pub fn parseValue(arena: Allocator, value: []const u8) Allocator.Error!Activation {
     var it = std.mem.tokenizeAny(u8, value, " \t");
     const name = it.next() orelse return .{ .name = "" };
-    const env_var = it.next() orelse return .{ .name = name };
+    const raw_env_var = it.next() orelse return .{ .name = name };
+    const env_var = envName(arena, raw_env_var) catch return .{ .name = name };
     var values: std.ArrayList([]const u8) = .empty;
     while (it.next()) |v| try values.append(arena, v);
     return .{ .name = name, .env_var = env_var, .values = values.items };
@@ -273,7 +285,7 @@ fn one(
 ) (Error || Allocator.Error)!void {
     for (path.items) |seen| if (std.mem.eql(u8, seen, a.name)) return Error.ShieldLoops;
 
-    if (a.env_var.len > 0) try append(arena, vars, a.env_var, a.values);
+    if (a.env_var.len > 0) try append(arena, vars, try envName(arena, a.env_var), a.values);
 
     var found = false;
     try path.append(arena, a.name);
@@ -434,7 +446,7 @@ test "shields compose, and what they append to a variable accumulates" {
     // repeat of something that only subtracts means nothing.
     try testing.expectEqual(@as(usize, 2), got.wrappers.len);
     try testing.expectEqual(@as(usize, 1), got.env.len);
-    try testing.expectEqualStrings("SECURES", got.env[0].key);
+    try testing.expectEqualStrings("M8_ARG_SECURES", got.env[0].key);
     try testing.expectEqualStrings("private contain-writes airgap", got.env[0].value);
 }
 
@@ -487,7 +499,7 @@ test "a value carries a name, and optionally a variable and what to append" {
 
     const with = try parseValue(arena, "secure SECURES airgap no-writes");
     try testing.expectEqualStrings("secure", with.name);
-    try testing.expectEqualStrings("SECURES", with.env_var);
+    try testing.expectEqualStrings("M8_ARG_SECURES", with.env_var);
     try testing.expectEqual(@as(usize, 2), with.values.len);
     try testing.expectEqualStrings("no-writes", with.values[1]);
 }
@@ -525,7 +537,7 @@ test "the shields m8 ships with parse, and jail is the composition it claims" {
 
     const got = try resolve(arena, set.defs, &.{.{ .name = "jail" }});
     var secures: []const u8 = "";
-    for (got.env) |v| if (std.mem.eql(u8, v.key, "SECURES")) {
+    for (got.env) |v| if (std.mem.eql(u8, v.key, "M8_ARG_SECURES")) {
         secures = v.value;
     };
     for ([_][]const u8{

@@ -13,8 +13,9 @@
 //! Exactly one space follows the quote and is stripped, so content is verbatim
 //! and a line that looks like a record is only a line. A quote alone, with no
 //! space, is an empty content line: a paragraph break must not depend on
-//! trailing whitespace, which editors strip. A blank line closes the block,
-//! and one is required between records.
+//! trailing whitespace, which editors strip. A blank line closes the block.
+//! It is not required between records: a header is never content, so one that
+//! follows another opens its record whether or not a line separates them.
 //!
 //! What a content block *means* is decided by the sigil above it, and none of
 //! that is known here. A prose block is handed back as bytes; a structured one
@@ -69,8 +70,6 @@ pub const ParseError = error{
     OrphanContent,
     /// A quote was not followed by a space. Missing it is never content.
     MissingSpace,
-    /// Two headers with no blank line between them.
-    MissingBlankLine,
     /// A line that is neither blank, a header, nor a content line.
     UnexpectedLine,
     /// A sigil that takes no value was given one.
@@ -150,10 +149,6 @@ pub fn parseMode(arena: Allocator, src: []const u8, mode: Mode, diag: *Diagnosti
         }
 
         if (std.mem.startsWith(u8, line, header(mode))) {
-            if (cur != null and !blank) {
-                diag.* = .{ .line = line_no, .detail = "records are separated by a blank line" };
-                return error.MissingBlankLine;
-            }
             if (cur) |s| try flush(arena, &records, s, value, lines, &content);
 
             const rest = line[header(mode).len..];
@@ -379,12 +374,20 @@ test "content is verbatim, so it needs no escape" {
     try testing.expectEqualStrings("#### :brain:not a record\n  indented", recs[0].content.?);
 }
 
-test "a blank line closes the block and is required between records" {
+test "a blank line closes the block, and records need none between them" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    try testing.expectError(error.MissingBlankLine, parse(a.allocator(), "#### :compass:\n> hi\n#### :brain:x\n", &d1));
-    try testing.expectEqual(@as(usize, 3), d1.line);
+    const packed_up = try parse(a.allocator(), "#### :compass:\n> hi\n#### :brain:x\n", &d1);
+    try testing.expectEqual(@as(usize, 2), packed_up.len);
+    try testing.expectEqualStrings("hi", packed_up[0].content.?);
+
+    // A run of headers with nothing between them is a run of records.
+    var c: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer c.deinit();
+    var d3: Diagnostic = .{};
+    const run = try parse(c.allocator(), "#### :compass:\n#### :compass:\n#### :compass:\n", &d3);
+    try testing.expectEqual(@as(usize, 3), run.len);
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();

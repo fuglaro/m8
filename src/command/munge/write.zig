@@ -2,10 +2,10 @@
 //!
 //! The ladder is the whole design. A model holding a page and copying a string
 //! out of it will still get the string slightly wrong — an indent it inferred,
-//! a line number it pasted along with the line, an escape its transport
-//! mangled — and every one of those is a turn lost to a refusal that taught it
-//! nothing. So each rung forgives one specific thing, in order, and the first
-//! rung that finds the block wins.
+//! a line number it pasted along with the line, an escape it wrote as though
+//! it were emitting JSON — and every one of those is a turn lost to a refusal
+//! that taught it nothing. So each rung forgives one specific thing, in
+//! order, and the first rung that finds the block wins.
 //!
 //! Forgiveness that stays quiet is the failure mode, not forgiveness itself. A
 //! matcher that silently accepts a near miss has decided, on the model's
@@ -13,9 +13,13 @@
 //! is a compiler error later. So the receipt names the rung whenever it was
 //! anything but exact. It still lands, and it says how.
 //!
-//! What is not forgiven: a multi-line block that matches twice. There is no
-//! rung for guessing which one, because there is nothing to guess with — and
-//! `pages` is right there for saying which.
+//! What is not forgiven: a multi-line replacement that matches twice. There
+//! is no rung for guessing which one, because there is nothing to guess with
+//! — and `pages` is right there for saying which. Both sides count, and the
+//! block counted is the one that matched rather than the one that was typed:
+//! an argument unescaped a rung down is multi-line by the time it lands, and
+//! a one-line block swapped for twenty of them is still twenty of them in
+//! every place it hit.
 
 const std = @import("std");
 const api = @import("../api.zig");
@@ -129,21 +133,33 @@ fn replace(ctx: Ctx, path: []const u8, bytes: []const u8, old: []const u8, new: 
         return deny(ctx, "found no match in {s}", .{path});
     }
 
+    // A model that over-encodes is encoding its own output, not repeating
+    // something it was handed: it reads the file through `read`, which gives
+    // it the bytes, and escapes on the way out. One encoder runs over the
+    // whole call, so the argument that says what to write was escaped exactly
+    // as the one that said what to find, and putting back only one of them
+    // lands a literal backslash and an n where a line break was meant.
+    const put = if (found.undone) (try unescape(ctx.arena, new)) orelse new else new;
+
     // One line can honestly appear in twenty places and mean the same thing
     // every time. A block cannot: it is long enough that two of them are two
     // different pieces of code, and choosing between them is not this tool's
-    // to do.
-    if (found.at.len > 1 and std.mem.indexOfScalar(u8, old, '\n') != null) return deny(
+    // to do. The needle is the one the ladder settled on, not the argument as
+    // it arrived, because a rung that unescapes it turns a flat argument into
+    // a block and the count has to follow.
+    const sought = std.mem.indexOfScalar(u8, found.needle, '\n') != null;
+    const written = std.mem.indexOfScalar(u8, put, '\n') != null;
+    if (found.at.len > 1 and (sought or written)) return deny(
         ctx,
-        "found {d} matches but multi-line replacements must be unique",
-        .{found.at.len},
+        "found {d} matches but a multi-line {s} must be unique",
+        .{ found.at.len, if (sought) "old_string" else "new_string" },
     );
 
     var out: std.ArrayList(u8) = .empty;
     var at: usize = 0;
     for (found.at) |m| {
         try out.appendSlice(ctx.arena, bytes[at..m.at]);
-        try out.appendSlice(ctx.arena, new);
+        try out.appendSlice(ctx.arena, put);
         at = m.end;
     }
     try out.appendSlice(ctx.arena, bytes[at..]);
@@ -151,7 +167,7 @@ fn replace(ctx: Ctx, path: []const u8, bytes: []const u8, old: []const u8, new: 
     Dir.cwd().writeFile(ctx.io, .{ .sub_path = path, .data = out.items }) catch
         return deny(ctx, "cannot write {s}", .{path});
 
-    return receipt(ctx, pages, found, new.len == 0);
+    return receipt(ctx, pages, found, put.len == 0);
 }
 
 /// What happened, in pages, and how honestly it matched.
@@ -182,6 +198,13 @@ const Found = struct {
     at: []const Range = &.{},
     /// What was forgiven, for the receipt. Empty when the match was exact.
     how: []const u8 = "",
+    /// The spelling of the block that actually hit, which is the argument
+    /// only until a rung offers another one. Counted rather than the argument
+    /// wherever the shape of the block decides something.
+    needle: []const u8 = "",
+    /// Whether the rung that won was the unescaping one, which says something
+    /// about the call rather than about the block.
+    undone: bool = false,
 };
 
 /// How a needle line and a file line are allowed to differ. Each rung holds
@@ -217,10 +240,11 @@ const Try = struct { needle: []const u8, rung: Rung, undone: bool };
 ///
 /// Unescaping is a rung in the middle of the list rather than a looser
 /// comparison, so it offers a second spelling of the block and everything
-/// below it is tried against both. It only applies when the block holds no
-/// real newline at all: escaping that happened in transport covers a whole
-/// argument, while escaping the source code means is local, so a block holding
-/// both is the code's and is left alone.
+/// below it is tried against both. It is there for a model that over-encodes,
+/// escaping its own output as though it were writing JSON. It only applies
+/// when the block holds no real newline at all: a model doing that does it to
+/// every newline it emits, while escaping the source code means is local, so a
+/// block holding both is the code's and is left alone.
 fn match(arena: Allocator, bytes: []const u8, old: []const u8, scope: Range) !Found {
     const undone: ?[]const u8 = if (std.mem.indexOfScalar(u8, old, '\n') == null)
         try unescape(arena, old)
@@ -240,7 +264,12 @@ fn match(arena: Allocator, bytes: []const u8, old: []const u8, scope: Range) !Fo
     for (ladder.items) |t| {
         const hits = try find(arena, bytes, t.needle, scope, t.rung);
         if (hits.at.len == 0) continue;
-        return .{ .at = hits.at, .how = try note(arena, t.undone, hits.how) };
+        return .{
+            .at = hits.at,
+            .how = try note(arena, t.undone, hits.how),
+            .needle = t.needle,
+            .undone = t.undone,
+        };
     }
     return .{};
 }
@@ -511,14 +540,16 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  new_string  what to put there; empty, this removes
         \\  pages       a range the matches must start in
         \\
-        \\A block that matches twice is refused, because choosing between two of
-        \\them is not this tool's to do — name a page instead.
+        \\A replacement that matches twice is refused whenever either side of
+        \\it spans lines, because choosing between two blocks is not this
+        \\tool's to do — name a page instead.
         \\
         \\Matching forgives, in order: nothing, indentation, all whitespace, an
-        \\argument whose escaping doubled in transport, a line number pasted on
-        \\the front, and a quarter of a block once its ends hold. An end has to
-        \\carry eight characters to be worth anchoring on. Whatever was forgiven
-        \\is named in the receipt.
+        \\argument the model over-encoded, a line number pasted on the front,
+        \\and a quarter of a block once its ends hold. An end has to carry
+        \\eight characters to be worth anchoring on. Whatever was forgiven is
+        \\named in the receipt. An over-encoded old_string is taken to mean an
+        \\over-encoded new_string, and both are put back.
         \\
     );
 }
@@ -671,6 +702,27 @@ test "escaping that doubled in transport is put back, and code that means it is 
     const both = try match(arena, src, "const nl = '\\n';\nconst t = 1;", .{ .at = 0, .end = src.len });
     try testing.expectEqual(@as(usize, 1), both.at.len);
     try testing.expectEqualStrings("", both.how);
+}
+
+test "the needle carried out is the one that hit, not the one that arrived" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Flat on the way in and a block by the time it lands, which is the whole
+    // reason the count reads the needle instead of the argument.
+    const src = "a\nb\nX\na\nb\nY\n";
+    const hit = try match(arena, src, "a\\nb", .{ .at = 0, .end = src.len });
+    try testing.expectEqual(@as(usize, 2), hit.at.len);
+    try testing.expectEqualStrings("unescaped", hit.how);
+    try testing.expect(std.mem.indexOfScalar(u8, hit.needle, '\n') != null);
+
+    try testing.expect(hit.undone);
+
+    // Nothing was offered, so the needle is the argument as given.
+    const plain = try matched(arena, "a - b");
+    try testing.expectEqualStrings("a - b", plain.needle);
+    try testing.expect(!plain.undone);
 }
 
 test "a scope keeps a match to the pages it was read on" {

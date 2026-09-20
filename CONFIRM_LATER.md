@@ -130,3 +130,13 @@ prints above its matches, and nothing under it, so one shape is learned once.
   both silently; only the listing mentions them.
 * Empty answer is `[No files.]` rather than `[No matches.]`, since nothing was
   being matched.
+
+## pagey follow-up
+
+The framework contract is that definition-provided tool and shield environment
+names normalize to `M8_ARG_*`, and merge with call parameters by space
+concatenation. Read/scan now use `M8_ARG_PAGE_LINES`, `M8_ARG_PAGE_BYTES`, and
+`M8_ARG_BYTE_CAP`; directory and scan-result pagination remain to be completed.
+
+
+ 🧠=/slxjebjqtg

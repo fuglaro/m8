@@ -1,6 +1,89 @@
 
 # ====
 
+## Munge honing
+
+As the model says:
+
+- bulk or structural rewrites where the existing `edit` interface became awkward.
+- replacing a large function required a very large exact string;
+- the same text occurred more than once, so `edit` rejected the replacement;
+- page scoping sometimes made a match unexpectedly unavailable;
+- `edit` does not support a first-class “replace this range between these anchors” operation;
+- After edits, I sometimes reasoned from an earlier read. Consider clear and full post edit state with
+  path, pages, and lines affected, along with what landed. They asked for a diff that landed. Maybe give the pages affected - with consectutive pages unified.
+
+The “must match exactly once” rule is good protection, but common operations were cumbersome:
+- insert before a named function;
+- replace a function body;
+- append after a known declaration;
+- replace the last occurrence of a repeated block;
+- replace a range between two anchors.
+I would add explicit edit modes:
+```text
+insert_before: "fn list("
+insert_after: "const PageConfig"
+replace_between: ["fn list(", "/// What a file"]
+replace_occurrence: 2
+```
+
+After an edit, the result should include something like:
+```text
+Replaced 1 occurrence.
+Changed lines 370-412.
+```
+Ideally also:
+```text
+old match: found
+new text: written
+```
+The tool did report failures, but I failed to respect one of them. A stronger result could make it harder to continue as though a failed edit succeeded.
+
+A dry-run mode would help
+For complex changes:
+```text
+dry_run: true
+```
+could report the matched range and resulting diff without modifying the file.
+
+A patch tool would be valuable
+For multi-file changes, a unified-diff application tool would be clearer than repeated exact string replacements. It could:
+- reject stale context;
+- show the patch;
+- report rejected hunks;
+- avoid shell/Python editing.
+
+
+* [DONE] Make multi-line edit uniqueness also activate on multi-line new_string.
+
+### Post edit failure
+
+Had cases where munge edit came back denied but the model (Luna) shrugged and moved on.
+One case was wrong page, another wrong match.
+
+Consider giving advice, detect if match is found on surrounding pages,
+and suggest the pages value and say check pages and retry.
+
+If near-match found on page, suggest checking old_string match and retry.
+
+And just be really explicit. Change did not apply, check, adjust, and try again.
+
+### Post edit success
+
+### Read range clarity
+
+* Add trailing metadata lines for each subsequent page returned:
+  `[Page 2 (lines 90-130) begins at: Line text up to 150 characters...]`
+
+### Juggling pagination
+
+- For a function spanning multiple pages, I had to read one range, then another, then reconstruct the exact replacement.
+* Extend use pages=2-4 to continue to "... to continue or pages 1-4 to reread a larger area"
+
+
+
+# ====
+
 m8 threads list (or something) - analyses all chats for danglings, forks, and dates and gives a thread branches - perhaps with summary etc) like git log --graph --decorate --oneline --all
 
 # ====
@@ -60,6 +143,10 @@ than adding Git-specific concepts.
 │
 │ That keeps the default output useful without making the harness decide what a repository considers important. Also, binary detection should remain conservative—typically a NUL-b
 yte check or similar heuristic—because many useful files are technically binary but still meaningfully searchable.
+
+# ====
+
+multiple toolbox var-set lines back to back fails on "m8 --: MissingBlankLine" -> look into being forgiving here. I see no need to force the blank line if we can tell it is expected.
 
 # ====
 

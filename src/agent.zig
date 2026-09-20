@@ -14,6 +14,7 @@ const doc = @import("m8/doc.zig");
 const ledger = @import("ledger.zig");
 const model = @import("m8/model.zig");
 const toolbox = @import("toolbox.zig");
+const api = @import("command/api.zig");
 const shield = @import("shield.zig");
 
 pub const Error = error{ NoModel, NoProvider };
@@ -70,6 +71,8 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
     var def: Definition = .{};
     var tools: std.ArrayList(toolbox.Tool) = .empty;
     var allowed: std.ArrayList([]const u8) = .empty;
+    const ToolVar = struct { name: []const u8, value: api.EnvVar };
+    var tool_vars: std.ArrayList(ToolVar) = .empty;
 
     for (records) |r| switch (r.sigil) {
         // Every 🧠 that named an agent was replaced by what it named, so
@@ -83,18 +86,35 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
             }
         },
 
-        // A ledger's nested content is canonically the file spelling. With a
-        // block this defines a tool; with none it offers one, which is the
-        // same split 🛡 has. The name is read the same way either way, so a
-        // definition and the line that offers it are spelled alike.
-        .tool => if (r.content) |content|
-            try tools.append(arena, try toolbox.parse(arena, .md, r.value, content))
-        else
-            try add(arena, &allowed, (try toolbox.parse(arena, .md, r.value, "")).name),
+        // A ledger's nested content is canonically the file spelling. A block
+        // defines a tool; a blockless header with a variable and values adds
+        // definition configuration; a bare blockless header offers it. The
+        // three forms stay separate, while all carry the same tool name.
+        .tool => {
+            const parsed = try toolbox.parse(arena, .md, r.value, r.content orelse "");
+            if (r.content != null) {
+                if (parsed.env_var.len > 0) return toolbox.Error.VariableOnDefinition;
+                try tools.append(arena, parsed);
+            } else if (parsed.env_var.len > 0) {
+                try tool_vars.append(arena, .{ .name = parsed.name, .value = .{
+                    .key = parsed.env_var,
+                    .value = try std.mem.join(arena, " ", parsed.env_values),
+                } });
+            } else {
+                try add(arena, &allowed, parsed.name);
+            }
+        },
 
         else => {},
     };
 
+    for (tool_vars.items) |tv| for (tools.items) |*tool| {
+        if (!std.mem.eql(u8, tool.name, tv.name)) continue;
+        var values: std.ArrayList(api.EnvVar) = .empty;
+        try values.appendSlice(arena, tool.env_vars);
+        try values.append(arena, tv.value);
+        tool.env_vars = values.items;
+    };
     def.tools = tools.items;
     def.allowed = allowed.items;
     const set = try shield.project(arena, .md, records);
@@ -193,6 +213,38 @@ test "a definition yields its model, shields and tools" {
     try testing.expectEqual(@as(usize, 1), d.tools.len);
     try testing.expectEqualStrings("say", d.tools[0].name);
     try testing.expectEqual(@as(usize, 1), (try offer(arena, d)).len);
+}
+
+test "tool variables use separate headers and accumulate" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-agent-tool-vars");
+    defer f.deinit(arena);
+    try f.agent(arena, "pagey.md",
+        \\#### :brain:/local/tiny
+        \\
+        \\#### :toolbox:read
+        \\> `read`
+        \\
+        \\#### :toolbox:read PAGE_LINES 100
+        \\
+        \\#### :toolbox:read PAGE_BYTES 10000
+        \\
+        \\#### :toolbox:read BYTE_CAP 20000
+        \\
+        \\#### :toolbox:read
+    );
+
+    const d = try load(arena, f.io, &.{f.dir}, "pagey");
+    const offered = try offer(arena, d);
+    try testing.expectEqual(@as(usize, 1), offered.len);
+    try testing.expectEqual(@as(usize, 3), offered[0].env_vars.len);
+    try testing.expectEqualStrings("M8_ARG_PAGE_LINES", offered[0].env_vars[0].key);
+    try testing.expectEqualStrings("100", offered[0].env_vars[0].value);
 }
 
 test "shields accumulate over the lineage, so including cannot widen" {
