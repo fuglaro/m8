@@ -9,7 +9,7 @@
 //! So the trailer is the tool. Content alone leaves a model guessing where it
 //! landed and what to ask for next, and a model that guesses re-reads the file
 //! from the top. Every answer ends by saying which pages these were, of how
-//! many, and the exact `pages` value that continues.
+//! many, and examples for continuing or refocusing the `pages` range.
 //!
 //! One command behind two tools. A path is a file or a directory, and which
 //! one it is decides what comes back rather than which name was called.
@@ -32,7 +32,7 @@ pub const command: api.Command = .{
 /// A page ends on whichever of these comes first. Lines keep a page roughly
 /// the same shape as the file, and characters keep one long line from handing
 /// back a page nobody can afford.
-const default_page_lines = 100;
+pub const default_page_lines = 100;
 const default_page_bytes = 10000;
 
 /// How much a call may be handed at once, over which whole pages are dropped
@@ -44,6 +44,17 @@ pub const PageConfig = struct {
     lines: usize = default_page_lines,
     bytes: usize = default_page_bytes,
 };
+
+/// The page size a call is working in, read from the one place both tools
+/// read it from. A page is the coordinate `munge` answers in, so `write` has
+/// to cut a file into the same pages `read` handed back — a scope counted off
+/// pages of a different size names somewhere the model never looked.
+pub fn pageConfig(ctx: Ctx) PageConfig {
+    return .{
+        .lines = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_LINES") orelse default_page_lines),
+        .bytes = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_BYTES") orelse default_page_bytes),
+    };
+}
 
 const ListingRow = struct {
     full: []const u8,
@@ -65,10 +76,7 @@ fn run(ctx: Ctx) !u8 {
         (if (ctx.args.len > 0) ctx.args[0] else null) orelse
         return refuse(ctx, "no path given", .{});
     const cap = number(ctx, "M8_ARG_BYTE_CAP") orelse default_byte_cap;
-    const config = PageConfig{
-        .lines = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_LINES") orelse default_page_lines),
-        .bytes = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_BYTES") orelse default_page_bytes),
-    };
+    const config = pageConfig(ctx);
 
     // A symlink at the path itself is followed: somebody naming it means the
     // thing it points at.
@@ -331,7 +339,20 @@ fn write(ctx: Ctx, bytes: []const u8, pages: []const Page, want: Span, cap: usiz
 
     const first = pages[want.from];
     const last = pages[to];
-    try ctx.out.writeAll(bytes[first.at..last.end]);
+    // Keep page boundaries visible when more than one page is returned.  The
+    // marker is deliberately a line of its own: it can be pasted back into a
+    // write, where it is removed only when it came from a read answer.
+    var page = want.from;
+    while (page <= to) : (page += 1) {
+        const current = pages[page];
+        try ctx.out.writeAll(bytes[current.at..current.end]);
+        if (page < to) {
+            if (current.end > current.at and bytes[current.end - 1] != '\n') try ctx.out.writeByte('\n');
+            try ctx.out.print("―――――――――――――――――――――――― [Page {d} (Lines {d}-{d})] ―――――――――――――――――――――――――\n", .{
+                page + 2, pages[page + 1].first_line, pages[page + 1].last_line,
+            });
+        }
+    }
     if (last.end > first.at and bytes[last.end - 1] != '\n') try ctx.out.writeByte('\n');
 
     // Nothing to say when the whole file was asked for and the whole file went.
@@ -345,18 +366,27 @@ fn write(ctx: Ctx, bytes: []const u8, pages: []const Page, want: Span, cap: usiz
         if (last.ends_mid) try ctx.out.print(" Ends mid-line {d}.", .{last.last_line});
         if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
         if (to + 1 < pages.len) {
-            // The same width they asked for, so continuing is the same shape
-            // of call rather than a new decision every time.
-            const width = to - want.from + 1;
-            try ctx.out.print(" Use pages=\"{d}-{d}\" to continue.", .{
-                to + 2, @min(pages.len, to + 1 + width),
-            });
+            try pageAdvice(ctx, want.from, to, pages.len);
         } else try ctx.out.writeAll(" End of file.");
         try ctx.out.writeAll("]\n");
     }
 
     try ctx.out.flush();
     return 0;
+}
+
+/// Suggest both the usual next window and wider or shifted windows. The
+/// overlapping first example is useful when the interesting construct straddles
+/// the page boundary; the others let a caller widen or refocus without having
+/// to infer the page arithmetic from the trailer.
+fn pageAdvice(ctx: Ctx, from: usize, to: usize, total: usize) !void {
+    const width = to - from + 1;
+    const right = @min(total, to + width);
+    try ctx.out.print(" Use pages to continue or refocus, e.g. pages=\"{d}-{d}\", \"{d}-{d}\", or \"{d}-{d}\".", .{
+        to,       right,
+        from + 1, right,
+        from + 2, @min(total, to + 2),
+    });
 }
 
 // -------------------------------------------------------------- directories
@@ -442,10 +472,7 @@ fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig) !u8 {
     try ctx.out.print("[Pages {d}-{d} of 1-{d}.", .{ span.from + 1, last_page + 1, count });
     if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
     if (last_page + 1 < count) {
-        const width = last_page - span.from + 1;
-        try ctx.out.print(" Use pages=\"{d}-{d}\" to continue.", .{
-            last_page + 2, @min(count, last_page + 1 + width),
-        });
+        try pageAdvice(ctx, span.from, last_page, count);
     } else if (rows.items.len == 0) try ctx.out.writeAll(" Empty directory.");
     try ctx.out.writeAll("]\n");
     try ctx.out.flush();
@@ -545,8 +572,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\Both tools are this command: a directory answers with its content, a
         \\file with its pages, whichever name was called.
         \\
-        \\Answers end with where they landed and the `pages` value that
-        \\continues them when more remains. A range is read as generously as it
+        \\Answers end with where they landed and examples for using `pages` to
+        \\continue or refocus when more remains. A range is read as generously as it
         \\can be — "10 to 12", "p11-20" and "21+" all name something.
         \\
         \\  PAGE_LINES  logical page line target       (default 100)

@@ -1,66 +1,35 @@
 
+# ==== [DONE]
+
+* Make multi-line edit uniqueness also activate on multi-line new_string.
+
+### Juggling pagination
+
+- For a function spanning multiple pages, I had to read one range, then another, then reconstruct the exact replacement.
+* Extend use pages=2-4 to continue to "... to continue or pages 1-4 to review a larger area"
+
+### Read range clarity
+
+* Considered: Add trailing metadata lines for each subsequent page returned:
+  `[Page 2 (lines 90-130) begins at: Line text up to 150 characters...]`
+* Considered: Or interleave `[Page 2 (lines ...)]` within results.
+* Interleave `―――――――― [Page 2 (Lines 101-200)] ―――――――――`
+* Detect this format in old_string and new_string just before the block line forgiveness.
+  - If in old_string, ignore if page_break is in range of PAGE_LINES,
+    otherwise reject indicating reason similar to other mismatch denials.
+    If also in new_string, strip those lines from new_string.
+  - If not in old_string, don't ignore or strip, stay as old behavior.
+
 # ====
 
 ## Munge honing
 
-As the model says:
-
-- bulk or structural rewrites where the existing `edit` interface became awkward.
-- replacing a large function required a very large exact string;
-- the same text occurred more than once, so `edit` rejected the replacement;
-- page scoping sometimes made a match unexpectedly unavailable;
-- `edit` does not support a first-class “replace this range between these anchors” operation;
-- After edits, I sometimes reasoned from an earlier read. Consider clear and full post edit state with
-  path, pages, and lines affected, along with what landed. They asked for a diff that landed. Maybe give the pages affected - with consectutive pages unified.
-
-The “must match exactly once” rule is good protection, but common operations were cumbersome:
-- insert before a named function;
-- replace a function body;
-- append after a known declaration;
-- replace the last occurrence of a repeated block;
-- replace a range between two anchors.
-I would add explicit edit modes:
-```text
-insert_before: "fn list("
-insert_after: "const PageConfig"
-replace_between: ["fn list(", "/// What a file"]
-replace_occurrence: 2
-```
-
-After an edit, the result should include something like:
-```text
-Replaced 1 occurrence.
-Changed lines 370-412.
-```
-Ideally also:
-```text
-old match: found
-new text: written
-```
-The tool did report failures, but I failed to respect one of them. A stronger result could make it harder to continue as though a failed edit succeeded.
-
-A dry-run mode would help
-For complex changes:
-```text
-dry_run: true
-```
-could report the matched range and resulting diff without modifying the file.
-
-A patch tool would be valuable
-For multi-file changes, a unified-diff application tool would be clearer than repeated exact string replacements. It could:
-- reject stale context;
-- show the patch;
-- report rejected hunks;
-- avoid shell/Python editing.
-
-
-* [DONE] Make multi-line edit uniqueness also activate on multi-line new_string.
-
-### Post edit failure
+### Post edit failure clarity
 
 Had cases where munge edit came back denied but the model (Luna) shrugged and moved on.
 One case was wrong page, another wrong match.
 
+- page scoping sometimes made a match unexpectedly unavailable;
 Consider giving advice, detect if match is found on surrounding pages,
 and suggest the pages value and say check pages and retry.
 
@@ -68,18 +37,54 @@ If near-match found on page, suggest checking old_string match and retry.
 
 And just be really explicit. Change did not apply, check, adjust, and try again.
 
-### Post edit success
+### Post edit change clarity
 
-### Read range clarity
 
-* Add trailing metadata lines for each subsequent page returned:
-  `[Page 2 (lines 90-130) begins at: Line text up to 150 characters...]`
+```
+[Replaced 1 match on page 2]
+```
+is updated to say:
+```
+[Replaced 1 match on page 2, changing lines 130-176]
+ fn foo() void {
+     const a = 1;
+     const b = 2;
+-    oldThing();
++    newThing();
+     stepOne();
+     stepTwo();
+     stepThree();
+@@ 27 unchanged lines @@
+     almostDone();
+     nearlyDone();
+     finalStep();
+-    return old_value;
++    return new_value;
+ }
+```
 
-### Juggling pagination
-
-- For a function spanning multiple pages, I had to read one range, then another, then reconstruct the exact replacement.
-* Extend use pages=2-4 to continue to "... to continue or pages 1-4 to reread a larger area"
-
+Add a dry-run boolean parameter to munge write (routed in like new_string /
+M8_ARG_NEW_STRING) which doesn't apply anything but gives
+a line prefix of `Proposed changes would result in:` e.g:
+```
+Proposed changes would result in:
+[Replaced 1 match on page 2, changing lines 130-176]
+ fn foo() void {
+     const a = 1;
+     const b = 2;
+-    oldThing();
++    newThing();
+     stepOne();
+     stepTwo();
+     stepThree();
+@@ 27 unchanged lines @@
+     almostDone();
+     nearlyDone();
+     finalStep();
+-    return old_value;
++    return new_value;
+ }
+```
 
 
 # ====

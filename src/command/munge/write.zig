@@ -43,11 +43,9 @@ const max_file = 16 * 1024 * 1024;
 /// anchor has to carry enough to be worth believing.
 const anchor_chars = 8;
 
-/// What proportion of a block may differ once its anchors hold.
-const tolerated = 25;
-
-/// How far a pasted line number may be from the line it names.
-const number_drift = 100;
+/// Default percentage of a block that may differ once its anchors hold. The
+/// call may override it with M8_ARG_TOLERANCE.
+const default_tolerance = 25;
 
 fn run(ctx: Ctx) !u8 {
     const path = ctx.env.get("M8_ARG_PATH") orelse
@@ -57,13 +55,18 @@ fn run(ctx: Ctx) !u8 {
         (if (ctx.args.len > 1) ctx.args[1] else null) orelse "";
     const new_string = ctx.env.get("M8_ARG_NEW_STRING") orelse
         (if (ctx.args.len > 2) ctx.args[2] else null) orelse "";
+    const allowed = number(ctx, "M8_ARG_TOLERANCE") orelse default_tolerance;
+
+    // Pages are what this tool scopes by and answers in, so it cuts the file
+    // the way the `read` that handed the model its page did.
+    const config = read.pageConfig(ctx);
 
     const had = Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(max_file)) catch null;
 
-    if (old_string.len == 0) return append(ctx, path, had, new_string);
+    if (old_string.len == 0) return append(ctx, path, had, new_string, config);
 
     const bytes = had orelse return deny(ctx, "there is no {s} to edit", .{path});
-    return replace(ctx, path, bytes, old_string, new_string);
+    return replace(ctx, path, bytes, old_string, new_string, allowed, config);
 }
 
 // ------------------------------------------------------------------- adding
@@ -73,7 +76,7 @@ fn run(ctx: Ctx) !u8 {
 /// Always on a line of its own, and always leaving a newline behind: a tool
 /// that appends is used over and over, and a file that loses its last newline
 /// once has lost it for every append after.
-fn append(ctx: Ctx, path: []const u8, had: ?[]const u8, text: []const u8) !u8 {
+fn append(ctx: Ctx, path: []const u8, had: ?[]const u8, text: []const u8, config: read.PageConfig) !u8 {
     var out: std.ArrayList(u8) = .empty;
     if (had) |bytes| {
         try out.appendSlice(ctx.arena, bytes);
@@ -88,7 +91,7 @@ fn append(ctx: Ctx, path: []const u8, had: ?[]const u8, text: []const u8) !u8 {
     Dir.cwd().writeFile(ctx.io, .{ .sub_path = path, .data = out.items }) catch
         return deny(ctx, "cannot write {s}", .{path});
 
-    const pages = try read.paginate(ctx.arena, out.items);
+    const pages = try read.paginateConfig(ctx.arena, out.items, config);
     if (had == null) return say(ctx, "Created a new file with {d} page{s}", .{
         pages.len,
         if (pages.len == 1) "" else "s",
@@ -102,8 +105,16 @@ fn append(ctx: Ctx, path: []const u8, had: ?[]const u8, text: []const u8) !u8 {
 
 // ---------------------------------------------------------------- replacing
 
-fn replace(ctx: Ctx, path: []const u8, bytes: []const u8, old: []const u8, new: []const u8) !u8 {
-    const pages = try read.paginate(ctx.arena, bytes);
+fn replace(
+    ctx: Ctx,
+    path: []const u8,
+    bytes: []const u8,
+    old: []const u8,
+    new: []const u8,
+    tolerance: usize,
+    config: read.PageConfig,
+) !u8 {
+    const pages = try read.paginateConfig(ctx.arena, bytes, config);
 
     // A page range narrows where a match may start, and that is what makes a
     // second occurrence cheap to rule out: a model says which page it read the
@@ -123,7 +134,26 @@ fn replace(ctx: Ctx, path: []const u8, bytes: []const u8, old: []const u8, new: 
         .whole => {},
     };
 
-    const found = try match(ctx.arena, bytes, old, scope);
+    // Page markers are useful to read, but are not file content.  Only an
+    // old_string that actually contains them opts into removing them; this
+    // keeps a marker accidentally appearing in a normal edit from becoming a
+    // new kind of forgiveness.
+    const marked_old = try pageMarkers(ctx.arena, old, config.lines);
+    if (marked_old.invalid) |distance| return deny(
+        ctx,
+        "page marker is {d} lines from its expected break, outside PAGE_LINES {d}",
+        .{ distance, config.lines },
+    );
+    const old_without_pages = marked_old.text;
+    const new_without_pages = if (marked_old.found)
+        (try pageMarkers(ctx.arena, new, config.lines)).text
+    else
+        new;
+
+    // How far a pasted line number may be from the line it names: one page
+    // of lines. The number came off a page the model was handed, so a page is
+    // as stale as it can honestly be.
+    const found = try match(ctx.arena, bytes, old_without_pages, scope, tolerance, config.lines);
     if (found.at.len == 0) {
         if (scoped) |s| return deny(
             ctx,
@@ -139,7 +169,10 @@ fn replace(ctx: Ctx, path: []const u8, bytes: []const u8, old: []const u8, new: 
     // whole call, so the argument that says what to write was escaped exactly
     // as the one that said what to find, and putting back only one of them
     // lands a literal backslash and an n where a line break was meant.
-    const put = if (found.undone) (try unescape(ctx.arena, new)) orelse new else new;
+    const put = if (found.undone)
+        (try unescape(ctx.arena, new_without_pages)) orelse new_without_pages
+    else
+        new_without_pages;
 
     // One line can honestly appear in twenty places and mean the same thing
     // every time. A block cannot: it is long enough that two of them are two
@@ -188,6 +221,65 @@ fn receipt(ctx: Ctx, pages: []const read.Page, found: Found, removed: bool) !u8 
     if (found.how.len > 0) try line.print(ctx.arena, ". Matched {s}", .{found.how});
 
     return say(ctx, "{s}", .{line.items});
+}
+
+// --------------------------------------------------------------- page markers
+
+const PageMarkers = struct {
+    text: []const u8,
+    found: bool = false,
+    invalid: ?usize = null,
+};
+
+/// Remove the page lines emitted by `read`. A marker is trusted only when
+/// the line where it was pasted is within one configured page of the source
+/// line it claims to introduce; this prevents an arbitrary marker from hiding
+/// a large displacement in the block.
+fn pageMarkers(arena: Allocator, text: []const u8, page_lines: usize) !PageMarkers {
+    const prefix = "―――――――――――――――――――――――― [Page ";
+    const suffix = ")] ――――――――――――――――――――――――";
+    var out: std.ArrayList(u8) = .empty;
+    var found = false;
+    var invalid: ?usize = null;
+    var at: usize = 0;
+    while (at < text.len) {
+        const nl = std.mem.indexOfScalarPos(u8, text, at, '\n');
+        const end = nl orelse text.len;
+        const raw_line = text[at..end];
+        const line = if (std.mem.endsWith(u8, raw_line, "\r")) raw_line[0 .. raw_line.len - 1] else raw_line;
+        // The marker says where the next page begins in the source.  Compare
+        // that with where the marker was actually pasted in this block; a
+        // block may have drifted by a page, but not by an unrelated distance.
+        const line_no = std.mem.count(u8, text[0..at], "\n") + 1;
+        var marker = false;
+        if (std.mem.startsWith(u8, line, prefix) and std.mem.endsWith(u8, line, suffix)) {
+            const marker_body = line[prefix.len .. line.len - suffix.len];
+            if (std.mem.indexOf(u8, marker_body, " (Lines ")) |split| {
+                const page_text = marker_body[0..split];
+                const range = marker_body[split + " (Lines ".len ..];
+                const page_no = std.fmt.parseInt(usize, page_text, 10) catch null;
+                if (page_text.len > 0 and page_no != null) {
+                    if (std.mem.indexOfScalar(u8, range, '-')) |dash| {
+                        const lo = std.fmt.parseInt(usize, range[0..dash], 10) catch 0;
+                        const hi = std.fmt.parseInt(usize, range[dash + 1 ..], 10) catch 0;
+                        if (lo > 0 and hi >= lo) {
+                            const distance = if (line_no > lo) line_no - lo else lo - line_no;
+                            marker = true;
+                            found = true;
+                            if (distance > page_lines and invalid == null) invalid = distance;
+                        }
+                    }
+                }
+            }
+        }
+        if (!marker) {
+            try out.appendSlice(arena, text[at..end]);
+            if (nl != null) try out.append(arena, '\n');
+        }
+        if (nl == null) break;
+        at = end + 1;
+    }
+    return .{ .text = out.items, .found = found, .invalid = invalid };
 }
 
 // --------------------------------------------------------------- the ladder
@@ -245,7 +337,14 @@ const Try = struct { needle: []const u8, rung: Rung, undone: bool };
 /// when the block holds no real newline at all: a model doing that does it to
 /// every newline it emits, while escaping the source code means is local, so a
 /// block holding both is the code's and is left alone.
-fn match(arena: Allocator, bytes: []const u8, old: []const u8, scope: Range) !Found {
+fn match(
+    arena: Allocator,
+    bytes: []const u8,
+    old: []const u8,
+    scope: Range,
+    tolerance: usize,
+    drift: usize,
+) !Found {
     const undone: ?[]const u8 = if (std.mem.indexOfScalar(u8, old, '\n') == null)
         try unescape(arena, old)
     else
@@ -262,7 +361,7 @@ fn match(arena: Allocator, bytes: []const u8, old: []const u8, scope: Range) !Fo
     }
 
     for (ladder.items) |t| {
-        const hits = try find(arena, bytes, t.needle, scope, t.rung);
+        const hits = try find(arena, bytes, t.needle, scope, t.rung, tolerance, drift);
         if (hits.at.len == 0) continue;
         return .{
             .at = hits.at,
@@ -281,8 +380,17 @@ fn note(arena: Allocator, undone: bool, how: []const u8) ![]const u8 {
 }
 
 /// Every place a needle sits in the file, under one rung.
-fn find(arena: Allocator, bytes: []const u8, needle: []const u8, scope: Range, rung: Rung) !Found {
+fn find(
+    arena: Allocator,
+    bytes: []const u8,
+    needle: []const u8,
+    scope: Range,
+    rung: Rung,
+    tolerance: usize,
+    drift: usize,
+) !Found {
     var out: std.ArrayList(Range) = .empty;
+    var best_differ: ?usize = null;
 
     // Exact is a substring rather than a line window, because the common edit
     // is a fragment inside a line and it should never have to be spelled as a
@@ -306,11 +414,29 @@ fn find(arena: Allocator, bytes: []const u8, needle: []const u8, scope: Range, r
     while (i + want.len <= file.len) : (i += 1) {
         if (file[i].at < scope.at or file[i].at >= scope.end) continue;
         const window = file[i .. i + want.len];
-        const sits = if (rung == .block)
-            try blockHolds(arena, bytes, window, want, &how)
-        else
-            linesHold(bytes, window, want, rung);
-        if (!sits) continue;
+        var block_differ: ?usize = null;
+        var candidate_how: []const u8 = "";
+        if (rung == .block) {
+            block_differ = try blockHolds(arena, bytes, window, want, &candidate_how, tolerance, drift);
+            if (block_differ == null) continue;
+        } else if (!linesHold(bytes, window, want, rung, drift)) continue;
+
+        // For fuzzy blocks, prefer the candidate with the fewest differing
+        // anchored lines. Keep ties: the caller must still reject ambiguity.
+        if (block_differ) |differ| {
+            if (best_differ) |best| {
+                if (differ < best) {
+                    out.clearRetainingCapacity();
+                    best_differ = differ;
+                    how = candidate_how;
+                } else if (differ > best) {
+                    continue;
+                }
+            } else {
+                best_differ = differ;
+                how = candidate_how;
+            }
+        }
 
         // The block the model gave is the span, always. A rung forgives how
         // lines are compared, never which lines are replaced.
@@ -359,14 +485,14 @@ fn texts(arena: Allocator, block: []const u8) ![]const []const u8 {
     return out.items;
 }
 
-fn linesHold(bytes: []const u8, window: []const Line, want: []const []const u8, rung: Rung) bool {
-    for (window, want) |a, b| if (!holds(bytes[a.at..a.end], b, a.no, rung)) return false;
+fn linesHold(bytes: []const u8, window: []const Line, want: []const []const u8, rung: Rung, drift: usize) bool {
+    for (window, want) |a, b| if (!holds(bytes[a.at..a.end], b, a.no, rung, drift)) return false;
     return true;
 }
 
 /// One line against one line, under everything this rung and the rungs above
 /// it forgive.
-fn holds(have: []const u8, said: []const u8, no: usize, rung: Rung) bool {
+fn holds(have: []const u8, said: []const u8, no: usize, rung: Rung, drift: usize) bool {
     if (std.mem.eql(u8, have, said)) return true;
     if (rung == .exact) return false;
 
@@ -380,7 +506,7 @@ fn holds(have: []const u8, said: []const u8, no: usize, rung: Rung) bool {
     // pastes one back meant the line, not the label. The number still has to
     // be near enough to be the line it was reading.
     if (numbered(said)) |n| {
-        if (no + number_drift < n.no or n.no + number_drift < no) return false;
+        if (no + drift < n.no or n.no + drift < no) return false;
         return std.mem.eql(u8, have, n.text) or trimEq(have, n.text) or squashEq(have, n.text);
     }
     return false;
@@ -391,15 +517,18 @@ fn holds(have: []const u8, said: []const u8, no: usize, rung: Rung) bool {
 /// The anchors are the first and last lines substantial enough to be worth
 /// believing. Everything outside them is still held to the rungs above — a
 /// thin line at the edge is checked, it just never carries the match — and
-/// within them a quarter of the lines may differ, because a model rebuilding a
-/// block from a page it read gets the shape right and a line or two wrong.
+/// within them the configured percentage of lines may differ, because a model
+/// rebuilding a block from a page it read gets the shape right and a line or two
+/// wrong.
 fn blockHolds(
     arena: Allocator,
     bytes: []const u8,
     window: []const Line,
     want: []const []const u8,
     how: *[]const u8,
-) !bool {
+    tolerance: usize,
+    drift: usize,
+) !?usize {
     var top: ?usize = null;
     var bottom: usize = 0;
     for (want, 0..) |l, i| if (substantial(l)) {
@@ -407,7 +536,7 @@ fn blockHolds(
         bottom = i;
     };
     // Nothing here is worth anchoring on, so nothing here gets a tolerance.
-    const first = top orelse return false;
+    const first = top orelse return null;
 
     const line = struct {
         fn of(b: []const u8, w: Line) []const u8 {
@@ -418,23 +547,23 @@ fn blockHolds(
     // Outside the anchors the rungs above still hold, exactly as they would
     // have without this one.
     for (0..first) |i|
-        if (!holds(line.of(bytes, window[i]), want[i], window[i].no, .numbered)) return false;
+        if (!holds(line.of(bytes, window[i]), want[i], window[i].no, .numbered, drift)) return null;
     for (bottom + 1..want.len) |i|
-        if (!holds(line.of(bytes, window[i]), want[i], window[i].no, .numbered)) return false;
+        if (!holds(line.of(bytes, window[i]), want[i], window[i].no, .numbered, drift)) return null;
 
-    if (!holds(line.of(bytes, window[first]), want[first], window[first].no, .numbered)) return false;
-    if (!holds(line.of(bytes, window[bottom]), want[bottom], window[bottom].no, .numbered)) return false;
+    if (!holds(line.of(bytes, window[first]), want[first], window[first].no, .numbered, drift)) return null;
+    if (!holds(line.of(bytes, window[bottom]), want[bottom], window[bottom].no, .numbered, drift)) return null;
 
     var differ: usize = 0;
     const within = bottom - first + 1;
     for (first..bottom + 1) |i|
-        if (!holds(line.of(bytes, window[i]), want[i], window[i].no, .numbered)) {
+        if (!holds(line.of(bytes, window[i]), want[i], window[i].no, .numbered, drift)) {
             differ += 1;
         };
-    if (differ * 100 > within * tolerated) return false;
+    if (differ * 100 > within * tolerance) return null;
 
     how.* = try std.fmt.allocPrint(arena, "with {d} of {d} lines differing", .{ differ, within });
-    return true;
+    return differ;
 }
 
 /// Whether a line says enough about where it is to anchor a block on it.
@@ -506,6 +635,14 @@ fn unescape(arena: Allocator, text: []const u8) !?[]const u8 {
 
 // ----------------------------------------------------------------- plumbing
 
+/// The block mismatch allowance is a percentage of the anchored lines. An
+/// invalid value keeps the safe default, as the other numeric munge arguments
+/// do.
+fn number(ctx: Ctx, key: []const u8) ?usize {
+    const raw = ctx.env.get(key) orelse return null;
+    return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \t"), 10) catch null;
+}
+
 fn say(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
     try ctx.out.print("[" ++ fmt ++ "]\n", args);
     try ctx.out.flush();
@@ -539,6 +676,15 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  old_string  what to replace; omitted, this appends
         \\  new_string  what to put there; empty, this removes
         \\  pages       a range the matches must start in
+        \\  tolerance   percentage of anchored block lines allowed to differ (default 25)
+        \\
+        \\  PAGE_LINES  logical page line target       (default 100)
+        \\  PAGE_BYTES  logical page byte target       (default 10000)
+        \\
+        \\The page settings are `read`'s, and they belong here for the same
+        \\reason: `pages` is counted off pages of that size, and a line number
+        \\pasted on the front of a line is believed within one page of where
+        \\the line actually sits.
         \\
         \\A replacement that matches twice is refused whenever either side of
         \\it spans lines, because choosing between two blocks is not this
@@ -546,7 +692,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\Matching forgives, in order: nothing, indentation, all whitespace, an
         \\argument the model over-encoded, a line number pasted on the front,
-        \\and a quarter of a block once its ends hold. An end has to carry
+        \\and the configured percentage of a block once its ends hold (25% by
+        \\default). An end has to carry
         \\eight characters to be worth anchoring on. Whatever was forgiven is
         \\named in the receipt. An over-encoded old_string is taken to mean an
         \\over-encoded new_string, and both are put back.
@@ -575,7 +722,7 @@ const body =
 ;
 
 fn matched(arena: Allocator, old: []const u8) !Found {
-    return match(arena, body, old, .{ .at = 0, .end = body.len });
+    return match(arena, body, old, .{ .at = 0, .end = body.len }, default_tolerance, read.default_page_lines);
 }
 
 test "an exact fragment matches wherever it sits" {
@@ -628,6 +775,21 @@ test "a line number pasted on the front is forgiven only near its line" {
     try testing.expectEqual(@as(usize, 0), far.at.len);
 }
 
+test "how far a line number may have drifted is the page it came off" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The same paste twice, against two page sizes. A number read off a
+    // hundred-line page is still believable forty lines out; read off a
+    // ten-line page it names somewhere the model was never looking.
+    const wide = try match(arena, body, "40:    const total = a + b;", .{ .at = 0, .end = body.len }, default_tolerance, read.default_page_lines);
+    try testing.expectEqual(@as(usize, 1), wide.at.len);
+
+    const narrow = try match(arena, body, "40:    const total = a + b;", .{ .at = 0, .end = body.len }, default_tolerance, 10);
+    try testing.expectEqual(@as(usize, 0), narrow.at.len);
+}
+
 test "a block holds by its ends, and a quarter of it may differ" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -656,6 +818,33 @@ test "a block holds by its ends, and a quarter of it may differ" {
         \\}
     );
     try testing.expectEqual(@as(usize, 0), no.at.len);
+}
+
+test "a block chooses the candidate with fewer differing lines" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const src =
+        \\fn chosen() {
+        \\    first mismatch
+        \\    second mismatch
+        \\    end marker
+        \\fn chosen() {
+        \\    wanted one
+        \\    wanted
+        \\    end marker
+    ;
+    const old =
+        \\fn chosen() {
+        \\    wanted one
+        \\    wanted two
+        \\    end marker
+    ;
+    const hit = try match(arena, src, old, .{ .at = 0, .end = src.len }, 50, read.default_page_lines);
+    try testing.expectEqual(@as(usize, 1), hit.at.len);
+    try testing.expectEqualStrings("with 1 of 4 lines differing", hit.how);
+    try testing.expect(std.mem.startsWith(u8, src[hit.at[0].at..], "fn chosen() {\n    wanted one"));
 }
 
 test "a thin line at the edge of a block is checked, never anchored on" {
@@ -693,13 +882,13 @@ test "escaping that doubled in transport is put back, and code that means it is 
 
     // The argument arrived with its escaping doubled: no real newline anywhere
     // in it, so it can only have happened in transport.
-    const fixed = try match(arena, src, "const nl = '\\\\n';", .{ .at = 0, .end = src.len });
+    const fixed = try match(arena, src, "const nl = '\\\\n';", .{ .at = 0, .end = src.len }, default_tolerance, read.default_page_lines);
     try testing.expectEqual(@as(usize, 1), fixed.at.len);
     try testing.expectEqualStrings("unescaped", fixed.how);
 
     // The same block with a real newline in it is the code's own escaping, and
     // matches as it stands or not at all.
-    const both = try match(arena, src, "const nl = '\\n';\nconst t = 1;", .{ .at = 0, .end = src.len });
+    const both = try match(arena, src, "const nl = '\\n';\nconst t = 1;", .{ .at = 0, .end = src.len }, default_tolerance, read.default_page_lines);
     try testing.expectEqual(@as(usize, 1), both.at.len);
     try testing.expectEqualStrings("", both.how);
 }
@@ -712,7 +901,7 @@ test "the needle carried out is the one that hit, not the one that arrived" {
     // Flat on the way in and a block by the time it lands, which is the whole
     // reason the count reads the needle instead of the argument.
     const src = "a\nb\nX\na\nb\nY\n";
-    const hit = try match(arena, src, "a\\nb", .{ .at = 0, .end = src.len });
+    const hit = try match(arena, src, "a\\nb", .{ .at = 0, .end = src.len }, default_tolerance, read.default_page_lines);
     try testing.expectEqual(@as(usize, 2), hit.at.len);
     try testing.expectEqualStrings("unescaped", hit.how);
     try testing.expect(std.mem.indexOfScalar(u8, hit.needle, '\n') != null);
@@ -730,8 +919,8 @@ test "a scope keeps a match to the pages it was read on" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const all = try match(arena, body, "usize", .{ .at = 0, .end = body.len });
-    const half = try match(arena, body, "usize", .{ .at = 0, .end = 64 });
+    const all = try match(arena, body, "usize", .{ .at = 0, .end = body.len }, default_tolerance, read.default_page_lines);
+    const half = try match(arena, body, "usize", .{ .at = 0, .end = 64 }, default_tolerance, read.default_page_lines);
     try testing.expect(half.at.len < all.at.len);
     try testing.expect(half.at.len > 0);
 }

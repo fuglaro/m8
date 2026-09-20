@@ -33,8 +33,9 @@
 #### :toolbox:list BYTE_CAP 20000
 
 #### :toolbox:edit
-> > Edit a file. Either replace exact matches of an old_string, or
+> > Edit a file. Either replace matches of an old_string, or
 > > leave old_string empty to append into a new or existing file.
+> > Attempt exact matches to avoid falling below match tolerance.
 > > Must only match once if using multiple lines to replace.
 > > Pages may be used to scope matches.
 > `m8` `call` `munge` `write`
@@ -48,6 +49,8 @@
 >   Page range to scope the matches during replace e.g.
 >   "10-10" or "11-20" or "21-100", or "2@string_match" to
 >   scope within 2 pages starting at string match.
+#### :toolbox:edit PAGE_LINES 100
+#### :toolbox:edit PAGE_BYTES 10000
 
 #### :toolbox:grep
 > > Grep search inside files matching a glob.
