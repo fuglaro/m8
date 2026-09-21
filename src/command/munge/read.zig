@@ -358,6 +358,7 @@ fn write(ctx: Ctx, bytes: []const u8, pages: []const Page, want: Span, cap: usiz
     // Nothing to say when the whole file was asked for and the whole file went.
     const whole = !asked and !capped;
     if (!whole) {
+        try endMarker(ctx, to + 1, pages.len);
         try ctx.out.print("[Pages {d}-{d} of 1-{d}. Lines {d}-{d}.", .{
             want.from + 1,    to + 1,         pages.len,
             first.first_line, last.last_line,
@@ -365,14 +366,22 @@ fn write(ctx: Ctx, bytes: []const u8, pages: []const Page, want: Span, cap: usiz
         if (first.opens_mid) try ctx.out.print(" Opens mid-line {d}.", .{first.first_line});
         if (last.ends_mid) try ctx.out.print(" Ends mid-line {d}.", .{last.last_line});
         if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
-        if (to + 1 < pages.len) {
-            try pageAdvice(ctx, want.from, to, pages.len);
-        } else try ctx.out.writeAll(" End of file.");
+        if (to + 1 < pages.len) try pageAdvice(ctx, want.from, to, pages.len);
         try ctx.out.writeAll("]\n");
     }
 
     try ctx.out.flush();
     return 0;
+}
+
+/// Mark the end of the raw content before the metadata trailer. Keeping this
+/// on its own line makes it unambiguous whether the returned page is complete.
+fn endMarker(ctx: Ctx, last_page: usize, total: usize) !void {
+    if (last_page < total) {
+        try ctx.out.print("―――――――――――――――――――――――― [End of page {d}] ――――――――――――――――――――――――\n", .{last_page});
+    } else {
+        try ctx.out.writeAll("―――――――――――――――――――――――― [End of file] ――――――――――――――――――――――――\n");
+    }
 }
 
 /// Suggest both the usual next window and wider or shifted windows. The
@@ -469,6 +478,7 @@ fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig) !u8 {
     try ctx.out.writeAll(output.written());
 
     // A directory is a paginated document even when it has no entries.
+    try endMarker(ctx, last_page + 1, count);
     try ctx.out.print("[Pages {d}-{d} of 1-{d}.", .{ span.from + 1, last_page + 1, count });
     if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
     if (last_page + 1 < count) {

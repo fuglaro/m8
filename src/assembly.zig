@@ -221,6 +221,35 @@ test "prose piped in joins the prompt rather than becoming its own record" {
     try testing.expectEqualStrings("just this", (try sigils(arena, bare))[1].content.?);
 }
 
+test "a header-shaped prompt without a sigil stays prose" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-assembly-raw-header");
+    defer f.deinit(arena);
+    const dirs = [_][]const u8{f.dir};
+
+    const got = try assemble(
+        arena,
+        f.io,
+        &dirs,
+        "",
+        false,
+        .agent,
+        "",
+        "#### Should be raw because no real sigil.\n=\n",
+    );
+    const r = try sigils(arena, got);
+    try testing.expectEqual(@as(usize, 2), r.len);
+    try testing.expectEqualStrings(
+        "#### Should be raw because no real sigil.\n=",
+        r[1].content.?,
+    );
+}
+
 test "a document that opens right and then goes wrong is an error, not a prompt" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();

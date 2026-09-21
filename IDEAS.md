@@ -20,32 +20,64 @@
     If also in new_string, strip those lines from new_string.
   - If not in old_string, don't ignore or strip, stay as old behavior.
 
-# ====
+### Read tool clarity
 
-## Munge honing
+src/command/munge/read.zig
 
-### Post edit failure clarity
+* Add one of the following before trailing line for interpretation clarity:
+  `―――――――――――――――――――――――― [End of page 2] ――――――――――――――――――――――――`
+  `―――――――――――――――――――――――― [End of file] ――――――――――――――――――――――――`
+  and no longer put End of file into the trailer line itself.
 
-Had cases where munge edit came back denied but the model (Luna) shrugged and moved on.
-One case was wrong page, another wrong match.
+### Write tool clarity
 
-- page scoping sometimes made a match unexpectedly unavailable;
-Consider giving advice, detect if match is found on surrounding pages,
-and suggest the pages value and say check pages and retry.
+src/command/munge/write.zig
 
-If near-match found on page, suggest checking old_string match and retry.
+* Remove [ ] around lines for write response since there is no interleaved raw content.
 
-And just be really explicit. Change did not apply, check, adjust, and try again.
+#### Post write failure clarity
 
-### Post edit change clarity
+src/command/munge/write.zig
 
+Nudge models away from silently missing that their change did not land.
+This covers both a bad match and a bad page scope.
+
+* If no match is found in page scope, first check for a match
+  in the file.
+  - If a single match is found, add output:
+    ```
+    No matches were found in scoped pages=A-B,
+    but 1 match was detected in out of scope pages=X-Y.
+    No changes were applied!
+    Adjust pages or old_string, rereading if needed, then retry.
+    
+    ```
+  - If multiple matches were found, add output:
+    ```
+    No matches were found in scoped pages=A-B,
+    but N matches were detected in out of scope pages.
+    No changes were applied!
+    Adjust pages or old_string, rereading if needed, then retry.
+    ```
+  - If no matches were found, add output:
+    ```
+    No matches were found in the file.
+    No changes were applied!
+    Adjust old_string, rereading if needed, then retry.
+    ```
+
+Ideally this is implemented reusing match detection code so is a simple addition.
+
+#### Post write change clarity
+
+src/command/munge/write.zig
 
 ```
-[Replaced 1 match on page 2]
+Replaced 1 match on page 2
 ```
 is updated to say:
 ```
-[Replaced 1 match on page 2, changing lines 130-176]
+Replaced 1 match on page 2, changing lines 130-176
  fn foo() void {
      const a = 1;
      const b = 2;
@@ -68,7 +100,7 @@ M8_ARG_NEW_STRING) which doesn't apply anything but gives
 a line prefix of `Proposed changes would result in:` e.g:
 ```
 Proposed changes would result in:
-[Replaced 1 match on page 2, changing lines 130-176]
+Replaced 1 match on page 2, changing lines 130-176
  fn foo() void {
      const a = 1;
      const b = 2;
@@ -86,6 +118,175 @@ Proposed changes would result in:
  }
 ```
 
+Implementation should be simple. E.g:
+```
+pub fn makeDiff(
+    allocator: std.mem.Allocator,
+    old_text: []const u8,
+    new_text: []const u8,
+) ![]u8 {
+    const context_lines: usize = 3;
+
+    var old_lines = std.ArrayList([]const u8).init(allocator);
+    defer old_lines.deinit();
+
+    var new_lines = std.ArrayList([]const u8).init(allocator);
+    defer new_lines.deinit();
+
+    var old_it = std.mem.splitScalar(u8, old_text, '\n');
+    while (old_it.next()) |line|
+        try old_lines.append(line);
+
+    var new_it = std.mem.splitScalar(u8, new_text, '\n');
+    while (new_it.next()) |line|
+        try new_lines.append(line);
+
+    const n = old_lines.items.len;
+    const m = new_lines.items.len;
+    const width = m + 1;
+
+    const dp = try allocator.alloc(usize, (n + 1) * (m + 1));
+    defer allocator.free(dp);
+    @memset(dp, 0);
+
+    // Build LCS table.
+    var i = n;
+    while (i > 0) {
+        i -= 1;
+
+        var j = m;
+        while (j > 0) {
+            j -= 1;
+
+            if (std.mem.eql(u8, old_lines.items[i], new_lines.items[j])) {
+                dp[i * width + j] =
+                    dp[(i + 1) * width + (j + 1)] + 1;
+            } else {
+                dp[i * width + j] = @max(
+                    dp[(i + 1) * width + j],
+                    dp[i * width + (j + 1)],
+                );
+            }
+        }
+    }
+
+    const DiffLine = struct {
+        prefix: u8,
+        text: []const u8,
+    };
+
+    var lines = std.ArrayList(DiffLine).init(allocator);
+    defer lines.deinit();
+
+    // Walk LCS table to build the diff.
+    i = 0;
+    var j: usize = 0;
+
+    while (i < n and j < m) {
+        if (std.mem.eql(u8, old_lines.items[i], new_lines.items[j])) {
+            try lines.append(.{
+                .prefix = ' ',
+                .text = old_lines.items[i],
+            });
+            i += 1;
+            j += 1;
+        } else if (dp[(i + 1) * width + j] >= dp[i * width + (j + 1)]) {
+            try lines.append(.{
+                .prefix = '-',
+                .text = old_lines.items[i],
+            });
+            i += 1;
+        } else {
+            try lines.append(.{
+                .prefix = '+',
+                .text = new_lines.items[j],
+            });
+            j += 1;
+        }
+    }
+
+    while (i < n) : (i += 1) {
+        try lines.append(.{
+            .prefix = '-',
+            .text = old_lines.items[i],
+        });
+    }
+
+    while (j < m) : (j += 1) {
+        try lines.append(.{
+            .prefix = '+',
+            .text = new_lines.items[j],
+        });
+    }
+
+    var out = std.ArrayList(u8).init(allocator);
+    errdefer out.deinit();
+
+    // Collapse long unchanged runs, preserving 3 lines of context
+    // on either side of a changed region.
+    var pos: usize = 0;
+
+    while (pos < lines.items.len) {
+        if (lines.items[pos].prefix != ' ') {
+            try appendDiffLine(&out, lines.items[pos]);
+            pos += 1;
+            continue;
+        }
+
+        const run_start = pos;
+
+        while (pos < lines.items.len and lines.items[pos].prefix == ' ')
+            pos += 1;
+
+        const run_len = pos - run_start;
+        const has_change_before = run_start > 0;
+        const has_change_after = pos < lines.items.len;
+
+        // Leading/trailing context, or a short unchanged run:
+        // show the whole thing.
+        if (!has_change_before or
+            !has_change_after or
+            run_len <= context_lines * 2)
+        {
+            for (lines.items[run_start..pos]) |line|
+                try appendDiffLine(&out, line);
+
+            continue;
+        }
+
+        for (lines.items[run_start .. run_start + context_lines]) |line|
+            try appendDiffLine(&out, line);
+
+        try out.writer().print(
+            "@@ {d} unchanged lines @@\n",
+            .{run_len - context_lines * 2},
+        );
+
+        for (lines.items[pos - context_lines .. pos]) |line|
+            try appendDiffLine(&out, line);
+    }
+
+    return out.toOwnedSlice();
+}
+```
+
+# ==== [DONE]
+
+Bugfix: only go m8 language mode when starting on a real sigil, otherwise stay raw.
+e.g:
+```
+m8 -- <<'='
+#### Should be raw because no real sigil.
+=
+```
+```
+m8: UnknownSigil
+```
+This should realise it is not a sigil, and proceed in raw mode by checking far enough to confirm if the sigil is valid.
+
+# ====
+
+Ignored metadata lines for token amounts? Although don't want them showing up in historical logs or do
 
 # ====
 
@@ -520,3 +721,454 @@ Rename CALL_ID with propper prefix M8_CALL_ID
 Inline `{{ARG}}` injection in an argv comes out of the framework. The
 environment is the only way a call is carried, and `m8 call args` expands it
 from outside. Specified above under M8 CALL ARGS.
+
+
+# ==== REVIEW SUGGESTIONS
+
+Review notes after inspecting the README, architecture, and source, and running:
+
+* `zig build test` — passes
+* `zig build` — passes
+* `zig build split` — passes
+
+The core idea is unusually coherent: the ledger, file-based state, codecs,
+tools-as-filters, and split/single builds all reinforce each other.
+
+## Highest priority
+
+### Make writes crash-safe and concurrency-safe
+
+`src/session.zig` currently writes turns and aliases directly with `writeFile`.
+That risks partial files if the process is interrupted, and concurrent runs can
+race while updating `+/...` aliases.
+
+Use:
+
+1. write to a uniquely named temporary file in the same directory;
+2. flush/fsync it;
+3. atomically rename it into place;
+4. optionally fsync the directory.
+
+For aliases, consider a lock or compare-and-swap mechanism. This is especially
+important because the project's strongest claim is that the ledger is durable
+and authoritative.
+
+### Fix silent invalid environment names
+
+In `shield.parseValue`, invalid environment names are currently swallowed:
+
+```zig
+const env_var = envName(arena, raw_env_var) catch
+    return .{ .name = name };
+```
+
+That silently converts an invalid variable name into “no variable”.
+`toolbox.parse` is stricter and returns `BadEnvironmentName`, so the behavior is
+inconsistent.
+
+Make `parseValue` return:
+
+```zig
+(Error || Allocator.Error)!Activation
+```
+
+and propagate `BadEnvironmentName`. Configuration mistakes should fail when
+the definition is read, not disappear.
+
+### Add resource limits around external processes
+
+The design intentionally avoids arbitrary ledger depth limits, which makes
+sense semantically. Operational limits are still needed:
+
+* maximum expanded ledger bytes/records;
+* maximum provider response size;
+* maximum tool output size;
+* process timeout;
+* maximum number of spawned descendants;
+* cancellation when the parent exits;
+* perhaps a per-command memory budget.
+
+`launch.spawn` currently writes the complete input and waits for the child.
+That is simple, but a tool that hangs or emits unbounded output can hang the
+whole harness.
+
+### Treat `munge` edits as transactions
+
+The ideas already in this file are good. Prioritize:
+
+* `read` returns a content hash or revision token;
+* `write` accepts `expected_hash`;
+* refuse the write if the file changed;
+* support dry-run;
+* write atomically;
+* report a compact unified diff.
+
+Exact substring matching gives useful safety already, but a file-level
+compare-and-swap closes the read/write race.
+
+## Testing and compatibility
+
+### Add single-vs-split parity tests
+
+The two build modes are a major architectural feature. Test them as two
+implementations of the same CLI contract.
+
+For a corpus of commands, compare:
+
+* stdout;
+* stderr;
+* exit status;
+* saved ledger output;
+* error behavior;
+* streaming behavior.
+
+Run this on Linux and macOS, in debug and release modes, and add CI if there
+is not already a tracked CI configuration.
+
+### Add fuzz/property tests
+
+The parser and codecs are ideal candidates for fuzzing:
+
+* malformed m8/Markdown records;
+* unclosed fences and quotes;
+* include cycles;
+* very long lines;
+* invalid provider JSON;
+* streamed versus complete responses;
+* regex patterns such as nested repetition;
+* schema round-trips.
+
+Useful invariants include:
+
+```text
+parse(render(parse(x))) == normalized(parse(x))
+decode(encode(ledger)) == equivalent ledger
+streamed_response == complete_response
+single_binary == split_binary
+```
+
+### Define a formal conformance suite
+
+The README is detailed, but a third-party implementation would benefit from:
+
+* canonical input/output fixtures;
+* explicit grammar rules;
+* malformed-document examples;
+* unknown-sigil behavior;
+* canonical rendering rules;
+* codec test vectors.
+
+This would turn “implementable from the README” into a practical compatibility
+promise.
+
+## API and data-model improvements
+
+### Validate toolbox types earlier
+
+Tool property types are currently stored as strings and emitted directly into
+JSON Schema. A typo such as an unsupported type can survive until a provider
+rejects the request.
+
+Consider parsing the type into a small internal representation:
+
+```text
+string
+integer
+number
+boolean
+object
+array(T)
+enum(...)
+```
+
+Then reject malformed types, empty enum members, invalid dotted paths, and
+contradictory object declarations at definition-load time.
+
+### Make rendering deterministic
+
+The project emphasizes readable, diffable files. JSON object iteration order
+can make rendered argument blocks or recovered schemas unstable.
+
+Consider sorting keys when converting provider JSON back into m8 records, or
+explicitly preserving insertion order everywhere. Stable output will improve
+Git diffs and reproducibility.
+
+### Add source locations to errors
+
+Errors like `UnknownRunner`, `BadEnvironmentName`, and `TopMisplaced` would be
+much more useful with:
+
+* source path;
+* record number;
+* line and column;
+* offending value;
+* include/lineage path.
+
+Instead of:
+
+```text
+m8: BadEnvironmentName
+```
+
+prefer something like:
+
+```text
+m8: invalid environment name `foo-bar`
+  in ~/.config/m8/agents/pagey.md:18
+  while reading shield `sandbox`
+```
+
+## Documentation and product shape
+
+The README is strong, but it is doing three jobs:
+
+1. manifesto/design rationale;
+2. user manual;
+3. format specification.
+
+Consider splitting those into:
+
+* a short practical README;
+* `docs/design.md`;
+* `docs/format.md`;
+* `docs/security.md`;
+* `docs/conformance.md`.
+
+The current document is compelling, but a new user has to read a lot of
+philosophy before finding the smallest useful workflow.
+
+The most valuable next milestone is:
+
+> Crash-safe storage + strict config validation + single/split parity tests + CI.
+
+Those would strengthen the project's central claims without adding much
+conceptual complexity.
+
+
+# ==== [SUGGESTED]
+
+## Highest-priority suggestions
+
+### Create a concise “first five minutes” guide
+
+The README is thoughtful but very large. Add a short path near the top:
+
+```sh
+m8 new my-chat
+m8 my-chat
+m8 show my-chat
+m8 fork my-chat experiment
+```
+
+Show one complete provider/tool example and explain where files are stored.
+Keep the manifesto, but make the first successful interaction nearly
+effortless.
+
+### Add `m8 doctor`
+
+A diagnostic command could check:
+
+* config paths and permissions;
+* provider executability;
+* missing commands in `commands.txt`;
+* stale split binaries;
+* malformed ledgers;
+* terminal/stdin capabilities;
+* sandbox availability.
+
+This would dramatically improve bug reports and onboarding.
+
+### Make ledger validation a first-class command
+
+Something like:
+
+```sh
+m8 check file.m8
+m8 repair file.m8
+```
+
+`check` should report the exact record, line, and invariant that failed. Since
+the ledger is the project’s central promise, users need a dependable way to
+validate it independently of a conversation run.
+
+### Implement optimistic concurrency protection
+
+Have read operations optionally emit a file hash or revision, and have edits
+reject stale writes:
+
+```text
+edit(path, expected_sha256, old_text, new_text)
+```
+
+Exact replacement protects against many mistakes, but a file-level
+compare-and-swap closes the read/edit race.
+
+### Add first-class file operations
+
+`delete`, `move`, and perhaps `mkdir` would make the tool ecosystem less
+dependent on unrestricted shell commands. For deletion:
+
+* refuse directories by default;
+* require existence;
+* display size and path;
+* support `--dry-run`;
+* optionally move to a trash directory instead of permanently deleting.
+
+### Improve destructive-command controls
+
+Since tools are intended for agents, consider policy distinctions such as:
+
+* read-only;
+* workspace-mutating;
+* destructive;
+* network-enabled.
+
+Add timeouts and a compact changed-files report for shell commands. This aligns
+especially well with the project’s “control” principle.
+
+## Architecture and maintainability
+
+### Reduce README conceptual repetition
+
+The design is compelling, but several ideas recur: files over app state, one
+grammar, composability, and provider neutrality. Consider moving the detailed
+argument into `docs/design.md` and keeping the README structured as:
+
+* what it is;
+* five-minute example;
+* format;
+* commands;
+* configuration;
+* design principles;
+* deeper rationale.
+
+### Add compatibility fixtures
+
+The grammar is important enough to warrant a corpus of sample files:
+
+* valid minimal ledgers;
+* every sigil;
+* Unicode and shortcode forms;
+* malformed headers;
+* missing blank lines;
+* escaped content;
+* provider/tool exchanges;
+* old-format examples.
+
+Run every parser and codec against these fixtures. This will help preserve the
+“implementable in an afternoon” promise.
+
+### Test the split and monolithic builds equivalently
+
+Since the two-build design is central, add tests that execute both forms against
+the same scenarios and compare:
+
+* stdout;
+* stderr;
+* exit status;
+* generated ledger;
+* filesystem changes.
+
+This prevents architectural drift between the two modes.
+
+### Make stale generated artifacts impossible or obvious
+
+`zig build split` should probably clean or reconcile `zig-out/bin` before
+installing. Alternatively, generate a manifest of expected binaries and have a
+command report stale outputs.
+
+## UX improvements
+
+### Add a graph/history command
+
+The `m8 threads` idea seems valuable:
+
+```sh
+m8 log --graph --all
+m8 branches
+m8 dangling
+```
+
+Start with graph structure, parent references, timestamps, and labels. Summaries
+can come later. This would make the filesystem-backed conversation model much
+easier to navigate.
+
+### Use machine-readable diagnostics
+
+Human output can remain pleasant, but add:
+
+```sh
+--format=plain
+--format=json
+--format=m8
+```
+
+JSON diagnostics would help scripts and editor integrations without
+compromising the text-first design.
+
+### Show compact diffs for edits
+
+The proposed munge change output is excellent. Make it standard, with:
+
+* changed line range;
+* unified diff;
+* explicit dry-run mode;
+* clear failure suggestions when the match is near but not exact.
+
+### Treat binary search results explicitly
+
+Report skipped binaries rather than silently omitting them:
+
+```text
+(binary skipped: image.png)
+```
+
+A `--binary=skip|report|search` option would be a clean extension.
+
+### Add shell completion
+
+Completion for commands, config names, agents, sessions, and paths would make
+a command-heavy interface feel much more approachable.
+
+## Product positioning
+
+### Define the smallest stable public surface
+
+Decide what you are willing to support long-term:
+
+* ledger grammar;
+* filesystem layout;
+* command names;
+* provider stdin/stdout contract;
+* tool contract.
+
+Mark everything else experimental. This matters because the project’s strongest
+appeal is durability.
+
+### Publish a tiny reference implementation
+
+Alongside the Zig implementation, provide a deliberately small parser/reader—
+perhaps Python or POSIX shell—for the core ledger format. That would substantiate
+the portability claim and make the format easier for others to adopt.
+
+### Build one polished end-to-end demo
+
+The Z-machine example is technically compelling, but a short demo involving:
+
+* a file edit;
+* a tool call;
+* a fork;
+* a provider response;
+* a readable transcript;
+
+would communicate the project faster to most users.
+
+## Suggested prioritization
+
+If prioritizing, start with:
+
+1. first-five-minutes documentation;
+2. `m8 doctor`;
+3. ledger validation;
+4. optimistic edit protection;
+5. equivalence tests for split versus monolithic builds.

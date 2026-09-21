@@ -50,12 +50,13 @@ const default_tolerance = 25;
 fn run(ctx: Ctx) !u8 {
     const path = ctx.env.get("M8_ARG_PATH") orelse
         (if (ctx.args.len > 0) ctx.args[0] else null) orelse
-        return refuse(ctx, "no path given", .{});
+        return failure(ctx, "no path given", .{});
     const old_string = ctx.env.get("M8_ARG_OLD_STRING") orelse
         (if (ctx.args.len > 1) ctx.args[1] else null) orelse "";
     const new_string = ctx.env.get("M8_ARG_NEW_STRING") orelse
         (if (ctx.args.len > 2) ctx.args[2] else null) orelse "";
     const allowed = number(ctx, "M8_ARG_TOLERANCE") orelse default_tolerance;
+    const dry_run = boolean(ctx, "M8_ARG_DRY_RUN");
 
     // Pages are what this tool scopes by and answers in, so it cuts the file
     // the way the `read` that handed the model its page did.
@@ -63,10 +64,10 @@ fn run(ctx: Ctx) !u8 {
 
     const had = Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(max_file)) catch null;
 
-    if (old_string.len == 0) return append(ctx, path, had, new_string, config);
+    if (old_string.len == 0) return append(ctx, path, had, new_string, config, dry_run);
 
-    const bytes = had orelse return deny(ctx, "there is no {s} to edit", .{path});
-    return replace(ctx, path, bytes, old_string, new_string, allowed, config);
+    const bytes = had orelse return failure(ctx, "there is no {s} to edit", .{path});
+    return replace(ctx, path, bytes, old_string, new_string, allowed, config, dry_run);
 }
 
 // ------------------------------------------------------------------- adding
@@ -76,7 +77,14 @@ fn run(ctx: Ctx) !u8 {
 /// Always on a line of its own, and always leaving a newline behind: a tool
 /// that appends is used over and over, and a file that loses its last newline
 /// once has lost it for every append after.
-fn append(ctx: Ctx, path: []const u8, had: ?[]const u8, text: []const u8, config: read.PageConfig) !u8 {
+fn append(
+    ctx: Ctx,
+    path: []const u8,
+    had: ?[]const u8,
+    text: []const u8,
+    config: read.PageConfig,
+    dry_run: bool,
+) !u8 {
     var out: std.ArrayList(u8) = .empty;
     if (had) |bytes| {
         try out.appendSlice(ctx.arena, bytes);
@@ -86,21 +94,34 @@ fn append(ctx: Ctx, path: []const u8, had: ?[]const u8, text: []const u8, config
     try out.appendSlice(ctx.arena, text);
     if (text.len == 0 or text[text.len - 1] != '\n') try out.append(ctx.arena, '\n');
 
-    if (std.fs.path.dirname(path)) |parent|
-        Dir.cwd().createDirPath(ctx.io, parent) catch {};
-    Dir.cwd().writeFile(ctx.io, .{ .sub_path = path, .data = out.items }) catch
-        return deny(ctx, "cannot write {s}", .{path});
+    if (!dry_run) {
+        if (std.fs.path.dirname(path)) |parent|
+            Dir.cwd().createDirPath(ctx.io, parent) catch {};
+        Dir.cwd().writeFile(ctx.io, .{ .sub_path = path, .data = out.items }) catch
+            return failure(ctx, "cannot write {s}", .{path});
+    }
 
     const pages = try read.paginateConfig(ctx.arena, out.items, config);
-    if (had == null) return say(ctx, "Created a new file with {d} page{s}", .{
-        pages.len,
-        if (pages.len == 1) "" else "s",
-    });
+    var line: std.ArrayList(u8) = .empty;
+    if (had == null) {
+        try line.print(ctx.arena, "Created a new file with {d} page{s}", .{
+            pages.len,
+            if (pages.len == 1) "" else "s",
+        });
+    } else {
+        const first = read.pageOf(pages, from);
+        const last = read.pageOf(pages, out.items.len - 1);
+        if (first == last)
+            try line.print(ctx.arena, "Appended to page {d}", .{first + 1})
+        else
+            try line.print(ctx.arena, "Appended to pages {d}-{d}", .{ first + 1, last + 1 });
+    }
 
-    const first = read.pageOf(pages, from);
-    const last = read.pageOf(pages, out.items.len - 1);
-    if (first == last) return say(ctx, "Appended to page {d}", .{first + 1});
-    return say(ctx, "Appended to pages {d}-{d}", .{ first + 1, last + 1 });
+    const old_bytes = if (had) |bytes| bytes else "";
+    const first_line = lineNumber(old_bytes, if (had == null) 0 else from);
+    const last_line = lineNumber(out.items, out.items.len -| 1);
+    try line.print(ctx.arena, ", changing lines {d}-{d}", .{ first_line, last_line });
+    return finish(ctx, dry_run, line.items, old_bytes, out.items);
 }
 
 // ---------------------------------------------------------------- replacing
@@ -113,6 +134,7 @@ fn replace(
     new: []const u8,
     tolerance: usize,
     config: read.PageConfig,
+    dry_run: bool,
 ) !u8 {
     const pages = try read.paginateConfig(ctx.arena, bytes, config);
 
@@ -126,7 +148,7 @@ fn replace(
             scope = .{ .at = pages[s.from].at, .end = pages[s.to].end };
             scoped = s;
         },
-        .beyond => |s| return deny(
+        .beyond => |s| return failure(
             ctx,
             "pages {d}-{d} are out of scope of 1-{d}",
             .{ s.from, s.to, pages.len },
@@ -139,7 +161,7 @@ fn replace(
     // keeps a marker accidentally appearing in a normal edit from becoming a
     // new kind of forgiveness.
     const marked_old = try pageMarkers(ctx.arena, old, config.lines);
-    if (marked_old.invalid) |distance| return deny(
+    if (marked_old.invalid) |distance| return failure(
         ctx,
         "page marker is {d} lines from its expected break, outside PAGE_LINES {d}",
         .{ distance, config.lines },
@@ -155,12 +177,54 @@ fn replace(
     // as stale as it can honestly be.
     const found = try match(ctx.arena, bytes, old_without_pages, scope, tolerance, config.lines);
     if (found.at.len == 0) {
-        if (scoped) |s| return deny(
+        if (scoped) |s| {
+            // A scoped miss is often a page mistake rather than an old_string
+            // mistake. Check the same ladder against the whole file before
+            // refusing, so the answer can say which one needs adjusting.
+            const elsewhere = try match(
+                ctx.arena,
+                bytes,
+                old_without_pages,
+                .{ .at = 0, .end = bytes.len },
+                tolerance,
+                config.lines,
+            );
+            if (elsewhere.at.len == 0) return failure(
+                ctx,
+                "No matches were found in the file.\n" ++
+                    "No changes were applied!\n" ++
+                    "Adjust old_string, rereading if needed, then retry.",
+                .{},
+            );
+
+            if (elsewhere.at.len == 1) {
+                const outside = matchPages(pages, elsewhere);
+                return failure(
+                    ctx,
+                    "No matches were found in scoped pages={d}-{d},\n" ++
+                        "but 1 match was detected in out of scope pages={d}-{d}.\n" ++
+                        "No changes were applied!\n" ++
+                        "Adjust pages or old_string, rereading if needed, then retry.",
+                    .{ s.from + 1, s.to + 1, outside.from + 1, outside.to + 1 },
+                );
+            }
+
+            return failure(
+                ctx,
+                "No matches were found in scoped pages={d}-{d},\n" ++
+                    "but {d} matches were detected in out of scope pages.\n" ++
+                    "No changes were applied!\n" ++
+                    "Adjust pages or old_string, rereading if needed, then retry.",
+                .{ s.from + 1, s.to + 1, elsewhere.at.len },
+            );
+        }
+        return failure(
             ctx,
-            "found no match on pages {d}-{d}",
-            .{ s.from + 1, s.to + 1 },
+            "No matches were found in the file.\n" ++
+                "No changes were applied!\n" ++
+                "Adjust old_string, rereading if needed, then retry.",
+            .{},
         );
-        return deny(ctx, "found no match in {s}", .{path});
     }
 
     // A model that over-encodes is encoding its own output, not repeating
@@ -182,7 +246,7 @@ fn replace(
     // a block and the count has to follow.
     const sought = std.mem.indexOfScalar(u8, found.needle, '\n') != null;
     const written = std.mem.indexOfScalar(u8, put, '\n') != null;
-    if (found.at.len > 1 and (sought or written)) return deny(
+    if (found.at.len > 1 and (sought or written)) return failure(
         ctx,
         "found {d} matches but a multi-line {s} must be unique",
         .{ found.at.len, if (sought) "old_string" else "new_string" },
@@ -197,14 +261,24 @@ fn replace(
     }
     try out.appendSlice(ctx.arena, bytes[at..]);
 
-    Dir.cwd().writeFile(ctx.io, .{ .sub_path = path, .data = out.items }) catch
-        return deny(ctx, "cannot write {s}", .{path});
+    if (!dry_run) {
+        Dir.cwd().writeFile(ctx.io, .{ .sub_path = path, .data = out.items }) catch
+            return failure(ctx, "cannot write {s}", .{path});
+    }
 
-    return receipt(ctx, pages, found, put.len == 0);
+    return receipt(ctx, pages, found, put.len == 0, bytes, out.items, dry_run);
 }
 
 /// What happened, in pages, and how honestly it matched.
-fn receipt(ctx: Ctx, pages: []const read.Page, found: Found, removed: bool) !u8 {
+fn receipt(
+    ctx: Ctx,
+    pages: []const read.Page,
+    found: Found,
+    removed: bool,
+    old_text: []const u8,
+    new_text: []const u8,
+    dry_run: bool,
+) !u8 {
     const verb = if (removed) "Removed" else "Replaced";
     const first = read.pageOf(pages, found.at[0].at);
     const last = read.pageOf(pages, found.at[found.at.len - 1].end -| 1);
@@ -218,12 +292,152 @@ fn receipt(ctx: Ctx, pages: []const read.Page, found: Found, removed: bool) !u8 
         try line.print(ctx.arena, " on page {d}", .{first + 1})
     else
         try line.print(ctx.arena, " across pages {d}-{d}", .{ first + 1, last + 1 });
+    const changed = .{
+        .first = lineNumber(old_text, found.at[0].at),
+        .last = lineNumber(old_text, found.at[found.at.len - 1].end -| 1),
+    };
+    try line.print(ctx.arena, ", changing lines {d}-{d}", .{ changed.first, changed.last });
     if (found.how.len > 0) try line.print(ctx.arena, ". Matched {s}", .{found.how});
 
-    return say(ctx, "{s}", .{line.items});
+    return finish(ctx, dry_run, line.items, old_text, new_text);
+}
+
+const DiffLine = struct {
+    prefix: u8,
+    text: []const u8,
+};
+
+fn appendDiffLine(out: *std.ArrayList(u8), allocator: Allocator, line: DiffLine) !void {
+    try out.append(allocator, line.prefix);
+    try out.appendSlice(allocator, line.text);
+    try out.append(allocator, '\n');
+}
+
+fn lineNumber(text: []const u8, at: usize) usize {
+    return std.mem.count(u8, text[0..@min(at, text.len)], "\n") + 1;
+}
+
+/// Print a write receipt and the compact before/after diff. A dry run follows
+/// exactly the same path, but announces the proposal and leaves the file
+/// untouched.
+fn finish(
+    ctx: Ctx,
+    dry_run: bool,
+    receipt_text: []const u8,
+    old_text: []const u8,
+    new_text: []const u8,
+) !u8 {
+    if (dry_run) try ctx.out.writeAll("Proposed changes would result in:\n");
+    try ctx.out.print("{s}\n", .{receipt_text});
+    const diff = try makeDiff(ctx.arena, old_text, new_text);
+    try ctx.out.writeAll(diff);
+    try ctx.out.flush();
+    return 0;
+}
+
+/// Make a small, line-oriented diff with three lines of context around each
+/// changed region. This is deliberately local rather than a patch format:
+/// the receipt already identifies the file and the changed line range.
+pub fn makeDiff(allocator: Allocator, old_text: []const u8, new_text: []const u8) ![]u8 {
+    const context_lines: usize = 3;
+
+    const old_lines = try splitLines(allocator, old_text);
+    const new_lines = try splitLines(allocator, new_text);
+
+    const n = old_lines.items.len;
+    const m = new_lines.items.len;
+    const width = m + 1;
+    const dp = try allocator.alloc(usize, (n + 1) * (m + 1));
+    defer allocator.free(dp);
+    @memset(dp, 0);
+
+    var i = n;
+    while (i > 0) {
+        i -= 1;
+        var j = m;
+        while (j > 0) {
+            j -= 1;
+            if (std.mem.eql(u8, old_lines.items[i], new_lines.items[j])) {
+                dp[i * width + j] = dp[(i + 1) * width + (j + 1)] + 1;
+            } else {
+                dp[i * width + j] = @max(
+                    dp[(i + 1) * width + j],
+                    dp[i * width + (j + 1)],
+                );
+            }
+        }
+    }
+
+    var diff_lines: std.ArrayList(DiffLine) = .empty;
+    i = 0;
+    var j: usize = 0;
+    while (i < n and j < m) {
+        if (std.mem.eql(u8, old_lines.items[i], new_lines.items[j])) {
+            try diff_lines.append(allocator, .{ .prefix = ' ', .text = old_lines.items[i] });
+            i += 1;
+            j += 1;
+        } else if (dp[(i + 1) * width + j] >= dp[i * width + (j + 1)]) {
+            try diff_lines.append(allocator, .{ .prefix = '-', .text = old_lines.items[i] });
+            i += 1;
+        } else {
+            try diff_lines.append(allocator, .{ .prefix = '+', .text = new_lines.items[j] });
+            j += 1;
+        }
+    }
+    while (i < n) : (i += 1)
+        try diff_lines.append(allocator, .{ .prefix = '-', .text = old_lines.items[i] });
+    while (j < m) : (j += 1)
+        try diff_lines.append(allocator, .{ .prefix = '+', .text = new_lines.items[j] });
+
+    var out: std.ArrayList(u8) = .empty;
+    var pos: usize = 0;
+    while (pos < diff_lines.items.len) {
+        if (diff_lines.items[pos].prefix != ' ') {
+            try appendDiffLine(&out, allocator, diff_lines.items[pos]);
+            pos += 1;
+            continue;
+        }
+
+        const run_start = pos;
+        while (pos < diff_lines.items.len and diff_lines.items[pos].prefix == ' ') pos += 1;
+        const run_len = pos - run_start;
+        const has_change_before = run_start > 0;
+        const has_change_after = pos < diff_lines.items.len;
+        if (!has_change_before or !has_change_after or run_len <= context_lines * 2) {
+            for (diff_lines.items[run_start..pos]) |line|
+                try appendDiffLine(&out, allocator, line);
+            continue;
+        }
+
+        for (diff_lines.items[run_start .. run_start + context_lines]) |line|
+            try appendDiffLine(&out, allocator, line);
+        try out.print(allocator, "@@ {d} unchanged lines @@\n", .{run_len - context_lines * 2});
+        for (diff_lines.items[pos - context_lines .. pos]) |line|
+            try appendDiffLine(&out, allocator, line);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// The lines of a text, where a newline ends a line rather than starting one:
+/// an empty text has no lines, and a final newline adds no empty one after it.
+fn splitLines(allocator: Allocator, text: []const u8) !std.ArrayList([]const u8) {
+    var found: std.ArrayList([]const u8) = .empty;
+    if (text.len == 0) return found;
+    const whole = if (text[text.len - 1] == '\n') text[0 .. text.len - 1] else text;
+    var it = std.mem.splitScalar(u8, whole, '\n');
+    while (it.next()) |line| try found.append(allocator, line);
+    return found;
 }
 
 // --------------------------------------------------------------- page markers
+
+/// The page range covered by a successful match.
+fn matchPages(pages: []const read.Page, found: Found) read.Span {
+    return .{
+        .from = read.pageOf(pages, found.at[0].at),
+        .to = read.pageOf(pages, found.at[found.at.len - 1].end -| 1),
+    };
+}
 
 const PageMarkers = struct {
     text: []const u8,
@@ -640,26 +854,19 @@ fn unescape(arena: Allocator, text: []const u8) !?[]const u8 {
 /// do.
 fn number(ctx: Ctx, key: []const u8) ?usize {
     const raw = ctx.env.get(key) orelse return null;
-    return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \t"), 10) catch null;
+    return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \\t"), 10) catch null;
 }
 
-fn say(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
-    try ctx.out.print("[" ++ fmt ++ "]\n", args);
-    try ctx.out.flush();
-    return 0;
+fn boolean(ctx: Ctx, key: []const u8) bool {
+    const raw = ctx.env.get(key) orelse return false;
+    return std.mem.eql(u8, std.mem.trim(u8, raw, " \\t"), "true");
 }
 
-/// A denial is the answer, in the shape of an answer. It goes to stderr and
+/// A failure is the answer, in the shape of an answer. It goes to stderr and
 /// fails, which is what makes it a 🚫 rather than a receipt somebody has to
 /// read twice to notice that nothing happened.
-fn deny(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
-    try ctx.err.print("[DENIED: " ++ fmt ++ "]\n", args);
-    try ctx.err.flush();
-    return 1;
-}
-
-fn refuse(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
-    try ctx.err.print("Denied - " ++ fmt ++ "\n", args);
+fn failure(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
+    try ctx.err.print("FAILED: " ++ fmt ++ "\n", args);
     try ctx.err.flush();
     return 1;
 }
@@ -677,6 +884,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  new_string  what to put there; empty, this removes
         \\  pages       a range the matches must start in
         \\  tolerance   percentage of anchored block lines allowed to differ (default 25)
+        \\  dry_run     boolean; show the proposed diff without writing
         \\
         \\  PAGE_LINES  logical page line target       (default 100)
         \\  PAGE_BYTES  logical page byte target       (default 10000)
@@ -923,4 +1131,11 @@ test "a scope keeps a match to the pages it was read on" {
     const half = try match(arena, body, "usize", .{ .at = 0, .end = 64 }, default_tolerance, read.default_page_lines);
     try testing.expect(half.at.len < all.at.len);
     try testing.expect(half.at.len > 0);
+}
+
+test "a new file's diff marks every line added, blank ones too" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const diff = try makeDiff(arena_state.allocator(), "", "# Haiku\n\nQuiet\n");
+    try testing.expectEqualStrings("+# Haiku\n+\n+Quiet\n", diff);
 }

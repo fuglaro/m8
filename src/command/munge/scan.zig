@@ -59,7 +59,7 @@ fn run(ctx: Ctx) !u8 {
     var vm: ?regex.Vm = null;
     if (pattern) |p| {
         const prog = switch (try regex.compile(ctx.arena, p)) {
-            .bad => |why| return deny(ctx, "the pattern has {s}", .{why}),
+            .bad => |why| return failure(ctx, "the pattern has {s}", .{why}),
             .program => |built| built,
         };
         vm = try regex.Vm.init(ctx.arena, prog);
@@ -548,8 +548,8 @@ fn number(ctx: Ctx, key: []const u8) ?usize {
     return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \t"), 10) catch null;
 }
 
-fn deny(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
-    try ctx.err.print("[DENIED: " ++ fmt ++ "]\n", args);
+fn failure(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
+    try ctx.err.print("[FAILED: " ++ fmt ++ "]\n", args);
     try ctx.err.flush();
     return 1;
 }

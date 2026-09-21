@@ -87,16 +87,34 @@ pub const Diagnostic = struct {
 
 /// Which spelling a document is in, from its first non-blank line. Null when
 /// it is not a document at all — which is how a piped prompt is told from a
-/// piped conversation.
+/// piped conversation. The first line must carry a real sigil as well as the
+/// framing header; a line that merely looks like a header is still prose.
 pub fn detect(src: []const u8) ?Mode {
+    const line = firstLine(src) orelse return null;
+    for ([_]Mode{ .m8, .md }) |m| {
+        const h = header(m);
+        if (std.mem.startsWith(u8, line, h) and
+            sigil.match(m, line[h.len..]) != null)
+            return m;
+    }
+    return null;
+}
+
+/// The framing spelling, without deciding whether its first header is valid.
+/// Parsing uses this after a caller has explicitly handed us a document, so a
+/// malformed header can still receive the useful `UnknownSigil` diagnostic.
+fn framing(src: []const u8) ?Mode {
+    const line = firstLine(src) orelse return null;
+    for ([_]Mode{ .m8, .md }) |m|
+        if (std.mem.startsWith(u8, line, header(m))) return m;
+    return null;
+}
+
+fn firstLine(src: []const u8) ?[]const u8 {
     var it = std.mem.splitScalar(u8, src, '\n');
     while (it.next()) |raw| {
         const line = trimCr(raw);
-        if (line.len == 0) continue;
-        for ([_]Mode{ .m8, .md }) |m| {
-            if (std.mem.startsWith(u8, line, header(m))) return m;
-        }
-        return null;
+        if (line.len > 0) return line;
     }
     return null;
 }
@@ -110,7 +128,7 @@ fn trimCr(raw: []const u8) []const u8 {
 /// materialised into `arena`, since stripping quotes and \r both remove bytes
 /// from the middle of a span.
 pub fn parse(arena: Allocator, src: []const u8, diag: *Diagnostic) ParseError![]Record {
-    const mode = detect(src) orelse {
+    const mode = framing(src) orelse {
         if (std.mem.trim(u8, src, " \t\r\n").len == 0) return &.{};
         diag.* = .{ .line = 1, .detail = "first line is not a record header" };
         return error.NotADocument;
@@ -340,6 +358,8 @@ test "both spellings parse the same document" {
 test "detect finds the spelling, or says it is not a document" {
     try testing.expectEqual(Mode.md, detect("#### :brain:x\n").?);
     try testing.expectEqual(Mode.m8, detect("\u{2584} \u{1F9E0}x\n").?);
+    try testing.expect(detect("#### not a sigil\n") == null);
+    try testing.expect(detect("\u{2584} not a sigil\n") == null);
     try testing.expect(detect("just some words\n") == null);
     try testing.expect(detect("") == null);
 }
