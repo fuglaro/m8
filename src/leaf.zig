@@ -3,7 +3,7 @@
 //! Which command is a build option rather than a file per program, so adding a
 //! command to the registry adds a binary to the split set and there is no
 //! second list to keep in step. The lookup is comptime, so the command this
-//! binary is, is the only one whose implementation it carries.
+//! binary is, is the only implementation it carries.
 
 const std = @import("std");
 const command = @import("command.zig");

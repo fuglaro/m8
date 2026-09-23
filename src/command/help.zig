@@ -42,6 +42,11 @@ fn run(ctx: Ctx) !u8 {
         try ctx.out.flush();
         return 0;
     }
+    if (std.mem.eql(u8, ctx.args[0], "--")) {
+        try promptPage(ctx, ctx.out);
+        try ctx.out.flush();
+        return 0;
+    }
 
     // Whatever is left names something under it, and is that command's to
     // read: `m8 help providers url` is the url page.
@@ -83,6 +88,28 @@ pub fn write(ctx: Ctx, c: api.Command, w: *std.Io.Writer) !void {
     try w.print("m8 {s} — {s}\n", .{ c.name, c.summary });
 }
 
+fn promptPage(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
+    try w.writeAll(
+        \\m8 -- — enter prompt mode
+        \\
+        \\  m8 [@AGENT|+CHAT] -- WHATEVER YOU WANT TO SAY
+        \\
+        \\`--` is a top-level marker, not a command. It says that everything
+        \\after it is prose to append to the assembled ledger. A bare `m8`,
+        \\and a name with nothing after it, enter the same mode without the
+        \\marker.
+        \\
+        \\  m8 @mathy -- "Tell me about the Riemann Sphere."
+        \\  m8 +mathy -- "Tell me more."
+        \\  cat notes.txt | m8 -- "Summarize:"
+        \\
+        \\`m8 -- --help` is a question because the marker makes the rest prose.
+        \\This page is `m8 help --`.
+        \\
+    );
+}
+
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
@@ -113,9 +140,9 @@ pub fn overview(w: *std.Io.Writer) !void {
         \\  m8 +mathy -- "Tell me more."
         \\  m8 -- "And in one sentence?"
         \\
-        \\A message command is handed a ledger assembled from the name, what
-        \\was piped in, and the prompt. `--` is one of them, so everything
-        \\after it is what you want to say. A run command takes no name and
+        \\A message command is handed a ledger assembled from the name and what
+        \\was piped in. `--` is a top-level prompt marker, so everything after
+        \\it is prose appended to that ledger. A run command takes no name and
         \\is handed stdin as it arrived.
         \\
         \\  m8 +mathy encode m8 >ledger.md

@@ -5,9 +5,9 @@
 //!   message  `[@AGENT|+CHAT] CMD [ARGS]` — handed the assembled ledger
 //!   run      `CMD [ARGS]`                — handed stdin, or nothing at all
 //!
-//! `--` is a message command like any other. It is not punctuation separating
-//! m8's arguments from yours; it is the name of the command whose arguments
-//! are prose, which is why nothing has to arbitrate between the two.
+//! `--` is not a command or punctuation separating m8's arguments from
+//! yours. It is the marker that selects the top-level prompt mode, which is
+//! why nothing has to arbitrate between the two.
 //!
 //! "Tool" means 🧰 in the language, so these are commands. `native` holds the
 //! ones that exist only to be reached by `m8 call NAME` — inbuilt tools, with
@@ -15,9 +15,8 @@
 //!
 //! The registry is written as modules rather than as command values, because
 //! a module is what carries whatever is under it. From that, `tree` names
-//! every command that could be a program of its own — which is how one
-//! registry serves both the single binary and the split set without either
-//! keeping a list the other could drift from.
+//! every command and its possible program path, which is how one registry
+//! serves both builds without either keeping a list the other could drift from.
 
 const std = @import("std");
 pub const api = @import("command/api.zig");
@@ -27,12 +26,8 @@ pub const Ctx = api.Ctx;
 pub const Tty = api.Tty;
 pub const Takes = api.Takes;
 
-/// What a bare `m8` runs, and what a name with no command after it gets.
-pub const consult = @import("command/consult.zig").name;
-
 /// The commands, as the modules that hold them.
 const modules = .{
-    @import("command/consult.zig"),
     @import("command/cat.zig"),
     @import("command/encode.zig"),
     @import("command/decode.zig"),
@@ -78,14 +73,10 @@ pub fn findAny(name: []const u8) ?Command {
     return null;
 }
 
-/// Whether `m8 call NAME` may reach this one.
-///
-/// Not `call`, which would be a loop with nothing in it, and not `--`, whose
-/// arguments are prose — a tool is handed a document, and there is no command
-/// line out here for it to have taken a prompt from. Stated once, so what
-/// `call` lists and what `call` accepts cannot drift apart.
+/// Whether `m8 call NAME` may reach this one. Stated once, so what `call`
+/// lists and what `call` accepts cannot drift apart.
 pub fn callable(c: Command) bool {
-    return c.takes != .nothing and !c.prompts;
+    return c.takes != .nothing;
 }
 
 /// What `m8 call NAME` may reach: every inbuilt tool, and every command that
@@ -112,9 +103,7 @@ pub const Node = struct {
     spec: Spec,
     /// The words that reach it, `m8` aside: `call`, `munge`, `read`.
     path: []const []const u8,
-    /// What it is called as a program of its own. A name that already opens
-    /// with `-` joins without a separator, so the command whose arguments are
-    /// prose is `m8--` rather than `m8---`.
+    /// Its logical program spelling, hyphenated from the command path.
     program: []const u8,
     children: []const Node = &.{},
 };
@@ -156,7 +145,7 @@ fn nodes(comptime ms: anytype, comptime program: []const u8, comptime path: []co
 }
 
 fn joined(comptime program: []const u8, comptime name: []const u8) []const u8 {
-    return program ++ (if (name[0] == '-') name else "-" ++ name);
+    return program ++ "-" ++ name;
 }
 
 /// What `m8 call NAME` reaches, as a node.
@@ -169,7 +158,7 @@ fn joined(comptime program: []const u8, comptime name: []const u8) []const u8 {
 pub fn callableNode(name: []const u8) ?Node {
     if (byPath(&.{ "call", name })) |n| return n;
     const n = byPath(&.{name}) orelse return null;
-    return if (n.spec.takes != .nothing and !n.spec.prompts) n else null;
+    return if (n.spec.takes != .nothing) n else null;
 }
 
 /// The command a path reaches, for a binary that is only ever that one.
@@ -296,17 +285,14 @@ const testing = std.testing;
 test "a command is found by name, and call reaches the right ones" {
     try testing.expect(find("cat") != null);
     try testing.expect(find("call") != null);
-    try testing.expect(find(consult) != null);
+    try testing.expect(find("--") == null);
     try testing.expect(find("nosuch") == null);
 
     // An inbuilt tool is reachable only through `call`.
     try testing.expect(find("ask") == null);
     try testing.expect(findCallable("ask") != null);
 
-    // `m8 call call` would be a loop with nothing in it, and `m8 call --`
-    // would be a tool taking a prompt from a command line it never saw.
     try testing.expect(findCallable("call") == null);
-    try testing.expect(findCallable(consult) == null);
     try testing.expect(findCallable("cat") != null);
     try testing.expect(findCallable("encode") != null);
 }
@@ -340,26 +326,8 @@ test "no two commands share a name" {
     };
 }
 
-test "only a message command may be preceded by a name" {
-    // A run command has no ledger for a name to go into.
-    try testing.expect(find("call").?.takes.isMessage() == false);
-    try testing.expect(find("decode").?.takes.isMessage() == false);
-    for ([_][]const u8{ consult, "cat", "encode", "send" }) |n|
-        try testing.expect(find(n).?.takes.isMessage());
-
-    // Exactly one command's arguments are prose.
-    var prompting: usize = 0;
-    for (all) |c| if (c.prompts) {
-        prompting += 1;
-    };
-    try testing.expectEqual(@as(usize, 1), prompting);
-}
-
-test "the tree names a program for every command" {
-    // What the command line spells with spaces, a program spells with
-    // hyphens — and a name that is already punctuation keeps its own.
+test "the tree gives every command a program spelling" {
     try testing.expectEqualStrings("m8-cat", byPath(&.{"cat"}).?.program);
-    try testing.expectEqualStrings("m8--", byPath(&.{consult}).?.program);
     try testing.expectEqualStrings("m8-call-munge", byPath(&.{ "call", "munge" }).?.program);
     try testing.expectEqualStrings(
         "m8-call-munge-read",
@@ -372,7 +340,6 @@ test "the tree names a program for every command" {
 
     // And back again, which is how a binary knows which command it is.
     try testing.expectEqualStrings("munge", byProgram("m8-call-munge").?.spec.name);
-    try testing.expectEqualStrings(consult, byProgram("m8--").?.spec.name);
     try testing.expect(byProgram("m8-nosuch") == null);
 }
 
@@ -417,13 +384,12 @@ fn walk(where: []const Node, seen: *std.ArrayList([]const u8)) !void {
     }
 }
 
-test "what the tree names is what a split-out binary would run" {
-    // The tree is read by a launcher and `commandAt` by the command's own
-    // root. Two walks over one registry, so they are checked against each
-    // other rather than trusted to stay in step.
+test "what the tree names is what a command binary would run" {
+    // The tree is read by a launcher and `commandAt` by a leaf's own root.
+    // Two walks over one registry, so they are checked against each other
+    // rather than trusted to stay in step.
     try testing.expectEqualStrings("munge", comptime commandAt(words("call munge")).?.name);
     try testing.expectEqualStrings("read", comptime commandAt(words("call munge read")).?.name);
-    try testing.expectEqualStrings(consult, comptime commandAt(words(consult)).?.name);
     try testing.expect(comptime commandAt(words("call cat")) == null);
     try testing.expect(comptime commandAt(words("nosuch")) == null);
 }
@@ -433,7 +399,6 @@ test "the runtime walk reaches what the comptime one does" {
     // being that command must land on the same one.
     try testing.expectEqualStrings("munge", at(&.{ "call", "munge" }).?.name);
     try testing.expectEqualStrings("read", at(&.{ "call", "munge", "read" }).?.name);
-    try testing.expectEqualStrings(consult, at(&.{consult}).?.name);
     try testing.expect(at(&.{ "call", "cat" }) == null);
     try testing.expect(at(&.{"nosuch"}) == null);
 
@@ -461,14 +426,13 @@ test "what call reaches is one rule, wherever it is read from" {
     try testing.expectEqualStrings("m8-cat", callableNode("cat").?.program);
     try testing.expectEqualStrings("m8-call-munge", callableNode("munge").?.program);
     try testing.expect(callableNode("call") == null);
-    try testing.expect(callableNode(consult) == null);
 }
 
 test "the split set is exactly the tree" {
     // `build.zig` cannot walk a comptime tree, so it reads a list. This is
     // where that list is held to the registry: a command added here and not
-    // there is a program nobody ships, and the other way round is a build
-    // that fails at the far end for no stated reason.
+    // there is a failing test rather than a program nobody ships, and the
+    // other way round is a build that fails for no stated reason.
     const listed = @embedFile("commands.txt");
 
     var count: usize = 0;

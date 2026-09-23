@@ -7,7 +7,6 @@
 #
 # Blank lines and lines starting with # are ignored.
 
---
 cat
 encode
 decode

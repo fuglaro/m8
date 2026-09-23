@@ -401,18 +401,23 @@ pub fn makeDiff(allocator: Allocator, old_text: []const u8, new_text: []const u8
         const run_start = pos;
         while (pos < diff_lines.items.len and diff_lines.items[pos].prefix == ' ') pos += 1;
         const run_len = pos - run_start;
-        const has_change_before = run_start > 0;
-        const has_change_after = pos < diff_lines.items.len;
-        if (!has_change_before or !has_change_after or run_len <= context_lines * 2) {
+        // Context is kept on the side a change actually borders, and only
+        // there: the run before the first change has nothing to explain above
+        // it, and the run after the last has nothing below, so the head and
+        // tail of the file collapse the same way a run between two changes
+        // does instead of printing whole.
+        const head: usize = if (run_start > 0) context_lines else 0;
+        const tail: usize = if (pos < diff_lines.items.len) context_lines else 0;
+        if (run_len <= head + tail) {
             for (diff_lines.items[run_start..pos]) |line|
                 try appendDiffLine(&out, allocator, line);
             continue;
         }
 
-        for (diff_lines.items[run_start .. run_start + context_lines]) |line|
+        for (diff_lines.items[run_start .. run_start + head]) |line|
             try appendDiffLine(&out, allocator, line);
-        try out.print(allocator, "@@ {d} unchanged lines @@\n", .{run_len - context_lines * 2});
-        for (diff_lines.items[pos - context_lines .. pos]) |line|
+        try out.print(allocator, "@@ {d} unchanged lines @@\n", .{run_len - head - tail});
+        for (diff_lines.items[pos - tail .. pos]) |line|
             try appendDiffLine(&out, allocator, line);
     }
     return out.toOwnedSlice(allocator);
@@ -1138,4 +1143,78 @@ test "a new file's diff marks every line added, blank ones too" {
     defer arena_state.deinit();
     const diff = try makeDiff(arena_state.allocator(), "", "# Haiku\n\nQuiet\n");
     try testing.expectEqualStrings("+# Haiku\n+\n+Quiet\n", diff);
+}
+
+/// A numbered line per line, to build a file long enough that a diff of it has
+/// something to leave out.
+fn numberedLines(allocator: Allocator, count: usize, changed: usize) ![]u8 {
+    var text: std.ArrayList(u8) = .empty;
+    for (1..count + 1) |k| {
+        if (k == changed)
+            try text.print(allocator, "line {d} changed\n", .{k})
+        else
+            try text.print(allocator, "line {d}\n", .{k});
+    }
+    return text.toOwnedSlice(allocator);
+}
+
+test "a diff leaves out the file above and below the change, not just between" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const diff = try makeDiff(arena, try numberedLines(arena, 40, 0), try numberedLines(arena, 40, 20));
+    try testing.expectEqualStrings(
+        \\@@ 16 unchanged lines @@
+        \\ line 17
+        \\ line 18
+        \\ line 19
+        \\-line 20
+        \\+line 20 changed
+        \\ line 21
+        \\ line 22
+        \\ line 23
+        \\@@ 17 unchanged lines @@
+        \\
+    , diff);
+}
+
+test "a diff between two changes keeps context on both sides" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const old_text = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\n";
+    const new_text = "A\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nL\n";
+    try testing.expectEqualStrings(
+        \\-a
+        \\+A
+        \\ b
+        \\ c
+        \\ d
+        \\@@ 4 unchanged lines @@
+        \\ i
+        \\ j
+        \\ k
+        \\-l
+        \\+L
+        \\
+    , try makeDiff(arena, old_text, new_text));
+}
+
+test "a diff short enough to print whole keeps every line" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const diff = try makeDiff(arena, try numberedLines(arena, 5, 0), try numberedLines(arena, 5, 3));
+    try testing.expectEqualStrings(
+        \\ line 1
+        \\ line 2
+        \\-line 3
+        \\+line 3 changed
+        \\ line 4
+        \\ line 5
+        \\
+    , diff);
 }

@@ -57,7 +57,7 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
 
     // The flag is m8's wherever it is written, so a command split out answers
     // it the way the launcher above it would have.
-    if (c.help) |page| if (!c.prompts and api.wantsHelp(args)) {
+    if (c.help) |page| if (api.wantsHelp(args)) {
         ctx.args = args[1..];
         try page(ctx, out);
         try out.flush();
@@ -166,6 +166,9 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
         error.NoProvider => try err.writeAll(
             "m8: that ledger names a model but not whose; say which, as `m8 send PROVIDER`\n",
         ),
-        else => try err.print("m8 {s}: {s}\n", .{ name, @errorName(e) }),
+        else => if (name.len == 0)
+            try err.print("m8: {s}\n", .{@errorName(e)})
+        else
+            try err.print("m8 {s}: {s}\n", .{ name, @errorName(e) }),
     }
 }

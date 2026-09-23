@@ -2,8 +2,9 @@
 //!
 //! m8 is built two ways from one registry. The single binary holds every
 //! command and reaches one by calling it; the split set is a program per
-//! command, and reaching one is spawning it. Which of the two a binary does is
-//! decided here and nowhere else, so no command has an opinion about it.
+//! command, and reaching one is spawning it. Prompt mode is part of the
+//! launcher in both builds. Which of the two a binary does is decided here and
+//! nowhere else, so no command has an opinion about it.
 //!
 //! The split set is the guardrail rather than the optimisation. A command that
 //! reaches into another command's module still compiles in the single binary
@@ -18,6 +19,7 @@
 
 const std = @import("std");
 const api = @import("command/api.zig");
+const converse = @import("converse.zig");
 const Ctx = api.Ctx;
 
 /// Whether the commands under this one are programs of their own.
@@ -43,6 +45,8 @@ pub fn sibling(arena: std.mem.Allocator, self: []const u8, program: []const u8) 
 /// How the command under this one is reached. A launcher decides this by
 /// which build it is, and says which rather than being asked twice.
 pub const Reach = union(enum) {
+    /// The top-level prompt mode, which is not a command.
+    prompt,
     /// The command itself, held in this binary.
     call: api.Command,
     /// The name of the program that is it.
@@ -50,14 +54,13 @@ pub const Reach = union(enum) {
 };
 
 /// Run the command under this one, whichever way this binary reaches it.
-///
-/// Callers pick the `Reach` under `if (launch.split)`, which is comptime — so
-/// a split-out launcher never names a command value, and carries none of the
-/// implementations it would otherwise drag in to name one.
 pub fn under(ctx: Ctx, reach: Reach, args: []const []const u8, in: Stdin) !u8 {
+    if (reach == .prompt) return prompt(ctx, args, in);
+
     const c = switch (reach) {
         .spawn => |program| return spawn(ctx, program, args, in),
         .call => |c| c,
+        .prompt => unreachable,
     };
 
     var inner = ctx;
@@ -71,6 +74,22 @@ pub fn under(ctx: Ctx, reach: Reach, args: []const []const u8, in: Stdin) !u8 {
         },
     };
     return c.run(inner);
+}
+
+/// Run the top-level prompt mode. Unlike a command, it has no registry entry
+/// or child program; the launcher has already assembled the ledger.
+fn prompt(ctx: Ctx, args: []const []const u8, in: Stdin) !u8 {
+    var inner = ctx;
+    inner.args = args;
+    inner.in = switch (in) {
+        .bytes => |b| b,
+        .inherited => blk: {
+            var buf: [64 * 1024]u8 = undefined;
+            break :blk try api.readDocument(ctx.io, ctx.arena, &buf);
+        },
+    };
+    try converse.run(inner, "");
+    return 0;
 }
 
 /// Run it as a process.

@@ -1,9 +1,44 @@
 
 
-# ===
+# TODO
+
+# DESIGN
+
+## TUI
+
+# ==== MUSINGS BELOW ====
+
+# ====
+
+```bash
+m8 @pagey # reset the chat to pagey but doesn't say aything.
+```
+
+# ====
+Consider the following.
+
+* Local Wikipedia search with a vector database.
+* Native functions.
+* Tools responding with a text response.
+* MCP output schema.
+* Wrapper scripts in a config folder, for the commands a
+  template cannot say.
+* A command that writes the core config defaults, for
+  extending afterwards.
+* Customisable caps on loops that do not end — a cyclic
+  agent check, or a model calling tools forever.
+* Templating setups that support AGENTS.md.
+* How a person calls a tool at a chat.
+
+# ====
+
+Minimalistic standalone RIFF terminal tool composable into simple TUI.
+See RIFF.md.
+
+# ====
 
 Ochistrating multiple background long running processes.
-Not tmux - needs to be mob managed through process handles.
+Not tmux - needs to be mob scoped and  managed through process handles.
 
 m8 call watch
 
@@ -134,6 +169,14 @@ Comptime elimination of OS specific code depending on target build.
 
 
 Try to squash out remaining {{CODE}} and {{M8}} framework level placeholders.
+
+# ====
+
+Reformat providers.json into a native m8 form?
+
+# ====
+
+User only-callable tool?
 
 # ====
 
@@ -482,14 +525,8 @@ Maybe we just make a folder of example setups.
 
 
 # ====
+
 Rename CALL_ID with propper prefix M8_CALL_ID
-
-# ==== DONE
-
-Inline `{{ARG}}` injection in an argv comes out of the framework. The
-environment is the only way a call is carried, and `m8 call args` expands it
-from outside. Specified above under M8 CALL ARGS.
-
 
 # ==== REVIEW SUGGESTIONS
 

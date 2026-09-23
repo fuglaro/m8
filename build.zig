@@ -13,13 +13,7 @@ pub fn build(b: *std.Build) void {
     b.step("run", "Run m8").dependOn(&run.step);
 
     // The split set: a program per command, reaching the next by spawning it.
-    // Same sources, same registry — only how a launcher reaches what is under
-    // it differs, and that is one comptime branch in `launch.zig`.
-    //
-    // Its `m8` is the same launcher from the same root, built knowing the
-    // commands are programs. It assembles a ledger and spawns whatever was
-    // named, and holds no command at all — which is the whole of what makes
-    // the set worth shipping to somewhere that counts megabytes.
+    // Bare m8's prompt mode is part of the launcher, not a command in the set.
     const split = b.step("split", "Build the commands as separate programs");
     split.dependOn(&b.addInstallArtifact(
         command(b, target, optimize, "m8", "src/main.zig", true, ""),
@@ -83,21 +77,21 @@ fn options(b: *std.Build, split: bool, path: []const u8) *std.Build.Step.Options
     return o;
 }
 
-/// What a command is called as a program: its path, hyphenated. A name that is
-/// already punctuation keeps its own, so `--` is `m8--` rather than `m8---`.
+/// What a split-out command is called as a program: its path, hyphenated.
 fn program(b: *std.Build, path: []const u8) []const u8 {
     var name = std.ArrayList(u8).initCapacity(b.allocator, path.len + 4) catch @panic("OOM");
     name.appendSlice(b.allocator, "m8") catch @panic("OOM");
     var it = std.mem.splitScalar(u8, path, ' ');
     while (it.next()) |word| {
         if (word.len == 0) continue;
-        if (word[0] != '-') name.append(b.allocator, '-') catch @panic("OOM");
+        name.append(b.allocator, '-') catch @panic("OOM");
         name.appendSlice(b.allocator, word) catch @panic("OOM");
     }
     return name.items;
 }
 
-/// The split set, from the file the registry's own test checks itself against.
+/// The split-out commands, from the file the registry's own test checks
+/// itself against.
 fn paths(b: *std.Build) []const []const u8 {
     const src = b.build_root.handle.readFileAlloc(
         b.graph.io,

@@ -248,9 +248,9 @@ optimisation.
 
 * `zig build` is the single binary. A launcher reaching
   a command calls it.
-* `zig build split` is a program per command — `m8-cat`,
-  `m8-call-munge-read`, `m8--` — and a launcher that
-  holds none of them. Reaching a command is spawning it.
+* `zig build split` is a program per command — `m8-cat` and
+  `m8-call-munge-read` — plus a launcher. Prompt mode, selected by
+  `--` or by a bare `m8`, is launcher syntax; commands are spawned.
 
 The difference is one comptime branch. What a launcher
 reads is a command's *spec* — its name, what it takes,
@@ -402,13 +402,13 @@ m8 @=/tduyxbutjb -- "Tell me more."
   handed the ledger that assembles. A **run command**
   takes no name, because there is no ledger for one to
   go into.
-* `--` is a message command, not punctuation. It is the
-  one whose arguments are prose, so everything after it
-  is what you want to say and nothing has to arbitrate
+* `--` is a top-level prompt marker, not a command or
+  punctuation. Its arguments are prose, so everything after
+  it is what you want to say and nothing has to arbitrate
   between m8's arguments and yours.
-* A bare `m8`, and a name with nothing after it, run
-  `--`. So consulting an agent and running a filter are
-  one path.
+* A bare `m8`, and a name with nothing after it, enter
+  prompt mode without the marker. So consulting an agent
+  and running a filter are one path.
 * The name is appended as the 🧠 it is, not as what it
   expands to, so a saved turn names its parent instead
   of copying it. Expanding happens in whichever command
@@ -446,10 +446,10 @@ m8 providers url --help    the same page again
 ```
 
 `--help` is m8's rather than any command's, so no command
-has to parse it and no two answer it differently. The one
-exception is `--`, whose arguments are prose: there it is
-something you said, and `m8 help --` is how that page is
-asked for.
+has to parse it and no two answer it differently. A standalone
+`--` is handled before command dispatch because its arguments
+are prose, and `m8 help --` is how that marker's page is asked
+for.
 
 A page you asked for is written to stdout, where it can
 be paged and piped. A page handed back instead of what
@@ -890,21 +890,6 @@ means is decided by the sigil above it.
 
 A \r immediately before a \n is stripped, exactly
 one, so \r\r\n ends content in a literal \r.
-
-### TODO: Consider the following.
-
-* Local Wikipedia search with a vector database.
-* Native functions.
-* Tools responding with a text response.
-* MCP output schema.
-* Wrapper scripts in a config folder, for the commands a
-  template cannot say.
-* A command that writes the core config defaults, for
-  extending afterwards.
-* Customisable caps on loops that do not end — a cyclic
-  agent check, or a model calling tools forever.
-* Templating setups that support AGENTS.md.
-* How a person calls a tool at a chat.
 
 ## Sigils
 

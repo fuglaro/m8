@@ -11,9 +11,10 @@
 //! handed that ledger; a run command takes no name and is handed stdin, or
 //! nothing at all.
 //!
-//! `--` is a message command, so there is no separator anywhere in this and
-//! nothing has to decide whose arguments are whose. A bare `m8` runs it, which
-//! is why consulting an agent and running a filter are one path.
+//! `--` is the top-level prompt marker, so there is no separator anywhere in
+//! this and nothing has to decide whose arguments are whose. A bare `m8`
+//! enters the same mode, which is why consulting an agent and running a filter
+//! are one path.
 //!
 //! A name is appended as the 🧠 it is, not as what it expands to. Expanding
 //! happens in whichever command needs it, which is what keeps a saved turn
@@ -22,7 +23,8 @@
 //! `--help` is read here rather than by whichever command was named, so no
 //! command has to remember to answer it and no two answer it differently. It
 //! names the `help` command, which is why `m8 send --help` and `m8 help send`
-//! are one page. The exception is `--`, whose arguments are prose.
+//! are one page. A standalone `--` is handled before command dispatch because
+//! its arguments are prose.
 //!
 //! A terminal is written the rendered spelling and everything else markdown,
 //! decided once here and carried into every writer.
@@ -82,8 +84,8 @@ pub fn main(init: std.process.Init) !u8 {
     // The single binary installed under one of the command names *is* that
     // command, the way a symlinked busybox is. Answering the same as the
     // program of that name is what keeps one installation from behaving
-    // unlike the other. The lean launcher is only ever `m8`, and asking would
-    // cost it the registry it is built without.
+    // unlike the other. The split launcher is only ever `m8`; prompt mode is
+    // handled there, while the other commands remain sibling programs.
     if (!launch.split) {
         if (command.byProgram(std.fs.path.basename(self))) |node|
             return harness.leaf(
@@ -107,9 +109,9 @@ pub fn main(init: std.process.Init) !u8 {
 
     var rest = args;
 
-    // A name, then a command, then that command's arguments. Nothing is
-    // guessed: a name is written `@x` or `+x`, and everything after a command
-    // belongs to it — including a prompt, since `--` is a command too.
+    // A name, then either the prompt marker or a command and that command's
+    // arguments. Nothing is guessed: a name is written `@x` or `+x`, and the
+    // standalone marker makes everything after it prose.
     var name: []const u8 = "";
     var named = false;
     // Which half of what it names. `@` and `+` want what a file says; `^`
@@ -138,15 +140,13 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
-    // A name with nothing after it is still a consultation; so is a bare `m8`.
-    //
-    // What is read here is the *spec* of what was named — what it takes, and
-    // whether its arguments are prose. Nothing here needs the command itself,
-    // which is what lets the lean launcher assemble for a command it does not
-    // hold.
+    // A bare m8, or a name with nothing after it, enters prompt mode. A
+    // standalone `--` selects that same mode explicitly; it is syntax here,
+    // not a command in the registry.
     const helper = command.byPath(&.{help.name}).?;
-    var cmd = command.byPath(&.{command.consult}).?;
+    var cmd: ?command.Node = null;
     var cmd_args: []const []const u8 = &.{};
+    var prompt: []const u8 = "";
     var asked_for_help = false;
     if (rest.len > 0) {
         // `m8 --help [COMMAND]` is `m8 help [COMMAND]`. The flag is a way of
@@ -155,6 +155,8 @@ pub fn main(init: std.process.Init) !u8 {
             cmd = helper;
             cmd_args = @ptrCast(rest[1..]);
             asked_for_help = true;
+        } else if (std.mem.eql(u8, rest[0], "--")) {
+            prompt = try std.mem.join(arena, " ", rest[1..]);
         } else {
             cmd = command.byPath(&.{rest[0]}) orelse {
                 try err.print("m8: '{s}' is not an agent, a chat, or a command\n", .{rest[0]});
@@ -168,37 +170,30 @@ pub fn main(init: std.process.Init) !u8 {
 
     // A run command takes no name, because there is no ledger for one to go
     // into. Saying so beats quietly dropping what was typed.
-    if (named and !cmd.spec.takes.isMessage()) {
-        try err.print("m8 {s}: {s}, so there is nowhere to put a name\n", .{
-            cmd.spec.name,
-            if (cmd.spec.takes == .stdin) "takes stdin as it is" else "is handed no ledger",
-        });
-        try err.flush();
-        return 1;
+    if (cmd) |node| {
+        if (named and !node.spec.takes.isMessage()) {
+            try err.print("m8 {s}: {s}, so there is nowhere to put a name\n", .{
+                node.spec.name,
+                if (node.spec.takes == .stdin) "takes stdin as it is" else "is handed no ledger",
+            });
+            try err.flush();
+            return 1;
+        }
     }
 
     // `m8 COMMAND --help` is `m8 help COMMAND` too, read here so that no
-    // command has to parse the flag and no two answer it differently. Not for
-    // `--`, whose arguments are prose: there it is something somebody said.
-    if (!asked_for_help and !cmd.spec.prompts and command.api.wantsHelp(cmd_args)) {
+    // command has to parse the flag and no two answer it differently.
+    if (cmd != null and !asked_for_help and command.api.wantsHelp(cmd_args)) {
         var words: std.ArrayList([]const u8) = .empty;
-        try words.append(arena, cmd.spec.name);
+        try words.append(arena, cmd.?.spec.name);
         try words.appendSlice(arena, cmd_args[1..]);
         cmd = helper;
         cmd_args = words.items;
     }
 
-    // One command's arguments are prose. It is read here rather than there
-    // because a prompt goes into the ledger, and the ledger is assembled here.
-    var prompt: []const u8 = "";
-    if (cmd.spec.prompts) {
-        prompt = try std.mem.join(arena, " ", cmd_args);
-        cmd_args = &.{};
-    }
-
+    const takes: command.Takes = if (cmd) |node| node.spec.takes else .ledger;
     const dirs = try config.discover(arena, io, init.environ_map);
-
-    const assembled = gather(io, arena, dirs, name, named, as, prompt, cmd.spec.takes) catch |e| {
+    const assembled = gather(io, arena, dirs, name, named, as, prompt, takes) catch |e| {
         switch (e) {
             // Only the command line's own name reaches here; anything inside a
             // ledger is the command's business.
@@ -213,32 +208,31 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     // Nothing piped and nothing said is somebody finding out what m8 is.
-    if (cmd.spec.prompts and assembled.said_nothing) {
+    if (cmd == null and assembled.said_nothing) {
         try help.overview(err);
         try err.flush();
         return 1;
     }
 
-    // What the child is handed, which is the promise this launcher made when
-    // it decided what to assemble. A command that takes stdin as it arrives
-    // keeps the descriptor; everything else gets the bytes read for it.
-    const input: launch.Stdin = switch (cmd.spec.takes) {
+    const input: launch.Stdin = switch (takes) {
         .nothing => .inherited,
         else => .{ .bytes = assembled.document },
     };
 
-    // The one place this launcher's two builds differ. The branch is
-    // comptime: the lean one never names a command value, and so carries none
-    // of what a command value would drag in behind it.
-    const reach: launch.Reach = if (launch.split)
-        .{ .spawn = cmd.program }
+    const reach: launch.Reach = if (cmd == null)
+        .prompt
+    else if (!launch.split)
+        .{ .call = command.at(cmd.?.path).? }
     else
-        .{ .call = command.at(cmd.path).? };
+        .{ .spawn = cmd.?.program };
 
     // What a complaint names. The command under this one parses its own
     // arguments, so this launcher reaches `shield ask` by calling `shield` —
     // but `m8 shield ask:` says more than `m8 shield:` and costs nothing.
-    const called = try command.named(arena, cmd.path, cmd_args);
+    const called = if (cmd) |node|
+        try command.named(arena, node.path, cmd_args)
+    else
+        "";
 
     return harness.run(io, arena, init.environ_map, reach, called, cmd_args, input, self, out, err);
 }

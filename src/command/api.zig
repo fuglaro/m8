@@ -79,9 +79,10 @@ pub const Tty = struct {
 
 /// What a command is, which is also what it is handed on `in`.
 ///
-/// A **message command** may be preceded by an `@AGENT` or `+CHAT`. The name,
-/// stdin and the prompt are assembled into a ledger, and that ledger is what
-/// it gets. `--`, `cat`, `encode` and `send` are these.
+/// A **message command** may be preceded by an `@AGENT` or `+CHAT`. The name
+/// and stdin are assembled into a ledger, and that ledger is what it gets.
+/// `cat`, `encode` and `send` are these. Prompt mode is handled by the
+/// top-level launcher rather than by a command.
 ///
 /// A **run command** takes no name, because there is no ledger for one to go
 /// into. It either reads stdin as it arrives — which is how `decode` gets to
@@ -114,7 +115,6 @@ pub const Spec = struct {
     name: []const u8,
     summary: []const u8,
     takes: Takes = .ledger,
-    prompts: bool = false,
 };
 
 pub const Command = struct {
@@ -122,10 +122,6 @@ pub const Command = struct {
     summary: []const u8,
     /// What `in` is filled with, and so what kind of command this is.
     takes: Takes = .ledger,
-    /// Whether this command's arguments are a prompt, appended to the ledger
-    /// as a 🙋 rather than read by the command. Only `--` is: it is the one
-    /// whose arguments are prose.
-    prompts: bool = false,
     /// The exit status. A filter returns 0; `call` returns whatever it ran.
     run: *const fn (Ctx) anyerror!u8,
     /// This command at length: what it takes, what it answers with, and
@@ -148,7 +144,6 @@ pub const Command = struct {
             .name = c.name,
             .summary = c.summary,
             .takes = c.takes,
-            .prompts = c.prompts,
         };
     }
 };
@@ -157,8 +152,7 @@ pub const Command = struct {
 ///
 /// Asked once, here, so no command has to remember to answer `--help` and no
 /// two answer it differently. m8 reads it before a command sees its arguments;
-/// the exception is `--`, whose arguments are prose, where it is something
-/// somebody said.
+/// a prompt after the standalone `--` marker is the top-level exception.
 pub fn wantsHelp(args: []const []const u8) bool {
     if (args.len == 0) return false;
     return std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h");
