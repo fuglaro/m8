@@ -1,7 +1,25 @@
 
-# mEight - The Composable Shell Harness
+# mEight - The Composable Agentic Shell Harness
 
-Bringing the `m8` command to the terminal.
+The command-line-first agentic harness - fully embracing the shell.
+
+```
+fuglaro@localhost> m8 @pagey -- 'One word -> do you like Haiku?'
+▄ 🤖
+│ Yes.
+
+▄ 🧠=/swlyayqtjk
+fuglaro@localhost> m8 -- 'Throw me a quick one please.'
+▄ 🤖
+│ Moonlight on still ponds
+│ Crickets stitch the dark with song
+│ Dawn waits behind hills
+
+▄ 🧠=/psbarddrym
+fuglaro@localhost>
+```
+
+
 
 This framework brings the power of agents to the shell,
 rather than being limited to the other way around,

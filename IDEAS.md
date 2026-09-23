@@ -1,288 +1,56 @@
 
-# ==== [DONE]
 
-* Make multi-line edit uniqueness also activate on multi-line new_string.
+# ===
 
-### Juggling pagination
+Ochistrating multiple background long running processes.
+Not tmux - needs to be mob managed through process handles.
 
-- For a function spanning multiple pages, I had to read one range, then another, then reconstruct the exact replacement.
-* Extend use pages=2-4 to continue to "... to continue or pages 1-4 to review a larger area"
+m8 call watch
 
-### Read range clarity
+# ====
 
-* Considered: Add trailing metadata lines for each subsequent page returned:
-  `[Page 2 (lines 90-130) begins at: Line text up to 150 characters...]`
-* Considered: Or interleave `[Page 2 (lines ...)]` within results.
-* Interleave `―――――――― [Page 2 (Lines 101-200)] ―――――――――`
-* Detect this format in old_string and new_string just before the block line forgiveness.
-  - If in old_string, ignore if page_break is in range of PAGE_LINES,
-    otherwise reject indicating reason similar to other mismatch denials.
-    If also in new_string, strip those lines from new_string.
-  - If not in old_string, don't ignore or strip, stay as old behavior.
+Compressor / packer agent and associated tool.
 
-### Read tool clarity
+# ====
 
-src/command/munge/read.zig
+Make all the inbuilt tools runnable under m8 call args by having them accept arguments.
 
-* Add one of the following before trailing line for interpretation clarity:
-  `―――――――――――――――――――――――― [End of page 2] ――――――――――――――――――――――――`
-  `―――――――――――――――――――――――― [End of file] ――――――――――――――――――――――――`
-  and no longer put End of file into the trailer line itself.
+# ====
 
-### Write tool clarity
+Command to unwrap last robot message and put it on stdout.
 
-src/command/munge/write.zig
+# ====
 
-* Remove [ ] around lines for write response since there is no interleaved raw content.
+Build options - put some sub commands in a self-contained binary with
+others separate as standalone callables. Build via standalones=... or something.
+How big is the framework build? The build with defaults including the opinionated tools
+but not the fun stuff like Zork. Classify them in comptime groups. Framework, defaults fun.
 
-#### Post write failure clarity
+# ====
 
-src/command/munge/write.zig
+Defaults / example generator in a separate sub command.
 
-Nudge models away from silently missing that their change did not land.
-This covers both a bad match and a bad page scope.
+# ====
 
-* If no match is found in page scope, first check for a match
-  in the file.
-  - If a single match is found, add output:
-    ```
-    No matches were found in scoped pages=A-B,
-    but 1 match was detected in out of scope pages=X-Y.
-    No changes were applied!
-    Adjust pages or old_string, rereading if needed, then retry.
-    
-    ```
-  - If multiple matches were found, add output:
-    ```
-    No matches were found in scoped pages=A-B,
-    but N matches were detected in out of scope pages.
-    No changes were applied!
-    Adjust pages or old_string, rereading if needed, then retry.
-    ```
-  - If no matches were found, add output:
-    ```
-    No matches were found in the file.
-    No changes were applied!
-    Adjust old_string, rereading if needed, then retry.
-    ```
+Set up subagents through tools.
 
-Ideally this is implemented reusing match detection code so is a simple addition.
+In README talk about how subagents don't need self-spawning when you can call them fresh or reply via commdns line. Named chats must be makable from the command line.
+Make a named chat spawner command usable as a tool!
 
-#### Post write change clarity
+What is the TUI for this? tmux sessions? Like dmux wrapped? tmux is shield-dangerous!
 
-src/command/munge/write.zig
+# ====
 
-```
-Replaced 1 match on page 2
-```
-is updated to say:
-```
-Replaced 1 match on page 2, changing lines 130-176
- fn foo() void {
-     const a = 1;
-     const b = 2;
--    oldThing();
-+    newThing();
-     stepOne();
-     stepTwo();
-     stepThree();
-@@ 27 unchanged lines @@
-     almostDone();
-     nearlyDone();
-     finalStep();
--    return old_value;
-+    return new_value;
- }
-```
+Give one a tool to play Zork and watch it.
 
-Add a dry-run boolean parameter to munge write (routed in like new_string /
-M8_ARG_NEW_STRING) which doesn't apply anything but gives
-a line prefix of `Proposed changes would result in:` e.g:
-```
-Proposed changes would result in:
-Replaced 1 match on page 2, changing lines 130-176
- fn foo() void {
-     const a = 1;
-     const b = 2;
--    oldThing();
-+    newThing();
-     stepOne();
-     stepTwo();
-     stepThree();
-@@ 27 unchanged lines @@
-     almostDone();
-     nearlyDone();
-     finalStep();
--    return old_value;
-+    return new_value;
- }
-```
+# ====
 
-Implementation should be simple. E.g:
-```
-pub fn makeDiff(
-    allocator: std.mem.Allocator,
-    old_text: []const u8,
-    new_text: []const u8,
-) ![]u8 {
-    const context_lines: usize = 3;
+Planner agent which works on PLAN.md or dev/plans/PLAN_X.md
+Manages TODO.md also.
 
-    var old_lines = std.ArrayList([]const u8).init(allocator);
-    defer old_lines.deinit();
+# ====
 
-    var new_lines = std.ArrayList([]const u8).init(allocator);
-    defer new_lines.deinit();
-
-    var old_it = std.mem.splitScalar(u8, old_text, '\n');
-    while (old_it.next()) |line|
-        try old_lines.append(line);
-
-    var new_it = std.mem.splitScalar(u8, new_text, '\n');
-    while (new_it.next()) |line|
-        try new_lines.append(line);
-
-    const n = old_lines.items.len;
-    const m = new_lines.items.len;
-    const width = m + 1;
-
-    const dp = try allocator.alloc(usize, (n + 1) * (m + 1));
-    defer allocator.free(dp);
-    @memset(dp, 0);
-
-    // Build LCS table.
-    var i = n;
-    while (i > 0) {
-        i -= 1;
-
-        var j = m;
-        while (j > 0) {
-            j -= 1;
-
-            if (std.mem.eql(u8, old_lines.items[i], new_lines.items[j])) {
-                dp[i * width + j] =
-                    dp[(i + 1) * width + (j + 1)] + 1;
-            } else {
-                dp[i * width + j] = @max(
-                    dp[(i + 1) * width + j],
-                    dp[i * width + (j + 1)],
-                );
-            }
-        }
-    }
-
-    const DiffLine = struct {
-        prefix: u8,
-        text: []const u8,
-    };
-
-    var lines = std.ArrayList(DiffLine).init(allocator);
-    defer lines.deinit();
-
-    // Walk LCS table to build the diff.
-    i = 0;
-    var j: usize = 0;
-
-    while (i < n and j < m) {
-        if (std.mem.eql(u8, old_lines.items[i], new_lines.items[j])) {
-            try lines.append(.{
-                .prefix = ' ',
-                .text = old_lines.items[i],
-            });
-            i += 1;
-            j += 1;
-        } else if (dp[(i + 1) * width + j] >= dp[i * width + (j + 1)]) {
-            try lines.append(.{
-                .prefix = '-',
-                .text = old_lines.items[i],
-            });
-            i += 1;
-        } else {
-            try lines.append(.{
-                .prefix = '+',
-                .text = new_lines.items[j],
-            });
-            j += 1;
-        }
-    }
-
-    while (i < n) : (i += 1) {
-        try lines.append(.{
-            .prefix = '-',
-            .text = old_lines.items[i],
-        });
-    }
-
-    while (j < m) : (j += 1) {
-        try lines.append(.{
-            .prefix = '+',
-            .text = new_lines.items[j],
-        });
-    }
-
-    var out = std.ArrayList(u8).init(allocator);
-    errdefer out.deinit();
-
-    // Collapse long unchanged runs, preserving 3 lines of context
-    // on either side of a changed region.
-    var pos: usize = 0;
-
-    while (pos < lines.items.len) {
-        if (lines.items[pos].prefix != ' ') {
-            try appendDiffLine(&out, lines.items[pos]);
-            pos += 1;
-            continue;
-        }
-
-        const run_start = pos;
-
-        while (pos < lines.items.len and lines.items[pos].prefix == ' ')
-            pos += 1;
-
-        const run_len = pos - run_start;
-        const has_change_before = run_start > 0;
-        const has_change_after = pos < lines.items.len;
-
-        // Leading/trailing context, or a short unchanged run:
-        // show the whole thing.
-        if (!has_change_before or
-            !has_change_after or
-            run_len <= context_lines * 2)
-        {
-            for (lines.items[run_start..pos]) |line|
-                try appendDiffLine(&out, line);
-
-            continue;
-        }
-
-        for (lines.items[run_start .. run_start + context_lines]) |line|
-            try appendDiffLine(&out, line);
-
-        try out.writer().print(
-            "@@ {d} unchanged lines @@\n",
-            .{run_len - context_lines * 2},
-        );
-
-        for (lines.items[pos - context_lines .. pos]) |line|
-            try appendDiffLine(&out, line);
-    }
-
-    return out.toOwnedSlice();
-}
-```
-
-# ==== [DONE]
-
-Bugfix: only go m8 language mode when starting on a real sigil, otherwise stay raw.
-e.g:
-```
-m8 -- <<'='
-#### Should be raw because no real sigil.
-=
-```
-```
-m8: UnknownSigil
-```
-This should realise it is not a sigil, and proceed in raw mode by checking far enough to confirm if the sigil is valid.
+Generic MCP runner inbuilt tool command.
 
 # ====
 
