@@ -1,4 +1,4 @@
-//! `providers inbuilt` — answer the request here, with no network.
+//! `providers toy` — answer the request here, with no network.
 //!
 //! These exist so that the loop, tool calling, and picking up a call that was
 //! never answered can all be run without a model. `api: "m8"`, so the request
@@ -16,7 +16,7 @@ const Ctx = api.Ctx;
 const testing = std.testing;
 
 pub const command: api.Command = .{
-    .name = "inbuilt",
+    .name = "toy",
     .summary = "answer it here, with no network",
     // The request is read from the descriptor as it arrives, not handed
     // over: `url` streams it straight back out again.
@@ -27,9 +27,9 @@ pub const command: api.Command = .{
 
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
-        \\m8 providers inbuilt — answer the request here, with no network
+        \\m8 providers toy — answer the request here, with no network
         \\
-        \\  ... | m8 providers inbuilt
+        \\  ... | m8 providers toy
         \\
         \\Speaks m8, so the request is the ledger itself and the answer is the
         \\records it adds to one. It answers without a network, which is what
@@ -40,14 +40,14 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\
     );
-    for (models) |m| try w.print("  /inbuilt/{s: <14} {s}\n", .{ m.name, m.summary });
+    for (models) |m| try w.print("  /toy/{s: <14} {s}\n", .{ m.name, m.summary });
     try w.writeAll(
         \\
-        \\  m8 @/inbuilt/echo hello
-        \\  m8 @/inbuilt/you-are anything
-        \\  m8 @/inbuilt/runner 'RUN;;;say;;;text=hi'
-        \\  m8 @/inbuilt/eliza "I am not sleeping well."
-        \\  m8 @/inbuilt/Z-Machine/zork1 "I would like to play"
+        \\  m8 @/toy/echo hello
+        \\  m8 @/toy/you-are anything
+        \\  m8 @/toy/runner 'RUN;;;say;;;text=hi'
+        \\  m8 @/toy/eliza "I am not sleeping well."
+        \\  m8 @/toy/Z-Machine/zork1 "I would like to play"
         \\
         \\A name ending in ... is a family rather than one model: what follows
         \\it is the model's own business. Z-Machine takes the name of a story
@@ -79,7 +79,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         try w.writeAll("  put one there and it is a model\n");
     } else {
         try w.print("\nstory files ({s}):\n\n", .{zmachine.subdir});
-        for (stories) |one| try w.print("  /inbuilt/{s}{s}\n", .{ zmachine.prefix, one });
+        for (stories) |one| try w.print("  /toy/{s}{s}\n", .{ zmachine.prefix, one });
     }
     try w.writeByte('\n');
 
@@ -91,7 +91,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\The entry, which m8 ships with:
         \\
-        \\  "inbuilt": { "cmd": ["m8", "providers", "inbuilt"], "api": "m8" }
+        \\  "toy": { "cmd": ["m8", "providers", "toy"], "api": "m8" }
         \\
         \\It reads nothing from the environment.
         \\
@@ -100,7 +100,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
 
 // -------------------------------------------------------------------- url
 
-/// One model `inbuilt` serves. They are m8's own, and they exist so that the
+/// One model `toy` serves. They are m8's own, and they exist so that the
 /// loop can be run without a network.
 ///
 /// A name ending in `...` advertises a *family* rather than one model: what
@@ -168,7 +168,7 @@ fn run(ctx: Ctx) !u8 {
     // request, so what was wanted is the page rather than a provider left
     // waiting for an end of file that is not coming.
     if (std.Io.File.stdin().isTty(ctx.io) catch false) {
-        try ctx.err.writeAll("m8 providers inbuilt: no request on stdin\n");
+        try ctx.err.writeAll("m8 providers toy: no request on stdin\n");
         try page(ctx, ctx.err);
         try ctx.err.flush();
         return 1;
@@ -183,7 +183,7 @@ fn run(ctx: Ctx) !u8 {
     const mode = doc.detect(request) orelse .md;
 
     const m = (try ledger.runsOn(ctx.arena, records)) orelse {
-        try ctx.err.writeAll("m8 providers inbuilt: the request names no model\n");
+        try ctx.err.writeAll("m8 providers toy: the request names no model\n");
         try ctx.err.flush();
         return 1;
     };
@@ -193,8 +193,8 @@ fn run(ctx: Ctx) !u8 {
             return candidate.answer(ctx, mode, records, m.name);
     }
 
-    try ctx.err.print("m8 providers inbuilt: no model named '{s}'\n", .{m.name});
-    for (models) |candidate| try ctx.err.print("  /inbuilt/{s}\n", .{candidate.name});
+    try ctx.err.print("m8 providers toy: no model named '{s}'\n", .{m.name});
+    for (models) |candidate| try ctx.err.print("  /toy/{s}\n", .{candidate.name});
     // Buffered, and the process is about to end: without this the caller is
     // told a provider failed and never told why.
     try ctx.err.flush();

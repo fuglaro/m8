@@ -1,4 +1,4 @@
-//! ELIZA — Weizenbaum's doctor, 1966, as a model `inbuilt` serves.
+//! ELIZA — Weizenbaum's doctor, 1966, as a model `toy` serves.
 //!
 //! It belongs here for the same reason `echo` does: it answers without a
 //! network, it is entirely predictable, and it says something different every

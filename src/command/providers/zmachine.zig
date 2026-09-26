@@ -1,6 +1,6 @@
-//! `/inbuilt/Z-Machine/...` — a story file, wearing a model's interface.
+//! `/toy/Z-Machine/...` — a story file, wearing a model's interface.
 //!
-//! The other inbuilt models answer from the last thing said. This one answers
+//! The other toy models answer from the last thing said. This one answers
 //! from all of it, because a game has a world and the world is what the ledger
 //! holds. Every call rebuilds the machine from the story file, replays every
 //! 🙋 through it in order, and says what the last one produced. Nothing is kept
@@ -29,7 +29,7 @@ const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 /// What a model name begins with to be one of these. A model whose name ends
-/// in `...` in the inbuilt table serves a family, and this is that family's.
+/// in `...` in the toy table serves a family, and this is that family's.
 pub const prefix = "Z-Machine/";
 
 /// Where story files are looked for, under every config directory in turn.
@@ -186,7 +186,7 @@ fn lessThan(_: void, a: []const u8, b: []const u8) bool {
 pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
     const wanted = storyName(model);
     const found = find(ctx, wanted) catch |why| {
-        try ctx.err.print("m8 providers inbuilt: {s}\n", .{switch (why) {
+        try ctx.err.print("m8 providers toy: {s}\n", .{switch (why) {
             Error.NameEscapes => "a story file is named inside models/Z-Machine, not outside it",
             else => "no story file called that",
         }});
@@ -197,7 +197,7 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
             try ctx.err.writeAll("  there are none: put a .z3 or .z5 file there and name it\n");
         } else {
             try ctx.err.writeAll("  there is:\n");
-            for (have) |one| try ctx.err.print("    /inbuilt/{s}{s}\n", .{ prefix, one });
+            for (have) |one| try ctx.err.print("    /toy/{s}{s}\n", .{ prefix, one });
         }
         try ctx.err.flush();
         return 1;
@@ -211,7 +211,7 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
         if (r.sigil == .user) try said.append(ctx.arena, r.content orelse "");
     }
     if (said.items.len == 0) {
-        try ctx.err.writeAll("m8 providers inbuilt: nothing to derive a seed from\n");
+        try ctx.err.writeAll("m8 providers toy: nothing to derive a seed from\n");
         try ctx.err.flush();
         return 1;
     }
@@ -222,7 +222,7 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
     const inputs = said.items[1..];
 
     const outcome = zm.play(ctx.arena, found.bytes, seed, inputs) catch |why| {
-        try ctx.err.print("m8 providers inbuilt: {s} would not run: {s}\n", .{
+        try ctx.err.print("m8 providers toy: {s} would not run: {s}\n", .{
             found.path,
             @errorName(why),
         });

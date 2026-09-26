@@ -205,7 +205,7 @@ what m8 can do is what your machine can run, and that
 was true on the first day.
 
 The proof is already in the tree. `m8
-@/inbuilt/Z-Machine/zork1` holds a conversation with a
+@/toy/Z-Machine/zork1` holds a conversation with a
 1979 Infocom story file, through the same ledger, the
 same records and the same forking as any model. m8 needs
 no concept of a game. The chat is the save file and
@@ -227,7 +227,7 @@ year.
   the toolchain.
 * No daemon, no database, no account, no telemetry, no
   bundled weights, and no network needed to build or
-  test. `inbuilt` answers locally, so the loop, tool
+  test. `toy` answers locally, so the loop, tool
   calling and recovery are all testable offline.
 * Config under XDG. stdin in, stdout out, errors to
   stderr, `--help` answered in one place.
@@ -1648,8 +1648,8 @@ anything you can write a program for is a provider.
 
 ```json
 {
-  "inbuilt": {
-    "cmd": ["m8", "providers", "inbuilt"],
+  "toy": {
+    "cmd": ["m8", "providers", "toy"],
     "api": "m8"
   },
   "local": {
@@ -1769,13 +1769,13 @@ are in [docs/providers.md](docs/providers.md).
 
 ```bash
 m8 providers url       post the request to $M8_PROVIDER_URL
-m8 providers inbuilt   answer it here
+m8 providers toy       answer it here
 ```
 
 ```bash
 m8 providers                   these two, and what is configured
 m8 providers url --help        what it reads, and from where
-m8 providers inbuilt --help    which models it serves
+m8 providers toy --help        which models it serves
 ```
 
 A provider command reads a request on stdin. A terminal
@@ -1788,19 +1788,19 @@ naming the file they came from. Which models any of them
 serves is not in that list and is not missing: that is the
 ledger's business, written on the 🧠 that names one, so
 nothing in a config has to be kept in step with what a
-provider offers. `inbuilt` is the exception, because its
+provider offers. `toy` is the exception, because its
 models are m8's own.
 
-`inbuilt` speaks m8 and answers without a network, which is
+`toy` speaks m8 and answers without a network, which is
 what makes the loop, tool calling, and picking up a call that
 was never answered testable rather than only demonstrable:
 
 ```bash
-m8 @/inbuilt/echo hello        # says the last thing said
-m8 @/inbuilt/you-are anything  # "I know you are but what am I?"
-m8 @/inbuilt/runner 'RUN;;;say;;;text=hi'
-m8 @/inbuilt/eliza "I am not sleeping well."
-m8 @/inbuilt/Z-Machine/zork1 "I would like to play"
+m8 @/toy/echo hello        # says the last thing said
+m8 @/toy/you-are anything  # "I know you are but what am I?"
+m8 @/toy/runner 'RUN;;;say;;;text=hi'
+m8 @/toy/eliza "I am not sleeping well."
+m8 @/toy/Z-Machine/zork1 "I would like to play"
 ```
 
 `eliza` is Weizenbaum's doctor of 1966: a keyword found in
@@ -1844,7 +1844,7 @@ m8 ships with no story files: it plays whichever are there,
 spelled the way they are, like every other name in m8.
 Zork I to III are MIT-licensed source from Microsoft and their
 repositories carry the compiled files. `m8 help providers
-inbuilt` lists what it can find.
+toy` lists what it can find.
 
 `src/zmachine/README.md` is the rest of it: the seam between
 the machine and the provider, the invariant every stored

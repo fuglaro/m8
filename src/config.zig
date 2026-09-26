@@ -186,7 +186,7 @@ pub fn read(arena: Allocator, io: std.Io, dirs: []const []const u8, rel: []const
 /// A whole-file override like the other core files: yours replaces the
 /// built-in one rather than adding to it, so what runs is what you wrote and
 /// nothing you did not. The default is compiled in, which is what makes
-/// `inbuilt` there before anything is configured.
+/// `toy` there before anything is configured.
 pub fn providers(
     arena: Allocator,
     io: std.Io,

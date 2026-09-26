@@ -1,3 +1,3 @@
-#### :brain:/inbuilt/runner
+#### :brain:/toy/runner
 
 #### :brain:cody

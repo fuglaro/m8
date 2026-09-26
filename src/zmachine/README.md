@@ -2,7 +2,7 @@
 
 A story file, played as a model.
 
-`/inbuilt/Z-Machine/zork1` is a model like any other: it is
+`/toy/Z-Machine/zork1` is a model like any other: it is
 handed a ledger and it answers with what to add. It has no
 weights. It is a virtual machine wearing a model's interface,
 and the fit is not a joke — a model api is stateless, and so

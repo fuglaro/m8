@@ -6,12 +6,12 @@
 //! reaching a url no more special than reaching anything else.
 //!
 //!   url       post the request, hand the answer back
-//!   inbuilt   answer it here, for trying things out and for tests
+//!   toy       answer it here, for trying things out and for tests
 //!
 //! Each is named from `core/providers.json` as `["m8", "providers", NAME]`,
 //! and reads the entry's other arguments from `M8_PROVIDER_*`.
 //!
-//! Both tables here — the commands, and the models `inbuilt` serves — are what
+//! Both tables here — the commands, and the models `toy` serves — are what
 //! the pages list and what the dispatch reads, so what is advertised and what
 //! answers cannot come apart.
 const std = @import("std");
@@ -33,7 +33,7 @@ pub const command: api.Command = .{
 
 pub const subs = [_]api.Command{
     @import("providers/url.zig").command,
-    @import("providers/inbuilt.zig").command,
+    @import("providers/toy.zig").command,
 };
 
 fn find(name: []const u8) ?api.Command {
@@ -141,9 +141,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
 ///
 /// Which models any of them serves is not here and is not missing. That is the
 /// ledger's business, written on the 🧠 that names one, so nothing in a config
-/// has to be kept in step with what a provider offers. `inbuilt` is the one
+/// has to be kept in step with what a provider offers. `toy` is the one
 /// exception, because its models are m8's own — see `m8 help providers
-/// inbuilt`.
+/// toy`.
 pub fn configured(ctx: Ctx, w: *std.Io.Writer) !void {
     const from = try config.coreFile(ctx.arena, ctx.io, ctx.env, "providers.json");
     try w.print("\nproviders ({s}):\n\n", .{from orelse "the copy m8 ships with"});
@@ -202,7 +202,7 @@ test "the page for a provider command lists what it reads" {
     try help(ctx, &out.writer);
     for (subs) |s| try testing.expect(std.mem.indexOf(u8, out.written(), s.name) != null);
     // The providers that are actually configured, which is what `send` takes.
-    try testing.expect(std.mem.indexOf(u8, out.written(), "inbuilt") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "toy") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_") != null);
 
     var url_page: std.Io.Writer.Allocating = .init(arena);
