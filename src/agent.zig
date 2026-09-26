@@ -12,6 +12,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const doc = @import("m8/doc.zig");
 const ledger = @import("ledger.zig");
+const config = @import("config.zig");
 const model = @import("m8/model.zig");
 const toolbox = @import("toolbox.zig");
 const api = @import("command/api.zig");
@@ -76,9 +77,10 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
 
     for (records) |r| switch (r.sigil) {
         // Every 🧠 that named an agent was replaced by what it named, so
-        // whatever is left is in the model form. The first one wins, which is
-        // also how an agent puts its own model in front of one it includes.
-        .agent => if (def.model.len == 0) {
+        // whatever is left is in the model form. The last one wins, the same
+        // as a tool's last definition: an agent names its own model after one
+        // it includes, and a model piped in after a chat carries it on.
+        .agent => {
             if (try model.parse(arena, r.value)) |m| {
                 def.provider = m.provider;
                 def.model = m.name;
@@ -163,7 +165,7 @@ const Fixture = struct {
     }
 
     fn agent(f: Fixture, gpa: Allocator, name: []const u8, body: []const u8) !void {
-        const path = try std.fs.path.join(gpa, &.{ f.dir, name });
+        const path = try std.fs.path.join(gpa, &.{ f.dir, config.names_dir, name });
         if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(f.io, d);
         try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = path, .data = body });
     }

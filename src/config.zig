@@ -93,13 +93,23 @@ fn exists(io: std.Io, path: []const u8) bool {
     return true;
 }
 
-/// Where a mob keeps its scratch. Inside a config directory rather than beside
-/// one, so everything a mob needs travels with it.
+/// Where every name lives. A 🧠 names a file under here, so `@mathy` on the
+/// command line is `@/mathy.md` on disk, and the rest of a config directory —
+/// `core/`, `models/` — is nothing a name can reach.
+pub const names_dir = "@";
+
+/// The file a name is, relative to a config directory.
+pub fn nameFile(arena: Allocator, name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}/{s}.md", .{ names_dir, name });
+}
+
+/// Where a mob keeps its scratch. Inside the mob's own folder rather than
+/// beside it, so everything a mob needs travels with it.
 ///
 /// Keeping it out of a version control system is the repository's business
 /// rather than m8's — this one carries a `.gitignore` in its own config
 /// directory as the suggestion.
-pub const tmp_dir_name = ".tmp-dir";
+pub const tmp_dir_name = ".tmpdir";
 
 fn hasFile(io: std.Io, path: []const u8) bool {
     var f = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
@@ -149,14 +159,13 @@ pub fn mobTmp(
     var base = dirs[0];
     var mob: []const u8 = "";
     if (agent.len > 0) {
-        const file = try std.fmt.allocPrint(arena, "{s}.md", .{agent});
-        if (try where(arena, io, dirs, file)) |found| {
+        if (try where(arena, io, dirs, try nameFile(arena, agent))) |found| {
             base = found;
             mob = std.fs.path.dirname(agent) orelse "";
         }
     }
 
-    const tmp = try std.fs.path.join(arena, &.{ base, tmp_dir_name, mob });
+    const tmp = try std.fs.path.join(arena, &.{ base, names_dir, mob, tmp_dir_name });
     try std.Io.Dir.cwd().createDirPath(io, tmp);
     // No trailing slash, ever, so no tool has to strip one.
     return std.mem.trimEnd(u8, tmp, "/");

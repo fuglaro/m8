@@ -19,7 +19,7 @@
 
 const std = @import("std");
 const api = @import("command/api.zig");
-const converse = @import("converse.zig");
+const prompt_mode = @import("prompt.zig");
 const Ctx = api.Ctx;
 
 /// Whether the commands under this one are programs of their own.
@@ -45,7 +45,7 @@ pub fn sibling(arena: std.mem.Allocator, self: []const u8, program: []const u8) 
 /// How the command under this one is reached. A launcher decides this by
 /// which build it is, and says which rather than being asked twice.
 pub const Reach = union(enum) {
-    /// The top-level prompt mode, which is not a command.
+    /// `@`, which is not a command.
     prompt,
     /// The command itself, held in this binary.
     call: api.Command,
@@ -77,19 +77,14 @@ pub fn under(ctx: Ctx, reach: Reach, args: []const []const u8, in: Stdin) !u8 {
 }
 
 /// Run the top-level prompt mode. Unlike a command, it has no registry entry
-/// or child program; the launcher has already assembled the ledger.
+/// or child program: `@` is launcher syntax, and it reads its own stdin.
 fn prompt(ctx: Ctx, args: []const []const u8, in: Stdin) !u8 {
     var inner = ctx;
-    inner.args = args;
     inner.in = switch (in) {
         .bytes => |b| b,
-        .inherited => blk: {
-            var buf: [64 * 1024]u8 = undefined;
-            break :blk try api.readDocument(ctx.io, ctx.arena, &buf);
-        },
+        .inherited => "",
     };
-    try converse.run(inner, "");
-    return 0;
+    return prompt_mode.run(inner, args);
 }
 
 /// Run it as a process.

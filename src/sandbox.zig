@@ -293,7 +293,7 @@ test "the mob's scratch stays writable under every restriction" {
     // The pair to the core deny: m8 guarantees a tool can write here, so no
     // combination of flags may take it away, and it has to follow the deny
     // that would otherwise carry it off with the rest of a config directory.
-    const scratch_rule = "m8-st8/\\.tmp-dir($|/)";
+    const scratch_rule = "m8-st8/@/([^/]+/)*\\.tmpdir($|/)";
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();

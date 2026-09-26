@@ -16,8 +16,8 @@ time and the ledger replayed through it.
 
 Everything else falls out of that:
 
-* The ledger is the save file. `m8 ++ encode m8 >save.md`
-  writes one and `cat save.md | m8 -- "look"` restores it.
+* The ledger is the save file. `m8 cat @ | m8 encode m8
+  >save.md` writes one and `m8 tag @zork <save.md` restores it.
 * Forking a chat forks the world, and copies nothing.
 * Two runs of the same words cannot differ, which is what
   makes a transcript a test rather than a demonstration.

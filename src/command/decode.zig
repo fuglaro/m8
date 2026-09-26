@@ -19,15 +19,14 @@
 const std = @import("std");
 const codec = @import("../codec.zig");
 const ledger = @import("../ledger.zig");
+const model = @import("../m8/model.zig");
+const doc = @import("../m8/doc.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "decode",
     .summary = "read some api's request back as a ledger",
-    // Not m8 on the way in, so there is no ledger to assemble yet. This is
-    // the way in.
-    .takes = .stdin,
     .run = run,
     .help = help,
 };
@@ -37,14 +36,17 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 decode — read some api's request back as a ledger
         \\
-        \\  m8 decode FORMAT <request.json
+        \\  m8 decode FORMAT [PROVIDER] <request.json
         \\
-        \\A run command: stdin is not m8 yet, so there is no ledger to assemble
-        \\and naming an agent at one is refused rather than dropped. This is
-        \\the way in.
+        \\Stdin is not m8 yet, so this is the way in.
         \\
-        \\  m8 decode openai-completions <request.json | m8 send local
+        \\  m8 decode openai-completions local <request.json | m8 send
         \\  m8 decode m8 <ledger.md
+        \\
+        \\A request says which model and everything to ask it for, and never
+        \\whose model it was. This is where that went missing, so this is where
+        \\it is said: PROVIDER goes on every model the request names, and what
+        \\comes out runs as it is.
         \\
         \\What comes back is ledger-shaped rather than the ledger: a request
         \\carries what one model needs in order to answer once, so a 🚫 cannot
@@ -70,7 +72,17 @@ fn run(ctx: Ctx) !u8 {
         return 1;
     };
 
-    const records = try c.decode(ctx.arena, ctx.in);
+    if (ctx.args.len > 2) {
+        try ctx.err.writeAll("m8 decode: a format, and a provider at most\n");
+        return 1;
+    }
+    const records = try ctx.arena.dupe(doc.Record, try c.decode(ctx.arena, ctx.in));
+    if (ctx.args.len == 2) for (records) |*r| {
+        if (r.sigil != .agent) continue;
+        var m = (try model.parse(ctx.arena, r.value)) orelse continue;
+        m.provider = ctx.args[1];
+        r.value = try model.render(ctx.arena, m);
+    };
     try ledger.writeAll(ctx.out, ctx.arena, ctx.mode, records);
     return 0;
 }

@@ -164,8 +164,15 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
         error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
         error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),
         error.NoProvider => try err.writeAll(
-            "m8: that ledger names a model but not whose; say which, as `m8 send PROVIDER`\n",
+            "m8: that ledger names a model but not whose; write it /PROVIDER/MODEL, " ++
+                "or `m8 decode FORMAT PROVIDER`\n",
         ),
+        error.NoMainChat => try err.writeAll("m8: pick an agent with `m8 @agent`\n"),
+        error.NothingToReset => try err.writeAll(
+            "m8: only a chat resets; the main chat, a turn and a model have no parent to go back to\n",
+        ),
+        // Already said, in terms of what was typed.
+        error.Said => {},
         else => if (name.len == 0)
             try err.print("m8: {s}\n", .{@errorName(e)})
         else

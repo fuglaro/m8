@@ -1,7 +1,7 @@
 
 
 
-# ====
+# ==== DONE
 
 ## COMMAND ARGS HONE
 
@@ -10,7 +10,6 @@ m8 @mob/agent hi agent main chat
 - updates main chat in .m8-st8/@/+.md to point to itself.
 m8 @mob/agent: hi once off question to agent
 m8 @mob/agent- # reset main agent chat
- - clean up associated tempdir
 
 m8 @mob/agent/chat1 forked chat
 - updates main chat ref in .m8-st8/@/mob/agent/chat1/+.md
@@ -30,15 +29,15 @@ If the main chat points to a ref, it updates to a new ref.
 If it points to a chat, it's the chat that updates.
 
 ref:
-#### :brain:mob/agent/chat1/:/gftafinvgrdy
+`#### :brain:mob/agent/chat1/=/gftafinvgrdy`
 
 tag/ a chat/agent/ref to a new chat/agent name with new commands:
 m8 cat @ | m8 tag @chat
 m8 cat @ | m8 encode m8 | m8 save @agent
-m8 cat @mob/agent/chat1/:/gftafinvgrdy | m8 tag @mob/agent/chat2
+m8 cat @mob/agent/chat1/=/gftafinvgrdy | m8 tag @mob/agent/chat2
 
-m8 @mob/agent/chat1/:/gftafinvgrdy: one shot question
-m8 @mob/agent/chat1/:/gftafinvgrdy hey # updates the main chat only. (Continue with just `m8 @ …`)
+m8 @mob/agent/chat1/=/gftafinvgrdy: one shot question
+m8 @mob/agent/chat1/=/gftafinvgrdy hey # updates the main chat only. (Continue with just `m8 @ …`)
 
 Restructured m8-st8:
 .m8-st8/@/+.md
@@ -47,7 +46,7 @@ Restructured m8-st8:
 .m8-st8/@/mob/agent/+.md
 .m8-st8/@/mob/.tmpdir
 .m8-st8/@/mob/agent/chat1/+.md
-.m8-st8/@/mob/agent/chat1/:/gftafinvgrdy
+.m8-st8/@/mob/agent/chat1/=/gftafinvgrdy
 
 @ :brain: and unicode brain all work on the command line.
 If there is no main chat ref, `m8` says "pick an agent with `m8 @agent`". Only --help gives help and invalid args direct there.
@@ -59,16 +58,34 @@ m8 @/model- # just error
 
 Adding skills on the command line is no longer a ^skill argument as it can be done with a new command: m8 top [skill] | m8.
 The command line doesn't take +... anymore to continue a conversation and only one @agent may be provided, and while it is not itself a real command (being part of the main m8 command) it sits in that position and appears so in the help page. Then we make cat, encode, and send commands change to not rely on having already had the @agent resolved - they manage what they need themselves in the arguments after themselves. This should allow some complexity collapse. The send and encode commands change to only take the agent on stdin. The cat command changes to take the @agent reference as its last argument. m8 cat @agent | m8 send. This allows us to collapse the message and run command categorisation away. None of them load from the main chat directly but cat does accept @ as an agent (m8 cat @). The cat command appends stdin on the agent if given both.`echo "additional user message" | m8 cat @ | m8 send`. 
-The send command stops accepting a provider, since this is better handled with composing: `echo "#### :brain:/model" | m8 cat @ | m8 send"`
+The send command stops accepting a provider, since this is better handled with composing: `echo "#### :brain:/model" | m8 cat @ | m8 send` (works because the last model wins), and `m8 decode FORMAT PROVIDER | m8 send` for a decoded request.
 The tag command stores a ref entry, then refers to that ref in the chat location +.md then outputs the brain line.
 
 .tmpdirs are shared at the mob level and at the deepest mob level. Top level agents all share. Mob level agents all share their own tmpdir, and sub mob level agents have their own.
 
+
+Riff itself is out of scope for this change, but it's syntax is noted for clarity.
 m8 riff m8 @agent/new-sub-chat
 m8 # If there is a ref there, automatically runs m8 riff m8 @
 m8 @agent # If there is an agent there, automatically runs m8 riff m8 @agent
 Similarly will ensure a chat if it can, and riff.
 
+### Clarification
+* A chat with no +.md reads as its parent's head. -> CONFIRMED.
+* Change which model wins so model oerride works.
+* Move PROVIDER argument to decode FORMAT [PROVIDER] so `m8 decode FORMAT | m8 send PROVIDER` becomes `m8 decode FORMAT PROVIDER | m8 send`.
+* Shoot! I accidentally left the tmpdir cleaning thing. Stale idea! tmpdir clean up is OUT OF SCOPE here!
+* cat @chat resolves to a turn - emit the turn the chat currently points at, not the chat name.
+* send is pure - it saves the turn and moves no pointer, so `m8 @x hi` is exactly `echo hi | m8 cat @x | m8 send | m8 tag @x`. Given a lone 🧠 naming a turn (a document of that one record, which is what cat and send output), tag points the chat straight at it. Given anything else, tag stores it as a new turn and points at that. Either way tag outputs the 🧠 line of the turn the chat now points at.
+* A turn goes in the =/ of the chat it advances. A detached turn goes next to its parent. Turns from @/model go in @/=/
+* Bare m8 is m8 @, including when a document is piped in.
+* save @agent overwrites the existing file.
+* Bare m8 or m8 @x with a tty on stdin does not subprocess riff, it runs the functions of riff directly.
+* Change behaviour and update readme so that last model wins.
+* Prompt args after `m8 @` are space joined.
+* -- is removed entirely.
+* Turns are stored in `=/` folders, since `:` can't be in a Windows path. The `:` suffix stays as the one-shot marker.
+* Agents and mobs share a namespace (`x.md` beside `x/` is an agent and its chats, `x/` alone is a mob). Walk the name: the first prefix that is an agent file, in any config dir, is the agent and the rest are chats. If the segment after it is also an agent file, that is an error naming both.
 
 
 # ====
@@ -89,8 +106,16 @@ Consider the following.
 
 # ====
 
+.tmpdir cleanup helpers chat cleanup helpers.
+
+# ====
+
 Minimalistic standalone RIFF terminal tool composable into simple TUI.
 See RIFF.md.
+m8 riff m8 @agent/new-sub-chat
+m8 # If there is a ref there, automatically runs m8 riff m8 @
+m8 @agent # If there is an agent there, automatically runs m8 riff m8 @agent
+Similarly will ensure a chat if it can, and riff.
 
 # ====
 

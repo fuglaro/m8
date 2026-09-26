@@ -59,8 +59,8 @@
 ;;   process trying to widen the profile it is already inside.
 ;;
 ;; Always allowed, in every mode, and the pair to that:
-;;   writing to .tmp-dir/ in a config directory. It is the mob's
-;;   scratch, which m8 makes before a tool runs and guarantees is
+;;   writing to a mob's .tmpdir/ under @/ in a config directory. It is the
+;;   mob's scratch, which m8 makes before a tool runs and guarantees is
 ;;   writable. It carries no tag either, so no combination of
 ;;   flags can take it away.
 
@@ -162,12 +162,12 @@
 
 ;; Last, so they win over the allow above, and untagged, so nothing can
 ;; subtract either. core/ decides what a restriction means, which is what makes
-;; this file safe to override from config. .tmp-dir/ is the mob's scratch,
+;; this file safe to override from config. A .tmpdir/ is a mob's scratch,
 ;; which m8 guarantees a tool can write — it holds no definitions, so the one
-;; directory always open inside a config directory is the one that says
-;; nothing about what runs.
+;; kind of directory always open inside a config directory is the one that
+;; says nothing about what runs.
 (deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))
-(allow file-write* (regex #"(^|/)\.?m8-st8/\.tmp-dir($|/)"))
+(allow file-write* (regex #"(^|/)\.?m8-st8/@/([^/]+/)*\.tmpdir($|/)"))
 
 ;; --- non-local internet access ---
 (allow network*)                      ;;!! !airgap

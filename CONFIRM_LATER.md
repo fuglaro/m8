@@ -140,3 +140,54 @@ concatenation. Read/scan now use `M8_ARG_PAGE_LINES`, `M8_ARG_PAGE_BYTES`, and
 
 
  🧠=/slxjebjqtg
+
+## COMMAND ARGS HONE
+
+Built as settled in IDEAS. Suite green; `zig build` and `zig build split` both
+build, and the two answer alike on `@x hi`, `cat @x`, `top @x`, an unknown
+command and `@-`. Driven end to end against `inbuilt/echo` and `you-are`:
+agent chat, main attached then detached, fork, one-shot, reset, model turns
+landing in `@/=/`, the guard, `save`, `top`, `decode FORMAT PROVIDER`, the
+`cat | send | tag` pipeline, and a model piped after a chat taking it over.
+The scratch rule was checked on the real sandbox: a mob's and the top
+`.tmpdir/` are writable under `no-edit-m8-st8`, and a chat pointer and an agent
+file beside them are not.
+
+New: `src/address.zig` (an `@`, the walk and its guard, read/tag/reset),
+`src/prompt.zig` (`m8 @`), `tag`, `save`, `top`, and `ref` (the 🧠 a document
+ends on, so `m8 @x hi | m8 ref | m8 tag @y` points rather than copies).
+`session.zig` is the chat namespace now; `assembly.zig` no longer reads the
+disk. Gone: `--`, `+CHAT`, `^SKILL`, the message/run split (`Takes` is
+`stdin | nothing`), `send PROVIDER`.
+
+Judgement calls:
+
+* `m8 @x` with nothing typed or piped says "say something after the address,
+  or pipe it in" and exits 1. That is the seat riff takes later.
+  JVL:
+* `top` takes `@SKILL`, matching `cat @X`, where IDEAS wrote `m8 top [skill]`.
+  JVL:
+* `m8 @:` (one-shot on main) keeps the turn in the attached chat's `=/`, or
+  beside its parent when main is detached, and moves nothing.
+* A reset deletes the pointer from the nearest config dir only. A chat of the
+  same name further out (XDG) then shows through, the way every lookup merges
+  nearest first.
+  JVL:
+* `tag` handed a lone 🧠 naming an agent or a model points at it without
+  checking the agent exists; everything else it writes is settled first.
+* `save` refuses a turn, a model, a pointer, a suffix, and any name under an
+  agent (it would be a chat), and answers with the saved 🧠.
+* `cat @x:` / `cat @x-` and `tag @x-` are refused rather than ignored.
+* The unknown-command message is just "'x' is not a command. See m8 --help."
+  — `m8 -- hi` and `m8 +x hi` land there.
+
+Migrated this repo's `.m8-st8` by plain `mv` (nothing staged): agents into
+`@/`, `=/` into `@/=/` (old `=/x` turn names stay valid there, and turns
+naming `mathy` find `@/mathy.md`), `+/X.md` into `@/X/+.md`, `+/+.md` into
+`@/+.md`, `.tmp-dir` into `@/.tmpdir`. `.gitignore` is `+.md`, `=/`,
+`.tmpdir/`, `models/`. `+/split-probe.md` became `@/split-probe/+.md`, a
+pointer with no agent — delete at will.
+
+Not touched: `~/.config/m8-st8/+` and `=` (old layout, now inert — move under
+`@/` the same way if they matter), `docs/chats/` transcripts, and the IDEAS
+entry itself, which is now built.

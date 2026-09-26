@@ -47,8 +47,8 @@ answer. Thinking happens and is billed the same either way;
 the only question is whether the ledger gets to record it.
 
 ```bash
-m8 @claude -- "Tell me about the Riemann Sphere."
-m8 @/anthropic/claude-haiku-4-5,max_tokens:1024 -- "In one line."
+m8 @claude "Tell me about the Riemann Sphere."
+m8 @/anthropic/claude-haiku-4-5,max_tokens:1024 "In one line."
 ```
 
 ## Codex setup on a ChatGPT plan
@@ -109,8 +109,8 @@ An api key instead, which reaches the same codec:
 ```
 
 ```bash
-m8 @gpt -- "Tell me about the Riemann Sphere."
-m8 @/codex/gpt-5.6-luna -- "In one line."
+m8 @gpt "Tell me about the Riemann Sphere."
+m8 @/codex/gpt-5.6-luna "In one line."
 ```
 
 GPT-5.6 is three models rather than one: `sol` is the

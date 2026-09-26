@@ -1,13 +1,8 @@
 //! The command registry. Adding a command means adding one line here.
 //!
-//! Two kinds, told apart by what they take:
-//!
-//!   message  `[@AGENT|+CHAT] CMD [ARGS]` — handed the assembled ledger
-//!   run      `CMD [ARGS]`                — handed stdin, or nothing at all
-//!
-//! `--` is not a command or punctuation separating m8's arguments from
-//! yours. It is the marker that selects the top-level prompt mode, which is
-//! why nothing has to arbitrate between the two.
+//! Every command is `m8 CMD [ARGS]` with stdin, and resolves whatever it names
+//! itself. `@` is not among them: it is launcher syntax, the pipeline of these
+//! written once.
 //!
 //! "Tool" means 🧰 in the language, so these are commands. `native` holds the
 //! ones that exist only to be reached by `m8 call NAME` — inbuilt tools, with
@@ -33,6 +28,10 @@ const modules = .{
     @import("command/decode.zig"),
     @import("command/parse.zig"),
     @import("command/send.zig"),
+    @import("command/tag.zig"),
+    @import("command/ref.zig"),
+    @import("command/save.zig"),
+    @import("command/top.zig"),
     @import("command/call.zig"),
     @import("command/shield.zig"),
     @import("command/filter.zig"),

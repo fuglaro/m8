@@ -48,14 +48,14 @@ pub const Error = error{
     TopUnclosed,
 };
 
-pub const ExpandError = Error || doc.ParseError || toolbox.Error || std.Io.Writer.Error;
+pub const ExpandError = Error || session.ReadError || toolbox.Error || std.Io.Writer.Error;
 
 pub const Ledger = struct {
     records: []const doc.Record = &.{},
     /// The agent this is really with: the first authored name met on the way,
-    /// skipping the generated `=` and `+` namespaces. Not a record — it is
+    /// skipping the turns and chats m8 generated. Not a record — it is
     /// something the walk knew that the flattened order cannot say, and it is
-    /// only ever used to decide which alias to move.
+    /// only ever used to decide whose mob's scratch a run gets.
     origin: []const u8 = "",
 };
 
@@ -69,8 +69,17 @@ fn source(
     dirs: []const []const u8,
     name: []const u8,
 ) !?[]const u8 {
-    const file = try std.fmt.allocPrint(arena, "{s}.md", .{name});
-    return config.read(arena, io, dirs, file);
+    if (try config.read(arena, io, dirs, try config.nameFile(arena, name))) |src| return src;
+    // A chat with no pointer of its own reads as its parent's head, so it
+    // names a document whether or not its file has been written yet.
+    if (!session.isPointer(name) or std.mem.eql(u8, name, session.main)) return null;
+    const at = session.head(arena, io, dirs, session.chatOf(name)) catch |e| switch (e) {
+        error.UnknownAgent => return null,
+        else => return e,
+    };
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    try doc.writeAll(&buf.writer, .md, &.{.{ .sigil = .agent, .value = at }});
+    return buf.written();
 }
 
 /// Whether a name resolves to a document at all. What tells an agent nobody
@@ -331,14 +340,15 @@ fn restate(arena: Allocator, from: doc.Mode, to: doc.Mode, r: doc.Record) !doc.R
     };
 }
 
-/// The model this ledger runs on: the first 🧠 in the model form, since every
+/// The model this ledger runs on: the last 🧠 in the model form, since every
 /// 🧠 that named an agent was replaced by what it named.
 pub fn runsOn(arena: Allocator, records: []const doc.Record) !?model.Model {
+    var found: ?model.Model = null;
     for (records) |r| {
         if (r.sigil != .agent) continue;
-        if (try model.parse(arena, r.value)) |m| return m;
+        if (try model.parse(arena, r.value)) |m| found = m;
     }
-    return null;
+    return found;
 }
 
 /// The call id a 📲 carries. The value is `name,id`.
@@ -401,7 +411,7 @@ const Fixture = struct {
     }
 
     fn agent(f: Fixture, gpa: Allocator, name: []const u8, body: []const u8) !void {
-        const path = try std.fs.path.join(gpa, &.{ f.dir, name });
+        const path = try std.fs.path.join(gpa, &.{ f.dir, config.names_dir, name });
         if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(f.io, d);
         try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = path, .data = body });
     }
@@ -463,10 +473,10 @@ test "a chat expands through its turns to the agent it began with" {
     try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :compass:\n> Be brief.\n");
     try f.agent(arena, "=/one.md", "#### :brain:mathy\n\n#### :raising_hand:\n> Hi.\n\n#### :robot:\n> Hello.\n");
     try f.agent(arena, "=/two.md", "#### :brain:=/one\n\n#### :raising_hand:\n> More.\n\n#### :robot:\n> Sure.\n");
-    try f.agent(arena, "+/mathy.md", "#### :brain:=/two\n");
+    try f.agent(arena, "mathy/+.md", "#### :brain:=/two\n");
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "+/mathy");
+    const l = try expand(arena, f.io, &dirs, "mathy/+");
 
     const want = [_]doc.Sigil{ .agent, .system, .user, .bot, .user, .bot };
     try testing.expectEqual(want.len, l.records.len);
@@ -541,10 +551,10 @@ test "a conversation is as long as it is, whatever the include cap says" {
         );
         parent = name;
     }
-    try f.agent(arena, "+/mathy.md", try std.fmt.allocPrint(arena, "#### :brain:{s}\n", .{parent}));
+    try f.agent(arena, "mathy/+.md", try std.fmt.allocPrint(arena, "#### :brain:{s}\n", .{parent}));
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "+/mathy");
+    const l = try expand(arena, f.io, &dirs, "mathy/+");
 
     // 🧠 and 🧭 from the agent, then a 🙋 and a 🤖 per turn, in the order they
     // happened — oldest first, since a turn's parent stands where it was named.

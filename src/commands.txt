@@ -12,6 +12,10 @@ encode
 decode
 parse
 send
+tag
+ref
+save
+top
 call
 call args
 call ask

@@ -77,26 +77,18 @@ pub const Tty = struct {
     }
 };
 
-/// What a command is, which is also what it is handed on `in`.
+/// What a command is handed on `in`.
 ///
-/// A **message command** may be preceded by an `@AGENT` or `+CHAT`. The name
-/// and stdin are assembled into a ledger, and that ledger is what it gets.
-/// `cat`, `encode` and `send` are these. Prompt mode is handled by the
-/// top-level launcher rather than by a command.
+/// Every command is `m8 CMD ARGS` with stdin, and none of them is handed a
+/// name the command line resolved for it: a command that wants one takes it
+/// as an argument and resolves it itself, which is how `m8 cat @mathy` works.
 ///
-/// A **run command** takes no name, because there is no ledger for one to go
-/// into. It either reads stdin as it arrives — which is how `decode` gets to
-/// be the way in to the language — or hands it on untouched, which is what
-/// `call` must do or it would swallow the bytes a child is waiting for.
+/// So the one question is whether stdin is the command's to read. Most read
+/// it whole. `call` and anything else that hands stdin to a child must not,
+/// or it would swallow the bytes that child is waiting for.
 pub const Takes = enum {
-    ledger,
     stdin,
     nothing,
-
-    /// Whether a name may come before this command.
-    pub fn isMessage(t: Takes) bool {
-        return t == .ledger;
-    }
 };
 
 /// What a launcher needs to know about a command, which is not what the
@@ -114,14 +106,14 @@ pub const Takes = enum {
 pub const Spec = struct {
     name: []const u8,
     summary: []const u8,
-    takes: Takes = .ledger,
+    takes: Takes = .stdin,
 };
 
 pub const Command = struct {
     name: []const u8,
     summary: []const u8,
-    /// What `in` is filled with, and so what kind of command this is.
-    takes: Takes = .ledger,
+    /// Whether `in` is filled with stdin.
+    takes: Takes = .stdin,
     /// The exit status. A filter returns 0; `call` returns whatever it ran.
     run: *const fn (Ctx) anyerror!u8,
     /// This command at length: what it takes, what it answers with, and
@@ -152,7 +144,7 @@ pub const Command = struct {
 ///
 /// Asked once, here, so no command has to remember to answer `--help` and no
 /// two answer it differently. m8 reads it before a command sees its arguments;
-/// a prompt after the standalone `--` marker is the top-level exception.
+/// the words after an `@` are prose, and are the one exception.
 pub fn wantsHelp(args: []const []const u8) bool {
     if (args.len == 0) return false;
     return std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h");

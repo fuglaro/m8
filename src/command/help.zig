@@ -42,7 +42,7 @@ fn run(ctx: Ctx) !u8 {
         try ctx.out.flush();
         return 0;
     }
-    if (std.mem.eql(u8, ctx.args[0], "--")) {
+    if (std.mem.eql(u8, ctx.args[0], "@")) {
         try promptPage(ctx, ctx.out);
         try ctx.out.flush();
         return 0;
@@ -91,21 +91,33 @@ pub fn write(ctx: Ctx, c: api.Command, w: *std.Io.Writer) !void {
 fn promptPage(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 -- — enter prompt mode
+        \\m8 @ — say something to an address
         \\
-        \\  m8 [@AGENT|+CHAT] -- WHATEVER YOU WANT TO SAY
+        \\  m8 [@ADDRESS[:|-] [WHATEVER YOU WANT TO SAY]]
         \\
-        \\`--` is a top-level marker, not a command. It says that everything
-        \\after it is prose to append to the assembled ledger. A bare `m8`,
-        \\and a name with nothing after it, enter the same mode without the
-        \\marker.
+        \\`@` is not a command, but it sits where one would, and the words
+        \\after it are prose, joined with a space. A bare `m8` is `m8 @`.
         \\
-        \\  m8 @mathy -- "Tell me about the Riemann Sphere."
-        \\  m8 +mathy -- "Tell me more."
-        \\  cat notes.txt | m8 -- "Summarize:"
+        \\  @                  the main chat
+        \\  @mob/agent         that agent's own chat
+        \\  @mob/agent/chat1   a chat under it, forked from it until it moves
+        \\  @…/=/gftafinvgrdy  a turn
+        \\  @/local/tiny       a model
         \\
-        \\`m8 -- --help` is a question because the marker makes the rest prose.
-        \\This page is `m8 help --`.
+        \\`:brain:` and 🧠 mark one as well, so a 🧠 line pasted back in is
+        \\an address. A trailing `:` asks without moving anything. A trailing
+        \\`-` resets a chat, which then reads as its parent again.
+        \\
+        \\  m8 @mathy "Tell me about the Riemann Sphere."
+        \\  m8 @ "Tell me more."
+        \\  m8 @mathy/aside: "a quick one on the side"
+        \\  m8 @mathy-
+        \\
+        \\It is the pipeline written once:
+        \\
+        \\  echo hi | m8 cat @x | m8 send | m8 tag @x
+        \\
+        \\except that the reply is shown as it arrives.
         \\
     );
 }
@@ -125,52 +137,44 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     try commands(w);
 }
 
-/// What a bare `m8` says, and what `m8 help` says at length.
+/// What `m8 help` says.
 pub fn overview(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 — a composable shell harness
         \\
-        \\  m8 [[@AGENT|+CHAT|^SKILL] MSG_CMD|RUN_CMD] [ARGS]
+        \\  m8 [@ADDRESS[:|-] [WHATEVER YOU WANT TO SAY]]
+        \\  m8 COMMAND [ARGS]
         \\
-        \\@mathy starts a chat named +mathy. Carry it on with +mathy, or
-        \\with a plain m8, which continues whichever chat came last.
-        \\Talking to @mathy again starts that chat over.
+        \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
+        \\on whichever chat was talked to last. A chat under an agent is a fork
+        \\of it, `:` asks without moving anything, and `-` starts a chat over.
         \\
-        \\  m8 @mathy -- "Tell me about the Riemann Sphere."
-        \\  m8 +mathy -- "Tell me more."
-        \\  m8 -- "And in one sentence?"
+        \\  m8 @mathy "Tell me about the Riemann Sphere."
+        \\  m8 @ "Tell me more."
+        \\  m8 @mathy/aside "A different thought."
         \\
-        \\A message command is handed a ledger assembled from the name and what
-        \\was piped in. `--` is a top-level prompt marker, so everything after
-        \\it is prose appended to that ledger. A run command takes no name and
-        \\is handed stdin as it arrived.
+        \\Every command reads stdin and writes stdout, so the same thing is a
+        \\pipeline too:
         \\
-        \\  m8 +mathy encode m8 >ledger.md
-        \\  m8 encode openai-completions <ledger.md >request.json
-        \\  m8 decode openai-completions <request.json | m8 send local
+        \\  echo "And in one sentence?" | m8 cat @ | m8 send | m8 tag @
+        \\  m8 cat @mathy | m8 encode openai-completions >request.json
+        \\  m8 decode openai-completions local <request.json | m8 send
         \\
     );
     try commands(w);
     try environment(w);
     try w.writeAll(
         \\
-        \\m8 help COMMAND says what one takes and what is under it.
+        \\m8 help COMMAND says what one takes and what is under it, and
+        \\m8 help @ says what an address is.
         \\m8 call NAME reaches m8's own filters and its inbuilt tools.
         \\
     );
 }
 
 fn commands(w: *std.Io.Writer) !void {
-    try list(w, "message commands", true);
-    try list(w, "run commands", false);
-}
-
-fn list(w: *std.Io.Writer, heading: []const u8, message: bool) !void {
-    try w.print("\n{s}:\n\n", .{heading});
-    for (cmd.tree) |n| {
-        if (n.spec.takes.isMessage() != message) continue;
-        try w.print("  {s: <10} {s}\n", .{ n.spec.name, n.spec.summary });
-    }
+    try w.writeAll("\ncommands:\n\n");
+    for (cmd.tree) |n| try w.print("  {s: <10} {s}\n", .{ n.spec.name, n.spec.summary });
 }
 
 /// Every variable m8 itself reads. A provider's own are on its page, since

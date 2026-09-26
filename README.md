@@ -4,18 +4,18 @@
 The command-line-first agentic harness - fully embracing the shell.
 
 ```
-fuglaro@localhost> m8 @pagey -- 'One word -> do you like Haiku?'
+fuglaro@localhost> m8 @pagey 'One word -> do you like Haiku?'
 ▄ 🤖
 │ Yes.
 
-▄ 🧠=/swlyayqtjk
-fuglaro@localhost> m8 -- 'Throw me a quick one please.'
+▄ 🧠pagey/=/swlyayqtjk
+fuglaro@localhost> m8 @ 'Throw me a quick one please.'
 ▄ 🤖
 │ Moonlight on still ponds
 │ Crickets stitch the dark with song
 │ Dawn waits behind hills
 
-▄ 🧠=/psbarddrym
+▄ 🧠pagey/=/psbarddrym
 fuglaro@localhost>
 ```
 
@@ -44,8 +44,8 @@ Four things make it different:
   and forgetting are things a projection does — never
   something done to the ledger on the way past.
 * Turns are files, and chats simply reference them.
-  `=` holds immutable turns naming their parent,
-  `+` holds movable references into them.
+  A `=/` folder holds immutable turns naming their
+  parent, and a `+` is a movable reference into them.
   It is git's objects and refs, for conversations,
   on the filesystem.
 * Tools are filters. A tool reads m8 and writes m8,
@@ -57,7 +57,8 @@ Where things are:
 * **Why** — what m8 is for, and what has already been
   proved by somebody else.
 * **Commands** — the command line, assembling a ledger,
-  encoding, calling.
+  composing one pipeline from the commands, encoding,
+  calling.
 * **Language and Schema**, **Sigils**, **Types**,
   **Carrying the Call** — the format, in enough detail
   to write a parser from.
@@ -350,13 +351,14 @@ relitigating them.
 ## Commands
 
 ```bash
-m8 [[@AGENT|+CHAT|^SKILL] MSG_CMD|RUN_CMD] [ARGS]
+m8 [@ADDRESS[:|-] [WHATEVER YOU WANT TO SAY]]
+m8 COMMAND [ARGS]
 ```
 
 ```bash
-m8 @mathy -- "Tell me about the Riemann Sphere\nin detail."
-m8 +mathy -- "Tell me more."
-m8 -- "Summarize in one sentence."
+m8 @mathy "Tell me about the Riemann Sphere\nin detail."
+m8 @ "Tell me more."
+m8 @mathy/aside "And what about the Möbius strip?"
 ```
 
 ```bash
@@ -366,14 +368,14 @@ echo "Tell me about the Riemann Sphere\nin detail." | m8 @mathy
 ▄ 🤖
 │ The Riemann Sphere is a ...
 
-▄ 🧠=/tduyxbutjb
+▄ 🧠mathy/=/tduyxbutjb
 ```
 
 The reply went to a tty, so it is rendered. The turn
 it saved is a file, so it is markdown:
 
 ```bash
-cat ".m8-st8/=/tduyxbutjb.md"
+cat ".m8-st8/@/mathy/=/tduyxbutjb.md"
 ```
 ```
 #### :brain:mathy
@@ -387,41 +389,51 @@ cat ".m8-st8/=/tduyxbutjb.md"
 ```
 
 ```bash
-m8 @=/tduyxbutjb -- "Tell me more."
+m8 @mathy/=/tduyxbutjb "Tell me more."
 ```
 ```
 ▄ 🤖
 │ Additionally,
 │ ...
 
-▄ 🧠=/ypfpkuimzg
+▄ 🧠mathy/=/ypfpkuimzg
 ```
 
-* There are two kinds of command. A **message command**
-  may be preceded by an `@AGENT` or `+CHAT`, and is
-  handed the ledger that assembles. A **run command**
-  takes no name, because there is no ledger for one to
-  go into.
-* `--` is a top-level prompt marker, not a command or
-  punctuation. Its arguments are prose, so everything after
-  it is what you want to say and nothing has to arbitrate
-  between m8's arguments and yours.
-* A bare `m8`, and a name with nothing after it, enter
-  prompt mode without the marker. So consulting an agent
-  and running a filter are one path.
-* The name is appended as the 🧠 it is, not as what it
-  expands to, so a saved turn names its parent instead
-  of copying it. Expanding happens in whichever command
-  needs it.
-* Omitting the name continues the last chat of any agent.
+* `@` sits where a command would, and is not one. The
+  words after it are prose, joined with a space, so
+  nothing has to arbitrate between m8's arguments and
+  yours.
+* A bare `m8` is `m8 @`, the main chat — whichever chat
+  was talked to last.
+* An address is a chat, a turn or a model:
+  ```
+  @                   the main chat
+  @mathy              mathy's own chat
+  @mathy/aside        a chat under it, as deep as chats go
+  @mathy/=/tduyxbutjb a turn
+  @/local/tiny        a model
+  ```
+* `:brain:` and 🧠 mark an address as well as `@` does,
+  so a 🧠 line pasted back in names what it printed.
+* A trailing `:` asks without moving anything, which is
+  what a side question is. A trailing `-` resets a chat,
+  which then reads as its parent again; only a chat has
+  a parent to go back to.
+* It is a pipeline written once. `m8 @mathy hi` is
+  `echo hi | m8 cat @mathy | m8 send | m8 tag @mathy`,
+  except that the reply is shown as it arrives. See
+  Composing.
+* What an address reads as is appended as the 🧠 it
+  settles on — the turn a chat has got to, never the
+  chat — so a saved turn names its parent instead of
+  copying it, and never names something that moves.
+  Expanding happens in whichever command needs it.
 * 🧠 names an agent, and naming one is how you use it.
-  Agents are identified by their file, so nothing
-  declares its own name. `@` is how the command line
-  names one; it is not part of the language.
-* `^NAME` names the same file's top instead of its body,
-  which is the 📚 that 🧠 is. See Tops.
-* Names are paths and the folder part is the mob.
-  Turns save into `=`, chats into `+`. See Mobs.
+  Agents are identified by their file under `@/`, so
+  nothing declares its own name. `@` is how the command
+  line names one; it is not part of the language.
+* Names are paths and the folder part is the mob. See
+  Mobs.
 * 🧠 names an agent, unless it is written with a leading `/`,
   which names a model: `/local/Bonsai-8B,max_tokens:8192`.
   The mark is the whole of the distinction — nothing is looked
@@ -432,7 +444,7 @@ m8 @=/tduyxbutjb -- "Tell me more."
 * If a tty is connected, interactive mode is activated,
   which streams tokens without buffering and renders
   the reply. Everything else is written as markdown.
-* A first word that is none of those names a command.
+* A first word that is not an address names a command.
 
 Every command has a page, and anything under a command
 has one too:
@@ -443,12 +455,13 @@ m8 help send               one of them
 m8 send --help             the same page
 m8 help providers url      what is under one
 m8 providers url --help    the same page again
+m8 help @                  what an address is
 ```
 
 `--help` is m8's rather than any command's, so no command
-has to parse it and no two answer it differently. A standalone
-`--` is handled before command dispatch because its arguments
-are prose, and `m8 help --` is how that marker's page is asked
+has to parse it and no two answer it differently. The words
+after an `@` are prose, so a `--help` among them is said
+rather than read, and `m8 help @` is how that page is asked
 for.
 
 A page you asked for is written to stdout, where it can
@@ -458,50 +471,90 @@ of a document.
 
 ### Assembling
 
-A message command is handed a ledger built from three
-things: the name, whatever was piped in, and the prompt,
-in that order.
+`m8 @ADDRESS` and `m8 cat @ADDRESS` build a ledger from
+three things: what the address reads as, whatever was
+piped in, and the prompt, in that order.
 
 ```
-nothing piped   NAME (or the last chat) → prompt
-m8 piped        NAME → the document → prompt
-anything else   NAME (or the last chat) → prompt, then the text
+nothing piped   ADDRESS → prompt
+m8 piped        ADDRESS → the document → prompt
+anything else   ADDRESS → prompt, then the text
 ```
 
-One rule is behind all three: what arrived is the
-context, and nothing is added to it that was not asked
-for. A document that arrived is a ledger already, so no
-last chat is grafted onto it. Anything else piped in is
-prose rather than context — it is what somebody would
-have typed after `--` — so it joins the prompt, and the
-fallback still applies.
+One rule is behind all three: what arrived is added to,
+and nothing else is. A document piped in is records
+already, so it follows the address as it is — which is
+how a model piped in after a chat takes it over, since
+the last model named is the one that answers. Anything
+else piped in is prose rather than context — it is what
+somebody would have typed after the address — so it
+joins the prompt.
 
 ```bash
-m8 -- "Tell me about the Riemann Sphere."
-cat notes.txt | m8 -- "Summarize:"        # one 🙋, prompt first
-cat ledger.md | m8 send local             # the ledger is what arrived
-echo "risky question" | m8 +mathy encode openai-completions
+cat notes.txt | m8 @ "Summarize:"               # one 🙋, prompt first
+echo "#### :brain:/local/tiny" | m8 @mathy "Quickly?"
+m8 top @tight-docs | m8 @mathy "Tidy the README."
 ```
-
-That last one is how a prompt reaches a command that is
-not `--`: raw stdin is the prompt channel, so a request
-can be built and read before anything is sent.
 
 Piping is not required, and neither is a prompt when
 something was piped. With neither, there is nothing to
-say, and m8 says what it is instead.
+say, and m8 says so.
 
 A document is told from prose by its first line alone,
 so one that opens like a document and then goes wrong is
 an error rather than a prompt.
 
+### Composing
+
+Every command reads stdin and writes stdout, and the
+ones that take an address resolve it themselves. So
+what `m8 @` does is a pipeline too, and each step can be
+had on its own:
+
+```bash
+m8 cat @mathy | m8 send | m8 tag @mathy      what m8 @mathy does
+m8 cat @mathy | m8 tag @mathy/aside          fork, with nothing said
+m8 cat @ | m8 send | m8 tag @mathy/other     keep a run somewhere else
+m8 cat @ | m8 encode m8 | m8 save @notes     a chat, flattened into an agent
+m8 @mathy hi | m8 ref | m8 @critic "Review that."
+```
+
+* `cat @X` writes the 🧠 that X reads as now, then
+  whatever was piped in. It names the turn rather than
+  the chat, so it is a snapshot that stays put when the
+  chat moves on.
+* `send` runs a ledger and writes the turn: the ledger
+  as it arrived and whatever the run added. It keeps
+  nothing, so one run can be kept wherever it is
+  tagged, or nowhere.
+* `tag @X` keeps a turn and points X at it. A document
+  that is one 🧠 already names a turn and is pointed at
+  without writing anything; anything else is kept as a
+  new turn. Its output is the 🧠 now pointed at, and
+  nothing else — a ref was written, and that is its
+  receipt.
+* `save @X` writes a document as an agent, over whatever
+  was there. An agent is authored, so changing one from a
+  pipe is the same as editing its file.
+* `top @X` is `cat`'s twin for 📚: it names a file for
+  what it says about itself. See Tops.
+* `ref` keeps the 🧠 a document ends on, and nothing
+  else. `m8 @X` writes the reply and then that 🧠, which
+  is what a person reads; `ref` is how it becomes what
+  the next command is handed. A turn `send` wrote was
+  never kept and ends on no 🧠, so it has nothing to
+  reference until it is tagged.
+
+Forking a chat is naming somewhere else to tag, and
+nothing more.
+
 ### Encoding
 
 ```bash
-m8 [@AGENT|+CHAT] encode FORMAT    a ledger, as some api sees it
-m8 decode FORMAT                   that api's request, as a ledger
+m8 encode FORMAT                   a ledger, as some api sees it
+m8 decode FORMAT [PROVIDER]        that api's request, as a ledger
 m8 parse FORMAT                    that api's response, as a turn
-m8 send [PROVIDER]                 run a ledger and save the turn
+m8 send                            run a ledger and write the turn
 ```
 
 There are four:
@@ -522,19 +575,19 @@ name any of them.
 how a chat becomes one flat document.
 
 ```bash
-m8 +mathy encode m8
-m8 +mathy encode m8 >full-ledger-copy.md
+m8 cat @mathy | m8 encode m8
+m8 cat @mathy | m8 encode m8 >full-ledger-copy.md
 m8 decode m8 <full-ledger-copy.md      # the null operation
 ```
 
 ```bash
-m8 +mathy encode openai-completions
+m8 cat @mathy | m8 encode openai-completions
 m8 encode openai-completions <full-ledger-copy.md >openai.json
 m8 decode openai-completions <openai.json
 ```
 
 ```bash
-m8 decode openai-completions <openai.json | m8 send local
+m8 decode openai-completions local <openai.json | m8 send
 ```
 
 A ledger always has an api view. An api request never has
@@ -594,14 +647,14 @@ What a request does carry, it carries exactly. A request
 says which model and everything to ask it for, and never
 whose model it was — so `openai-completions → m8 →
 openai-completions` is the same request, byte for byte, and
-all `send` needs is the provider. That is why parameters
-live on the 🧠 rather than in a config keyed by a name the
-wire never carries.
+all it is missing is the provider. `decode` is where that
+went missing, so `decode FORMAT PROVIDER` is where it is
+said, and what comes out runs as it is. That is why
+parameters live on the 🧠 rather than in a config keyed by
+a name the wire never carries.
 
-`decode` and `parse` are run commands: they are the way in
-rather than filters, so they take stdin exactly as it
-arrives. There is no ledger to assemble yet, and naming an
-agent at one is refused rather than dropped.
+`decode` and `parse` are the way in rather than filters, so
+they take stdin exactly as it arrives.
 
 `parse` is the third direction. `encode` and `decode` are
 about requests, which are ledger-shaped; a response is
@@ -610,7 +663,8 @@ into the records it adds to one. With it, the whole loop is
 something you can watch happen:
 
 ```bash
-echo "Say hi." | m8 @mathy encode openai-completions \
+echo "Say hi." | m8 cat @mathy \
+  | m8 encode openai-completions \
   | m8 providers url \
   | m8 parse openai-completions
 ```
@@ -969,7 +1023,7 @@ about itself, rather than what it says.
 Two sigils reach into another file and the mark decides
 which half comes back. 🧠 wants what the file says; 📚
 wants what it says about itself. On the command line
-those are `@` and `^`.
+those are `m8 cat @` and `m8 top @`.
 
 A file with no 🔝 is all body and has no top at all, so
 📚 naming one yields nothing rather than the whole of
@@ -1334,15 +1388,16 @@ One that cannot widen, whatever it includes or is asked
 to do:
 
 ```m8
-▄ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
-
 ▄ 🛡️jail
 
 ▄ 🧠team/helpers
+
+▄ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
 ```
 
 `team/helpers` may define whatever tools and shields it
-likes. They all run jailed, because activating adds and
+likes, and whatever model: the one named last is the one
+that answers. They all run jailed, because activating adds and
 defining stacks, and neither can subtract. Nothing this
 agent is told can add a tool, because a reply is never
 read for definitions and `jail` composes
@@ -1408,7 +1463,9 @@ with a `git clone`, and a provider is a command that runs
 on your machine. Each is a whole-file override of the copy
 m8 ships with, not a merge.
 
-Agents are found at `<config_dir>/<name>.md`.
+Every name lives under `@/`, so `@mathy` on the command
+line is `@/mathy.md` on disk, and the rest of a config
+directory is nothing a name can reach.
 
 ```
 .m8-st8/
@@ -1416,12 +1473,16 @@ Agents are found at `<config_dir>/<name>.md`.
     mac-sandbox.sb
     contain-env-allowed.txt
     providers.json
-  mathy.md              @mathy
-  team/reviewer.md      @team/reviewer
-  +/+.md                ++
-  +/mathy.md            +mathy
-  +/team/reviewer.md    +team/reviewer
-  =/tduyxbutjb.md       @=/tduyxbutjb
+  models/
+  @/
+    +.md                      @, the main chat
+    mathy.md                  mathy, the agent
+    mathy/+.md                @mathy, its own chat
+    mathy/=/tduyxbutjb.md     @mathy/=/tduyxbutjb
+    mathy/aside/+.md          @mathy/aside
+    team/reviewer.md          @team/reviewer
+    team/.tmpdir/             the team mob's scratch
+    =/psbarddrym.md           a turn a model answered
 ```
 
 ### Mobs
@@ -1431,18 +1492,33 @@ and starting scripts, as bundled packages.
 
 A name is a path, so the folder part is the mob
 it belongs to. Mobs bundle the agents, skills and
-starting scripts that travel together.
+starting scripts that travel together, and each
+mob's agents share its `.tmpdir/` for scratch.
 
-Two mobs are generated rather than authored.
+Walking down a name, the first agent file met is
+the agent and every word after it is a chat. So
+`x.md` beside `x/` is an agent and its chats, and
+`x/` alone is a mob. A chat named like an agent in
+that same folder would hide the agent without
+anyone saying so, so that is an error naming both.
 
-`=` holds turns. Every run writes one, named with
-ten lowercase letters, and prints it back. A turn
-holds only what it continues and the exchange —
-its name is the file it is in, and it is never
-rewritten.
+### Turns and chats
+
+Turns and chats are generated rather than authored,
+and they are git's objects and refs.
+
+* A turn is a file in a `=/` folder, named with ten
+  lowercase letters and never rewritten. It holds
+  only what it continues and the exchange.
+* A chat is a `+.md`: a single 🧠 naming the turn
+  it has got to, rewritten every time it moves.
+* The main chat is `@/+.md`. Attached, it names a
+  chat, and talking to it moves that chat. Detached,
+  it names a turn — after `m8 @/local/tiny` or
+  `m8 @mathy/=/tduyxbutjb` — and moves itself.
 
 ```m8
-▄ 🧠=/tduyxbutjb
+▄ 🧠mathy/=/tduyxbutjb
 
 ▄ 🙋
 │ Tell me more.
@@ -1451,20 +1527,20 @@ rewritten.
 │ Additionally, ...
 ```
 
+A turn goes in the `=/` of the chat it advances. One
+that advances no chat — a side question, or a turn
+talked to directly — goes beside the turn it
+continues, and a model's go in the top `=/`.
+
+A chat with no `+.md` of its own reads as its
+parent's head. That is the whole of forking and
+resetting: a new chat starts wherever its parent
+is, and a reset one goes back to following it. The
+parent of an agent's own chat is the agent.
+
 The 🧠 printed after a reply is not part of the
 turn. It is the line you would write to continue
 from it, which is also what you paste after `m8`.
-
-`+` holds the chats, each a single 🧠 into `=`
-and each rewritten every run. `+/mathy` is your last
-chat with mathy, and `+mathy` on the command line
-is short for `@+/mathy`. The chat for any agent at
-all is named `+` too, so `++` reaches it and a bare
-`m8` addresses it.
-
-A chat is named after the first authored name in
-the lineage, so continuing a chat keeps pointing at
-the agent it began with.
 
 Because chats move, a turn's 🧠 names the turn it
 continues and never a chat, or it would become
@@ -1533,13 +1609,18 @@ used everywhere:
 ```
 
 An agent file is the only kind of alias there is, so it also
-composes: put a model in front of an agent you include and
-the model wins, since the first 🧠 is the one that counts.
+composes: put a model after an agent you include and the
+model wins, since the last model named is the one that
+answers — the same rule as a tool's last definition.
 
 ```m8
-▄ 🧠/local/Ternary-Bonsai-27B-mlx-2bit,max_tokens:16384
 ▄ 🧠mathy
+▄ 🧠/local/Ternary-Bonsai-27B-mlx-2bit,max_tokens:16384
 ```
+
+A chat is the same: a model piped in after one runs it, and
+every turn after that is still on it, because the model is
+later in the ledger than the agent it took over from.
 
 ### Providers
 
@@ -1701,11 +1782,11 @@ what makes the loop, tool calling, and picking up a call that
 was never answered testable rather than only demonstrable:
 
 ```bash
-m8 @/inbuilt/echo -- hello        # says the last thing said
-m8 @/inbuilt/you-are -- anything  # "I know you are but what am I?"
-m8 @/inbuilt/runner -- 'RUN;;;say;;;text=hi'
-m8 @/inbuilt/eliza -- "I am not sleeping well."
-m8 @/inbuilt/Z-Machine/zork1 -- "I would like to play"
+m8 @/inbuilt/echo hello        # says the last thing said
+m8 @/inbuilt/you-are anything  # "I know you are but what am I?"
+m8 @/inbuilt/runner 'RUN;;;say;;;text=hi'
+m8 @/inbuilt/eliza "I am not sleeping well."
+m8 @/inbuilt/Z-Machine/zork1 "I would like to play"
 ```
 
 `eliza` is Weizenbaum's doctor of 1966: a keyword found in
@@ -1732,8 +1813,8 @@ is replayed through it. Nothing is kept between calls because
 there is nowhere to keep it — so the chat is the save file,
 forking a chat forks the world, and two runs of the same words
 cannot differ. Saving is not implemented and does not need to
-be: `m8 ++ encode m8 >save.md` already is one, and
-`cat save.md | m8 -- "look"` is the restore.
+be: `m8 cat @ | m8 encode m8 >save.md` already is one, and
+`m8 tag @zork <save.md` is the restore.
 
 The first thing you say is not played. It is hashed, and the
 hash is the seed the world is built from, so "hello" and

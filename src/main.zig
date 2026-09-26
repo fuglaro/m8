@@ -1,30 +1,20 @@
 //! m8 — a composable shell harness.
 //!
-//!     m8 [[@AGENT|+CHAT|^SKILL] MSG_CMD|RUN_CMD] [ARGS]
+//!     m8 [@ADDRESS[:|-] [WHATEVER YOU WANT TO SAY]]
+//!     m8 COMMAND [ARGS]
 //!
-//! `@` is how the command line names an agent; it is not part of the language.
-//! Every turn is saved as a new agent in `=` and its name printed, so a saved
-//! turn is addressed by name exactly like any other agent.
+//! `@` is how the command line names an address, and it sits where a command
+//! would. What follows it is prose, so nothing has to arbitrate between m8's
+//! arguments and yours. A bare `m8` is `m8 @`, the main chat.
 //!
-//! The command line is a way of assembling a ledger and nothing more: a name,
-//! whatever was piped in, and a prompt, in that order. A message command is
-//! handed that ledger; a run command takes no name and is handed stdin, or
-//! nothing at all.
-//!
-//! `--` is the top-level prompt marker, so there is no separator anywhere in
-//! this and nothing has to decide whose arguments are whose. A bare `m8`
-//! enters the same mode, which is why consulting an agent and running a filter
-//! are one path.
-//!
-//! A name is appended as the 🧠 it is, not as what it expands to. Expanding
-//! happens in whichever command needs it, which is what keeps a saved turn
-//! naming its parent rather than copying it.
+//! Every other command is `m8 COMMAND ARGS` with stdin, and resolves whatever
+//! it names itself: `m8 cat @mathy`. So there is one kind of command, and the
+//! `@` prompt is the pipeline of them written once.
 //!
 //! `--help` is read here rather than by whichever command was named, so no
 //! command has to remember to answer it and no two answer it differently. It
 //! names the `help` command, which is why `m8 send --help` and `m8 help send`
-//! are one page. A standalone `--` is handled before command dispatch because
-//! its arguments are prose.
+//! are one page.
 //!
 //! A terminal is written the rendered spelling and everything else markdown,
 //! decided once here and carried into every writer.
@@ -35,12 +25,8 @@
 
 const std = @import("std");
 const command = @import("command.zig");
-const config = @import("config.zig");
-const assembly = @import("assembly.zig");
-const ledger = @import("ledger.zig");
 const provider = @import("provider.zig");
-const session = @import("session.zig");
-const doc = @import("m8/doc.zig");
+const address = @import("address.zig");
 const help = @import("command/help.zig");
 const harness = @import("harness.zig");
 const launch = @import("launch.zig");
@@ -62,6 +48,8 @@ comptime {
     _ = @import("config.zig");
     _ = @import("command.zig");
     _ = @import("launch.zig");
+    _ = @import("address.zig");
+    _ = @import("prompt.zig");
     _ = @import("zmachine/zmachine.zig");
 }
 
@@ -107,165 +95,55 @@ pub fn main(init: std.process.Init) !u8 {
     const out = &stdout.interface;
     const err = &stderr.interface;
 
-    var rest = args;
-
-    // A name, then either the prompt marker or a command and that command's
-    // arguments. Nothing is guessed: a name is written `@x` or `+x`, and the
-    // standalone marker makes everything after it prose.
-    var name: []const u8 = "";
-    var named = false;
-    // Which half of what it names. `@` and `+` want what a file says; `^`
-    // wants what it says about itself, which is the same distinction 🧠 and
-    // 📚 carry in the language. The mark is the whole of it — nothing is
-    // looked up to decide.
-    var as: doc.Sigil = .agent;
-    if (rest.len > 0) {
-        const word = rest[0];
-        if (std.mem.startsWith(u8, word, "@")) {
-            name = word[1..];
-            named = true;
-            rest = rest[1..];
-        } else if (std.mem.startsWith(u8, word, "^")) {
-            name = word[1..];
-            named = true;
-            as = .skill;
-            rest = rest[1..];
-        } else if (std.mem.startsWith(u8, word, session.alias)) {
-            name = try std.fmt.allocPrint(arena, "{s}/{s}", .{
-                session.alias,
-                word[session.alias.len..],
-            });
-            named = true;
-            rest = rest[1..];
-        }
-    }
-
-    // A bare m8, or a name with nothing after it, enters prompt mode. A
-    // standalone `--` selects that same mode explicitly; it is syntax here,
-    // not a command in the registry.
     const helper = command.byPath(&.{help.name}).?;
-    var cmd: ?command.Node = null;
-    var cmd_args: []const []const u8 = &.{};
-    var prompt: []const u8 = "";
-    var asked_for_help = false;
-    if (rest.len > 0) {
-        // `m8 --help [COMMAND]` is `m8 help [COMMAND]`. The flag is a way of
-        // naming the command rather than a command's own argument.
-        if (command.api.wantsHelp(@ptrCast(rest))) {
-            cmd = helper;
-            cmd_args = @ptrCast(rest[1..]);
-            asked_for_help = true;
-        } else if (std.mem.eql(u8, rest[0], "--")) {
-            prompt = try std.mem.join(arena, " ", rest[1..]);
-        } else {
-            cmd = command.byPath(&.{rest[0]}) orelse {
-                try err.print("m8: '{s}' is not an agent, a chat, or a command\n", .{rest[0]});
-                try help.overview(err);
-                try err.flush();
-                return 1;
-            };
-            cmd_args = @ptrCast(rest[1..]);
-        }
-    }
 
-    // A run command takes no name, because there is no ledger for one to go
-    // into. Saying so beats quietly dropping what was typed.
-    if (cmd) |node| {
-        if (named and !node.spec.takes.isMessage()) {
-            try err.print("m8 {s}: {s}, so there is nowhere to put a name\n", .{
-                node.spec.name,
-                if (node.spec.takes == .stdin) "takes stdin as it is" else "is handed no ledger",
-            });
-            try err.flush();
-            return 1;
-        }
-    }
+    // `m8 --help [COMMAND]` is `m8 help [COMMAND]`. The flag is a way of
+    // naming the command rather than a command's own argument.
+    if (command.api.wantsHelp(@ptrCast(args))) return launched(io, arena, init, helper, @ptrCast(args[1..]), self, out, err);
+
+    // An address, or nothing at all, is the prompt. Its words are prose, so
+    // nothing in them is read here.
+    if (args.len == 0 or address.isAddress(args[0]))
+        return harness.run(io, arena, init.environ_map, .prompt, "", @ptrCast(args), .inherited, self, out, err);
+
+    const node = command.byPath(&.{args[0]}) orelse {
+        try err.print("m8: '{s}' is not a command. See m8 --help.\n", .{args[0]});
+        try err.flush();
+        return 1;
+    };
+    const cmd_args: []const []const u8 = @ptrCast(args[1..]);
 
     // `m8 COMMAND --help` is `m8 help COMMAND` too, read here so that no
     // command has to parse the flag and no two answer it differently.
-    if (cmd != null and !asked_for_help and command.api.wantsHelp(cmd_args)) {
+    if (command.api.wantsHelp(cmd_args)) {
         var words: std.ArrayList([]const u8) = .empty;
-        try words.append(arena, cmd.?.spec.name);
+        try words.append(arena, node.spec.name);
         try words.appendSlice(arena, cmd_args[1..]);
-        cmd = helper;
-        cmd_args = words.items;
+        return launched(io, arena, init, helper, words.items, self, out, err);
     }
+    return launched(io, arena, init, node, cmd_args, self, out, err);
+}
 
-    const takes: command.Takes = if (cmd) |node| node.spec.takes else .ledger;
-    const dirs = try config.discover(arena, io, init.environ_map);
-    const assembled = gather(io, arena, dirs, name, named, as, prompt, takes) catch |e| {
-        switch (e) {
-            // Only the command line's own name reaches here; anything inside a
-            // ledger is the command's business.
-            error.UnknownAgent => try err.print(
-                "m8: no agent named '{s}'\n",
-                .{if (named) name else session.latest},
-            ),
-            else => try err.print("m8: {s}\n", .{@errorName(e)}),
-        }
-        try err.flush();
-        return 1;
-    };
-
-    // Nothing piped and nothing said is somebody finding out what m8 is.
-    if (cmd == null and assembled.said_nothing) {
-        try help.overview(err);
-        try err.flush();
-        return 1;
-    }
-
-    const input: launch.Stdin = switch (takes) {
-        .nothing => .inherited,
-        else => .{ .bytes = assembled.document },
-    };
-
-    const reach: launch.Reach = if (cmd == null)
-        .prompt
-    else if (!launch.split)
-        .{ .call = command.at(cmd.?.path).? }
+/// Reach a command, whichever way this build reaches one. Each reads its own
+/// stdin, so the launcher reads none.
+fn launched(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    init: std.process.Init,
+    node: command.Node,
+    cmd_args: []const []const u8,
+    self: []const u8,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+) !u8 {
+    const reach: launch.Reach = if (!launch.split)
+        .{ .call = command.at(node.path).? }
     else
-        .{ .spawn = cmd.?.program };
+        .{ .spawn = node.program };
 
     // What a complaint names. The command under this one parses its own
     // arguments, so this launcher reaches `shield ask` by calling `shield` —
     // but `m8 shield ask:` says more than `m8 shield:` and costs nothing.
-    const called = if (cmd) |node|
-        try command.named(arena, node.path, cmd_args)
-    else
-        "";
-
-    return harness.run(io, arena, init.environ_map, reach, called, cmd_args, input, self, out, err);
-}
-
-/// Read what this kind of command is handed.
-fn gather(
-    io: std.Io,
-    arena: std.mem.Allocator,
-    dirs: []const []const u8,
-    name: []const u8,
-    named: bool,
-    as: doc.Sigil,
-    prompt: []const u8,
-    takes: command.Takes,
-) !assembly.Assembled {
-    var in_buf: [64 * 1024]u8 = undefined;
-    return switch (takes) {
-        // Stdin belongs to whatever the command hands it to.
-        .nothing => .{},
-        // Handed on untouched: it is not m8 yet.
-        .stdin => .{
-            .document = try command.api.readDocument(io, arena, &in_buf),
-            .said_nothing = false,
-        },
-        .ledger => try assembly.assemble(
-            arena,
-            io,
-            dirs,
-            name,
-            named,
-            as,
-            prompt,
-            try command.api.readDocument(io, arena, &in_buf),
-        ),
-    };
+    const called = try command.named(arena, node.path, cmd_args);
+    return harness.run(io, arena, init.environ_map, reach, called, cmd_args, .inherited, self, out, err);
 }

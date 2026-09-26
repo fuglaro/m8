@@ -5,8 +5,10 @@
 //! back to the model next time round is the same records a person would read.
 //! Nothing is assembled on the side and nothing is thrown away.
 //!
-//! What is saved is the ledger as it arrived, still naming what it continues,
-//! plus whatever this run added. Expanding that gives back exactly what ran.
+//! What a run hands back is the ledger as it arrived, still naming what it
+//! continues, plus whatever this run added — a turn, ready to be kept.
+//! Expanding that gives back exactly what ran. Keeping it is `tag`'s business,
+//! not this one's.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -24,13 +26,16 @@ const sigil = @import("m8/sigil.zig");
 const api = @import("command/api.zig");
 const Ctx = api.Ctx;
 
-/// Run whatever `ctx.in` holds.
-///
-/// `override` names a provider to send to instead of the one the ledger
-/// names, and is empty when it names none. Only the provider, because only
-/// the provider is ever missing: a ledger that came back off a wire knows its
-/// model and everything to ask it for, and never whose model it was.
-pub fn run(ctx: Ctx, override: []const u8) !void {
+pub const Options = struct {
+    /// Write the ledger that arrived ahead of what the run adds, so what goes
+    /// out is the whole turn. What `send` does under a pipe; a terminal is
+    /// only ever shown the reply.
+    echo_given: bool = false,
+};
+
+/// Run whatever `ctx.in` holds, writing the reply as it arrives, and hand
+/// back the turn: what arrived, settled, and everything the run added.
+pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
     const arena = ctx.arena;
     const io = ctx.io;
     const out = ctx.out;
@@ -56,8 +61,7 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
     var records: std.ArrayList(doc.Record) = .empty;
     try records.appendSlice(arena, expanded.records);
 
-    var def = try agent.project(arena, records.items);
-    if (override.len > 0) def.provider = override;
+    const def = try agent.project(arena, records.items);
     if (def.model.len == 0) return agent.Error.NoModel;
     if (def.provider.len == 0) return agent.Error.NoProvider;
 
@@ -83,14 +87,15 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
         .active = def.active,
     }).over(arena, try shield.core(arena, ctx.io, ctx.env));
 
-    // The name has to exist before the turn, because the turn records it.
-    const saved_as = try session.newName(arena, io);
+    // Lineage names what it continues, never a pointer to it: pointers move.
+    const settled = try session.settleAll(arena, io, dirs, given);
 
     // Everything this run adds, in the order it happened.
     var turn: std.ArrayList(doc.Record) = .empty;
     // Records are separated by a blank line, so writing one has to know
     // whether anything came before it.
     var written = false;
+    if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &written, r);
     // The rendered spelling is only ever written for a terminal, and a
     // terminal is the only reader that can watch a reply arrive.
     const live = mode == .m8;
@@ -181,39 +186,12 @@ pub fn run(ctx: Ctx, override: []const u8) !void {
         }
     }
 
-    try show(arena, out, mode, &written, .{ .sigil = .agent, .value = saved_as });
     try out.flush();
 
-    // Saved unexpanded: the ledger as it arrived still names what it
-    // continues, so a turn holds only its own exchange and forking copies
-    // nothing.
     var whole: std.ArrayList(doc.Record) = .empty;
-    try whole.appendSlice(arena, try settled(arena, io, dirs, given));
+    try whole.appendSlice(arena, settled);
     try whole.appendSlice(arena, turn.items);
-    try session.write(arena, io, dirs, saved_as, whole.items);
-    try session.setAlias(arena, io, dirs, session.global, saved_as);
-    if (expanded.origin.len > 0)
-        try session.setAlias(arena, io, dirs, expanded.origin, saved_as);
-}
-
-/// Lineage names the turn continued, never an alias to it: aliases move, and
-/// a turn that named one would become its own ancestor as soon as it did.
-fn settled(
-    arena: Allocator,
-    io: std.Io,
-    dirs: []const []const u8,
-    records: []const doc.Record,
-) ![]const doc.Record {
-    var out: std.ArrayList(doc.Record) = .empty;
-    for (records) |r| {
-        if (r.sigil != .agent) {
-            try out.append(arena, r);
-            continue;
-        }
-        const target = (try session.deref(arena, io, dirs, r.value)) orelse r.value;
-        try out.append(arena, .{ .sigil = .agent, .value = target });
-    }
-    return out.items;
+    return whole.items;
 }
 
 fn mergeEnv(arena: Allocator, vars: *std.ArrayList(api.EnvVar)) !void {

@@ -43,11 +43,11 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     for (models) |m| try w.print("  /inbuilt/{s: <14} {s}\n", .{ m.name, m.summary });
     try w.writeAll(
         \\
-        \\  m8 @/inbuilt/echo -- hello
-        \\  m8 @/inbuilt/you-are -- anything
-        \\  m8 @/inbuilt/runner -- 'RUN;;;say;;;text=hi'
-        \\  m8 @/inbuilt/eliza -- "I am not sleeping well."
-        \\  m8 @/inbuilt/Z-Machine/zork1 -- "I would like to play"
+        \\  m8 @/inbuilt/echo hello
+        \\  m8 @/inbuilt/you-are anything
+        \\  m8 @/inbuilt/runner 'RUN;;;say;;;text=hi'
+        \\  m8 @/inbuilt/eliza "I am not sleeping well."
+        \\  m8 @/inbuilt/Z-Machine/zork1 "I would like to play"
         \\
         \\A name ending in ... is a family rather than one model: what follows
         \\it is the model's own business. Z-Machine takes the name of a story

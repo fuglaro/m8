@@ -1,7 +1,6 @@
 //! `encode` — a ledger, in some other format.
 //!
-//! The ledger arrives whole: whatever was piped in, whatever the command line
-//! named, and whatever followed `--`, with every 🧠 expanded into what it
+//! The ledger arrives on stdin, and every 🧠 in it is expanded into what it
 //! names. What comes out is one api's view of that.
 //!
 //! `m8` is a format like any other here, which is why `m8 encode m8` is how a
@@ -73,13 +72,12 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 encode — write a ledger as some api's request
         \\
-        \\  m8 [@AGENT|+CHAT] encode FORMAT
+        \\  m8 encode FORMAT
         \\
-        \\The ledger arrives whole — whatever was piped in, whatever the
-        \\command line named, and whatever followed `--`, with every 🧠
-        \\expanded into what it names. What comes out is one api's view of it.
+        \\The ledger arrives on stdin, with every 🧠 expanded into what it
+        \\names. What comes out is one api's view of it.
         \\
-        \\  m8 +mathy encode m8 >ledger.md
+        \\  m8 cat @mathy | m8 encode m8 >ledger.md
         \\  m8 encode openai-completions <ledger.md >request.json
         \\
         \\Encoding is total and loses whatever the target cannot say, which is

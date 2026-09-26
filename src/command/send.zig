@@ -1,57 +1,59 @@
-//! `send` — hand a ledger to a provider and carry on with it.
+//! `send` — run a ledger, and write the turn it makes.
 //!
-//! The ledger says which model and what to ask it for. All it can be missing
-//! is whose model it was, because a request on the wire never said — so what
-//! `send` takes is a provider, and that is what makes a decoded request
-//! runnable again.
+//! The ledger says which model and everything to ask it for, and whose model
+//! it is. What comes out is the turn — the ledger as it arrived and whatever
+//! the run added — and nothing is kept. Keeping it is `tag`'s business, which
+//! is what lets one run be kept wherever it is tagged, or nowhere.
 
 const std = @import("std");
 const converse = @import("../converse.zig");
-const providers = @import("providers.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "send",
-    .summary = "run a ledger, optionally against a named provider",
+    .summary = "run a ledger and write the turn it makes",
     .run = run,
     .help = help,
 };
 
-/// What a provider is belongs to `m8 help providers`; what is listed here is
-/// which ones this machine has, because that is the argument.
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
     try w.writeAll(
-        \\m8 send — run a ledger against a provider
+        \\m8 send — run a ledger and write the turn it makes
         \\
-        \\  m8 [@AGENT|+CHAT] send [PROVIDER]
+        \\  m8 send
         \\
-        \\The ledger says which model and everything to ask it for. All it can
-        \\be missing is whose model it was, because a request on the wire never
-        \\said — so what send takes is a provider, and that is what makes a
-        \\decoded request runnable again.
+        \\The ledger on stdin says which model, everything to ask it for, and
+        \\whose model it is: what a model address says before its first `/`
+        \\is the provider it is asked of. The last model named is the one
+        \\that answers, so one piped in after a chat is the one it runs on.
         \\
-        \\  m8 +mathy send
-        \\  m8 decode openai-completions <request.json | m8 send local
+        \\  m8 cat @mathy | m8 send
+        \\  echo "#### :brain:/local/tiny" | m8 cat @mathy | m8 send
+        \\  m8 decode openai-completions local <request.json | m8 send
         \\
-        \\Naming one here is used instead of whatever the ledger names. Naming
-        \\none, the 🧠 decides: what a model address says before its first `/`
-        \\is the provider it is asked of.
+        \\Whatever the run says is appended — a reply, a 📲, and the answer to
+        \\that 📲. Under a pipe what comes out is the whole turn: the ledger as
+        \\it arrived, settled, and then all of that. A terminal is shown only
+        \\the reply. Nothing is kept: `m8 tag` keeps it.
         \\
-        \\Whatever the run says is appended to the ledger — a reply, a 📲, and
-        \\the answer to that 📲 — and the turn is saved and its name printed.
+        \\  m8 cat @mathy | m8 send | m8 tag @mathy
         \\
-    );
-    try providers.configured(ctx, w);
-    try w.writeAll(
-        \\
-        \\m8 help providers says what one of those is and how to write another.
+        \\That is what `m8 @mathy` does. m8 help providers says what a provider
+        \\is and how to write another.
         \\
     );
 }
 
 fn run(ctx: Ctx) !u8 {
-    const override = if (ctx.args.len > 0) ctx.args[0] else "";
-    try converse.run(ctx, override);
+    if (ctx.args.len > 0) {
+        try ctx.err.writeAll(
+            "m8 send: takes no arguments; whose model it is goes on the 🧠, " ++
+                "or on `m8 decode FORMAT PROVIDER`\n",
+        );
+        return 1;
+    }
+    _ = try converse.run(ctx, .{ .echo_given = ctx.mode == .md });
     return 0;
 }
