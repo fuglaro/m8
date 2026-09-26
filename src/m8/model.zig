@@ -90,7 +90,8 @@ pub fn render(arena: Allocator, m: Model) ![]const u8 {
 ///
 /// A parameter's value may be JSON, and JSON has commas of its own. Splitting
 /// blind would cut `[1,2]` in half and there would be no way to write one.
-fn fields(arena: Allocator, text: []const u8) ![]const []const u8 {
+/// A 🧰 property's extras are the same form after its type, so it is shared.
+pub fn fields(arena: Allocator, text: []const u8) ![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     var depth: usize = 0;
     var quoted = false;

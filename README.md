@@ -1045,9 +1045,9 @@ drags in the other, and a 🔝 never reaches a ledger.
 
 An argument is a bullet: `* NAME TYPE`, and its
 description on the lines indented under it. The name
-runs to the first space and the type is the rest of the
-line, so the last field may hold one safely and an enum
-keeps whatever spaces its values have.
+runs to the first space and the type to the first comma,
+so the last field may hold one safely and an enum keeps
+whatever spaces its values have.
 
 A type is JSON Schema's own and goes to the wire exactly
 as it is written, so it is lowercase: `string`, `number`,
@@ -1055,12 +1055,26 @@ as it is written, so it is lowercase: `string`, `number`,
 enum — a type holding a `|` is one, and its values are what
 it lists.
 
+Anything else JSON Schema says goes after the type as
+`,key:value` extras — `* limit integer,minimum:0` — split
+and read the way a 🧠's parameters are, so a value may be
+JSON with commas of its own. m8 has no vocabulary for
+them and checks none of it, a type included: a mistake
+is found at the provider.
+
 Type rules compose, so `Type[]` covers `object[]`.
 
 * An array `[]` suffix applies to the whole field, and
   arrayness lives only on the parent type — children use
   plain dots.
-* Enum values cannot contain a `|`.
+* Enum values cannot contain a `|` or a `,`.
+* Extras go on the outermost node, so an array's are the
+  array's own; a key for its items is written as
+  `items:{...}`.
+* An extra sharing a key m8 writes itself, such as
+  `description` over the lines under the bullet, stays in
+  the ledger but loses on the wire: m8's own codecs send
+  one key, and it is m8's.
 * Nesting is flat dotted paths, and parents are always
   declared, never inferred.
 * Optionality is a `?` on the name and applies at every

@@ -671,7 +671,7 @@ const Building = struct {
 // ------------------------------------------------------------------ decode
 
 pub fn decode(arena: Allocator, bytes: []const u8) ![]const doc.Record {
-    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{}) catch
+    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, api.request_options) catch
         return error.MalformedRequest;
     if (v != .object) return error.MalformedRequest;
 
@@ -855,6 +855,33 @@ const testing = std.testing;
 
 fn field(v: std.json.Value, name: []const u8) std.json.Value {
     return v.object.get(name).?;
+}
+
+test "an extra that collides with m8's own key never reaches the wire" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const tool = try toolbox.parse(arena, .md, "grep",
+        \\* q string,description:extra,pattern:^a
+        \\  native
+    );
+    const records = [_]doc.Record{.{ .sigil = .user, .content = "Hi." }};
+    const first = try encode(arena, &records, .{ .model = "tiny", .tools = &.{tool} });
+    try testing.expect(std.mem.indexOf(u8, first, "extra") == null);
+
+    const back = try decode(arena, first);
+    const tools = for (back) |r| {
+        if (r.sigil == .tool and r.content != null) break r;
+    } else return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("* q string,pattern:^a\n  native", tools.content.?);
+
+    const again = try encode(arena, &records, .{
+        .model = "tiny",
+        .tools = &.{try toolbox.parse(arena, .md, tools.value, tools.content.?)},
+    });
+    try testing.expect(std.mem.indexOf(u8, again, "extra") == null);
+    try testing.expect(std.mem.indexOf(u8, again, "\"pattern\":\"^a\"") != null);
 }
 
 fn requestOf(arena: Allocator, records: []const doc.Record, target: api.Target) !std.json.Value {

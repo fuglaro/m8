@@ -585,7 +585,7 @@ const Building = struct {
 // ------------------------------------------------------------------ decode
 
 pub fn decode(arena: Allocator, bytes: []const u8) ![]const doc.Record {
-    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{}) catch
+    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, api.request_options) catch
         return error.MalformedRequest;
     if (v != .object) return error.MalformedRequest;
 

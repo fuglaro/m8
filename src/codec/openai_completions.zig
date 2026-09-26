@@ -474,7 +474,7 @@ fn extractDelta(v: std.json.Value) ?[]const u8 {
 // ------------------------------------------------------------------ decode
 
 pub fn decode(arena: Allocator, bytes: []const u8) ![]const doc.Record {
-    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, api.request_options);
     if (v != .object) return error.MalformedRequest;
 
     var out: std.ArrayList(doc.Record) = .empty;

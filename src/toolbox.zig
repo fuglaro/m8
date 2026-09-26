@@ -23,6 +23,7 @@ const Mode = sigil.Mode;
 const api = @import("command/api.zig");
 const shield = @import("shield.zig");
 const markdown = @import("m8/markdown.zig");
+const model = @import("m8/model.zig");
 
 pub const Error = error{
     /// A property line had no type.
@@ -43,6 +44,15 @@ pub const Property = struct {
     type: []const u8,
     description: []const u8 = "",
     required: bool,
+    /// Schema keys beyond the type, from `,key:value` after it. JSON Schema's
+    /// own, passed through as written the way a model's parameters are: m8
+    /// has no vocabulary here, and what they mean is the provider's business.
+    extras: []const Extra = &.{},
+};
+
+pub const Extra = struct {
+    key: []const u8,
+    value: std.json.Value,
 };
 
 /// How a tool runs.
@@ -116,21 +126,35 @@ pub fn envName(arena: Allocator, name: []const u8) Allocator.Error!?[]const u8 {
     return out;
 }
 
-/// `NAME TYPE` or `NAME? TYPE`, from a bullet with its `*` already gone.
+/// `NAME TYPE` or `NAME? TYPE`, from a bullet with its `*` already gone,
+/// and either followed by `,key:value` extras.
 ///
 /// The name runs to the first space and the type is the rest of the line, so
 /// the last field may hold one safely and an enum keeps its spaces. `?` on the
-/// name carries optional, which used to be a sigil of its own.
+/// name carries optional, which used to be a sigil of its own. A comma ends
+/// the type rather than a space for the same reason, and the extras after it
+/// are split the way a 🧠's parameters are, so a JSON value keeps its commas.
 fn property(arena: Allocator, rest: []const u8) !Property {
-    _ = arena;
     const line = std.mem.trim(u8, rest, " \t");
     const cut = std.mem.indexOfAny(u8, line, " \t") orelse return Error.MissingType;
     var name = line[0..cut];
     const optional = std.mem.endsWith(u8, name, "?");
     if (optional) name = name[0 .. name.len - 1];
-    const kind = std.mem.trim(u8, line[cut + 1 ..], " \t");
+    const parts = try model.fields(arena, line[cut + 1 ..]);
+    const kind = std.mem.trim(u8, parts[0], " \t");
     if (name.len == 0 or kind.len == 0) return Error.MissingType;
-    return .{ .name = name, .type = kind, .required = !optional };
+
+    var extras: std.ArrayList(Extra) = .empty;
+    for (parts[1..]) |one| {
+        const field = std.mem.trim(u8, one, " \t");
+        if (field.len == 0) continue;
+        const at = std.mem.indexOfScalar(u8, field, ':') orelse continue;
+        try extras.append(arena, .{
+            .key = std.mem.trim(u8, field[0..at], " \t"),
+            .value = model.json(arena, std.mem.trim(u8, field[at + 1 ..], " \t")),
+        });
+    }
+    return .{ .name = name, .type = kind, .required = !optional, .extras = extras.items };
 }
 
 /// Parse the content of a 🧰 whose value is `NAME` or `NAME,FORMAT`.
@@ -303,15 +327,21 @@ pub fn writeSchema(s: *std.json.Stringify, t: Tool) SchemaError!void {
 /// `input_schema`. The schema under it is the same schema, so it is written
 /// here once and each codec names its own field.
 pub fn writeParameters(s: *std.json.Stringify, props: []const Property) SchemaError!void {
-    return writeObject(s, props, "");
+    return writeObject(s, props, "", &.{});
 }
 
 /// Stated explicitly because `writeObject` and `writeType` are mutually
 /// recursive, and an inferred set cannot close over itself.
 pub const SchemaError = std.Io.Writer.Error;
 
-fn writeObject(s: *std.json.Stringify, props: []const Property, prefix: []const u8) SchemaError!void {
+fn writeObject(
+    s: *std.json.Stringify,
+    props: []const Property,
+    prefix: []const u8,
+    extras: []const Extra,
+) SchemaError!void {
     try s.beginObject();
+    try writeExtras(s, extras, &.{ "type", "properties", "required" });
     try s.objectField("type");
     try s.write("object");
     try s.objectField("properties");
@@ -337,9 +367,13 @@ fn writeType(s: *std.json.Stringify, props: []const Property, p: Property) Schem
     // Arrayness lives on the parent type; the children carry plain dots.
     const array = std.mem.endsWith(u8, p.type, "[]");
     const base = if (array) p.type[0 .. p.type.len - 2] else p.type;
+    // Extras go on the outermost node, so an array's are the array's own. A
+    // key meant for its items is written as `items:{...}` by whoever means it.
+    const inner: []const Extra = if (array) &.{} else p.extras;
 
     if (array) {
         try s.beginObject();
+        try writeExtras(s, p.extras, &.{ "type", "items" });
         try s.objectField("type");
         try s.write("array");
         try s.objectField("items");
@@ -347,9 +381,19 @@ fn writeType(s: *std.json.Stringify, props: []const Property, p: Property) Schem
 
     if (std.mem.eql(u8, base, "object")) {
         // An object's own children carry the descriptions.
-        try writeObject(s, props, p.name);
+        try writeObject(s, props, p.name, inner);
     } else {
         try s.beginObject();
+        const is_enum = std.mem.indexOfScalar(u8, base, '|') != null;
+        const described = p.description.len > 0;
+        // Only what this node is actually given: an extra `description` on a
+        // bullet with no lines under it has nothing to lose to.
+        const own = [_][]const u8{
+            "type",
+            if (is_enum) "enum" else "",
+            if (described) "description" else "",
+        };
+        try writeExtras(s, inner, &own);
         try s.objectField("type");
         if (std.mem.indexOfScalar(u8, base, '|') != null) {
             // An enum is a string with the values named.
@@ -370,6 +414,21 @@ fn writeType(s: *std.json.Stringify, props: []const Property, p: Property) Schem
     }
 
     if (array) try s.endObject();
+}
+
+/// Extras, less any key m8 writes on this node itself.
+///
+/// The ledger keeps a key said twice — `description` as an extra and from the
+/// lines under the bullet — because the format has no opinion on it. The wire
+/// does: these are m8's own codecs, and sending a duplicate would leave which
+/// one counts to whichever provider reads it. So m8's own wins here, and the
+/// request says one thing.
+fn writeExtras(s: *std.json.Stringify, extras: []const Extra, own: []const []const u8) SchemaError!void {
+    next: for (extras) |e| {
+        for (own) |k| if (std.mem.eql(u8, k, e.key)) continue :next;
+        try s.objectField(e.key);
+        try s.write(e.value);
+    }
 }
 
 /// The one segment of `name` directly beneath `prefix`, or null when `name`
@@ -427,7 +486,7 @@ fn readObject(
         const is_required = for (required) |rv| {
             if (rv == .string and std.mem.eql(u8, rv.string, key)) break true;
         } else false;
-        try readType(arena, props, e.value_ptr.*, full, is_required, false);
+        try readType(arena, props, e.value_ptr.*, full, is_required, null);
     }
 }
 
@@ -437,7 +496,8 @@ fn readType(
     v: std.json.Value,
     name: []const u8,
     required: bool,
-    in_array: bool,
+    /// The array node this is the items of, which is where its extras live.
+    array: ?std.json.Value,
 ) ReadError!void {
     if (v != .object) return;
     const t = str(v.object.get("type")) orelse "string";
@@ -446,15 +506,19 @@ fn readType(
     // array of and the `[]` is put back here.
     if (std.mem.eql(u8, t, "array")) {
         const items = v.object.get("items") orelse return;
-        return readType(arena, props, items, name, required, true);
+        return readType(arena, props, items, name, required, array orelse v);
     }
-    const suffix = if (in_array) "[]" else "";
+    const suffix = if (array != null) "[]" else "";
 
     if (std.mem.eql(u8, t, "object")) {
         try props.append(arena, .{
             .name = name,
             .type = try std.fmt.allocPrint(arena, "object{s}", .{suffix}),
             .required = required,
+            .extras = if (array) |an|
+                try readExtras(arena, an, &.{ "type", "items" })
+            else
+                try readExtras(arena, v, &.{ "type", "properties", "required" }),
         });
         // Parents are always declared, never inferred, so the children follow.
         return readObject(arena, props, v, name);
@@ -475,7 +539,27 @@ fn readType(
         .type = try std.fmt.allocPrint(arena, "{s}{s}", .{ base, suffix }),
         .description = str(v.object.get("description")) orelse "",
         .required = required,
+        .extras = if (array) |an|
+            try readExtras(arena, an, &.{ "type", "items" })
+        else
+            try readExtras(arena, v, &.{ "type", "enum", "description" }),
     });
+}
+
+/// Every key on a node other than the ones m8 writes there itself.
+///
+/// Which keys those are is decided per node rather than by a list of JSON
+/// Schema's vocabulary, so a key comes back as an extra exactly when it could
+/// only have gone out as one. A duplicate from a request m8 did not write has
+/// already been settled by the time it gets here — one value per key.
+fn readExtras(arena: Allocator, v: std.json.Value, own: []const []const u8) ReadError![]const Extra {
+    var out: std.ArrayList(Extra) = .empty;
+    var it = v.object.iterator();
+    next: while (it.next()) |e| {
+        for (own) |k| if (std.mem.eql(u8, k, e.key_ptr.*)) continue :next;
+        try out.append(arena, .{ .key = e.key_ptr.*, .value = e.value_ptr.* });
+    }
+    return out.items;
 }
 
 
@@ -515,7 +599,9 @@ pub fn render(arena: Allocator, mode: Mode, t: Tool) ![]const u8 {
         .block => |b| try markdown.writeFence(w, "", b.lang, b.code),
     }
     for (t.properties) |p| {
-        try w.print("* {s}{s} {s}\n", .{ p.name, if (p.required) "" else "?", p.type });
+        try w.print("* {s}{s} {s}", .{ p.name, if (p.required) "" else "?", p.type });
+        for (p.extras) |e| try w.print(",{s}:{s}", .{ e.key, try model.written(arena, e.value) });
+        try w.writeByte('\n');
         var it = std.mem.splitScalar(u8, p.description, '\n');
         while (it.next()) |d| {
             if (p.description.len == 0) break;
@@ -743,6 +829,55 @@ test "enums, arrays and nesting reach the wire" {
     try testing.expect(std.mem.indexOf(u8, got, "\"depth\":{\"type\":\"integer\"}") != null);
     // The nested required list holds the child, and the outer one does not.
     try testing.expect(std.mem.indexOf(u8, got, "\"required\":[\"depth\"]") != null);
+}
+
+test "extras after the type reach the wire as written, before m8's own keys" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const t = try parse(arena, .md, "t",
+        \\* limit integer,minimum:0,examples:[1,2]
+        \\  How many
+        \\* tone warm | dry,note:"a, b"
+        \\* ids? string[],maxItems:5
+        \\* opts object,additionalProperties:false
+        \\* opts.depth PositiveInt
+    );
+    try testing.expectEqualStrings("integer", t.properties[0].type);
+    try testing.expectEqualStrings("warm | dry", t.properties[1].type);
+    const got = try schemaOf(arena, t);
+    // A JSON value keeps its commas, and nothing is translated — not even a
+    // type no provider has heard of.
+    try testing.expect(std.mem.indexOf(u8, got, "\"limit\":{\"minimum\":0,\"examples\":[1,2],\"type\":\"integer\",\"description\":\"How many\"}") != null);
+    try testing.expect(std.mem.indexOf(u8, got, "\"tone\":{\"note\":\"a, b\",\"type\":\"string\",\"enum\":[\"warm\",\"dry\"]}") != null);
+    // An array's extras are the array's own, not its items'.
+    try testing.expect(std.mem.indexOf(u8, got, "\"ids\":{\"maxItems\":5,\"type\":\"array\",\"items\":{\"type\":\"string\"}}") != null);
+    try testing.expect(std.mem.indexOf(u8, got, "\"opts\":{\"additionalProperties\":false,\"type\":\"object\"") != null);
+    try testing.expect(std.mem.indexOf(u8, got, "\"depth\":{\"type\":\"PositiveInt\"}") != null);
+}
+
+test "a key written twice goes out once, as m8's own" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const t = try parse(arena, .md, "t",
+        \\* q string,description:extra,pattern:^a
+        \\  native
+    );
+    const got = try schemaOf(arena, t);
+    try testing.expect(std.mem.indexOf(u8, got, "{\"pattern\":\"^a\",\"type\":\"string\",\"description\":\"native\"}") != null);
+
+    // With nothing of m8's own to lose to, the extra is what goes out.
+    const bare = try parse(arena, .md, "t", "* q string,description:extra");
+    try testing.expect(std.mem.indexOf(u8, try schemaOf(arena, bare), "{\"description\":\"extra\",\"type\":\"string\"}") != null);
+
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, got, .{});
+    var props: std.ArrayList(Property) = .empty;
+    try readParameters(arena, &props, v.object.get("function").?.object.get("parameters").?);
+    try testing.expectEqualStrings("native", props.items[0].description);
+    try testing.expectEqual(@as(usize, 1), props.items[0].extras.len);
+    try testing.expectEqualStrings("pattern", props.items[0].extras[0].key);
+    try testing.expectEqualStrings("* q string,pattern:^a\n  native", try render(arena, .md, .{ .name = "t", .properties = props.items }));
 }
 
 test "no property name is reserved, because the prefix already separates them" {

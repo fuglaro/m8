@@ -34,6 +34,10 @@ const toolbox = @import("toolbox.zig");
 
 pub const Error = error{UnknownCodec};
 
+/// How a request is read when decoding. m8 never writes a key twice, but a
+/// request from elsewhere may, and the last one is how most JSON reads it.
+pub const request_options: std.json.ParseOptions = .{ .duplicate_field_behavior = .use_last };
+
 /// What the ledger says the request is, plus the one thing it cannot: whether
 /// the answer is streamed, which belongs to this run rather than to what was
 /// said.

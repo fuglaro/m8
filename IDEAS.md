@@ -1,93 +1,5 @@
 
 
-
-# ==== DONE
-
-## COMMAND ARGS HONE
-
-m8 @mob/agent hi agent main chat
-- updates main agent chat ref in .m8-st8/@/mob/agent/+.md
-- updates main chat in .m8-st8/@/+.md to point to itself.
-m8 @mob/agent: hi once off question to agent
-m8 @mob/agent- # reset main agent chat
-
-m8 @mob/agent/chat1 forked chat
-- updates main chat ref in .m8-st8/@/mob/agent/chat1/+.md
-- updates main chat ref in .m8-st8/@/+.md
-m8 @mob/agent/chat1/subchat1 forked sub chat
-m8 @mob/agent/chat1: side question to chat
-m8 @mob/agent/chat1- # reset chat to parent
-
-m8 @ cool
-m8 <<'^'
-nice
-^
-
-m8 @- # just error
-
-If the main chat points to a ref, it updates to a new ref.
-If it points to a chat, it's the chat that updates.
-
-ref:
-`#### :brain:mob/agent/chat1/=/gftafinvgrdy`
-
-tag/ a chat/agent/ref to a new chat/agent name with new commands:
-m8 cat @ | m8 tag @chat
-m8 cat @ | m8 encode m8 | m8 save @agent
-m8 cat @mob/agent/chat1/=/gftafinvgrdy | m8 tag @mob/agent/chat2
-
-m8 @mob/agent/chat1/=/gftafinvgrdy: one shot question
-m8 @mob/agent/chat1/=/gftafinvgrdy hey # updates the main chat only. (Continue with just `m8 @ …`)
-
-Restructured m8-st8:
-.m8-st8/@/+.md
-.m8-st8/@/.tmpdir
-.m8-st8/@/mob/agent.md
-.m8-st8/@/mob/agent/+.md
-.m8-st8/@/mob/.tmpdir
-.m8-st8/@/mob/agent/chat1/+.md
-.m8-st8/@/mob/agent/chat1/=/gftafinvgrdy
-
-@ :brain: and unicode brain all work on the command line.
-If there is no main chat ref, `m8` says "pick an agent with `m8 @agent`". Only --help gives help and invalid args direct there.
-
-m8 @/model:
-m8 @/model # no named chat but updates main chat to ref.
-echo "#### :brain:/model…" | m8 save @agent
-m8 @/model- # just error
-
-Adding skills on the command line is no longer a ^skill argument as it can be done with a new command: m8 top [skill] | m8.
-The command line doesn't take +... anymore to continue a conversation and only one @agent may be provided, and while it is not itself a real command (being part of the main m8 command) it sits in that position and appears so in the help page. Then we make cat, encode, and send commands change to not rely on having already had the @agent resolved - they manage what they need themselves in the arguments after themselves. This should allow some complexity collapse. The send and encode commands change to only take the agent on stdin. The cat command changes to take the @agent reference as its last argument. m8 cat @agent | m8 send. This allows us to collapse the message and run command categorisation away. None of them load from the main chat directly but cat does accept @ as an agent (m8 cat @). The cat command appends stdin on the agent if given both.`echo "additional user message" | m8 cat @ | m8 send`. 
-The send command stops accepting a provider, since this is better handled with composing: `echo "#### :brain:/model" | m8 cat @ | m8 send` (works because the last model wins), and `m8 decode FORMAT PROVIDER | m8 send` for a decoded request.
-The tag command stores a ref entry, then refers to that ref in the chat location +.md then outputs the brain line.
-
-.tmpdirs are shared at the mob level and at the deepest mob level. Top level agents all share. Mob level agents all share their own tmpdir, and sub mob level agents have their own.
-
-
-Riff itself is out of scope for this change, but it's syntax is noted for clarity.
-m8 riff m8 @agent/new-sub-chat
-m8 # If there is a ref there, automatically runs m8 riff m8 @
-m8 @agent # If there is an agent there, automatically runs m8 riff m8 @agent
-Similarly will ensure a chat if it can, and riff.
-
-### Clarification
-* A chat with no +.md reads as its parent's head. -> CONFIRMED.
-* Change which model wins so model oerride works.
-* Move PROVIDER argument to decode FORMAT [PROVIDER] so `m8 decode FORMAT | m8 send PROVIDER` becomes `m8 decode FORMAT PROVIDER | m8 send`.
-* Shoot! I accidentally left the tmpdir cleaning thing. Stale idea! tmpdir clean up is OUT OF SCOPE here!
-* cat @chat resolves to a turn - emit the turn the chat currently points at, not the chat name.
-* send is pure - it saves the turn and moves no pointer, so `m8 @x hi` is exactly `echo hi | m8 cat @x | m8 send | m8 tag @x`. Given a lone 🧠 naming a turn (a document of that one record, which is what cat and send output), tag points the chat straight at it. Given anything else, tag stores it as a new turn and points at that. Either way tag outputs the 🧠 line of the turn the chat now points at.
-* A turn goes in the =/ of the chat it advances. A detached turn goes next to its parent. Turns from @/model go in @/=/
-* Bare m8 is m8 @, including when a document is piped in.
-* save @agent overwrites the existing file.
-* Bare m8 or m8 @x with a tty on stdin does not subprocess riff, it runs the functions of riff directly.
-* Change behaviour and update readme so that last model wins.
-* Prompt args after `m8 @` are space joined.
-* -- is removed entirely.
-* Turns are stored in `=/` folders, since `:` can't be in a Windows path. The `:` suffix stays as the one-shot marker.
-* Agents and mobs share a namespace (`x.md` beside `x/` is an agent and its chats, `x/` alone is a mob). Walk the name: the first prefix that is an agent file, in any config dir, is the agent and the rest are chats. If the segment after it is also an agent file, that is an error naming both.
-
-
 # ====
 Consider the following.
 
@@ -103,6 +15,11 @@ Consider the following.
   agent check, or a model calling tools forever.
 * Templating setups that support AGENTS.md.
 * How a person calls a tool at a chat.
+
+
+# ====
+
+parallel tool calling.
 
 # ====
 
@@ -252,9 +169,6 @@ Comptime elimination of OS specific code depending on target build.
 
 Try to squash out remaining {{CODE}} and {{M8}} framework level placeholders.
 
-# ====
-
-Reformat providers.json into a native m8 form?
 
 # ====
 
@@ -262,8 +176,6 @@ User only-callable tool?
 
 # ====
 
-
-Saw a harness use PositiveInt as a type, and altough clearly a hint, shouldn't we also use Pascal Case for type? Make sure the providers sanity check or clean type so we don't get a kick back.
 
 # ====
 
@@ -374,11 +286,6 @@ changing an agent changes chat histories?
 
 # ====
 
-Other common LLM providers / Anthropic / OpenAI / Google?
-setup api.
-
-# ====
-
 COMMON TOOLBOXES
 
 Standard ones out there esp for coding.
@@ -391,56 +298,11 @@ Plugin support -> look first for tool cmds in m8-st8 folders? Think about tool f
 
 # ====
 
-MOB DOWNLOADER
-
-Mob downloader with lock enforcer.
-Mob level locks -> "everything under here inherits this brain fragment".
-
-# ====
-
 CROSS OS SUPPORT
 
 * Windows -> anything that locks in a container way falls back to a DENY.
 * Linux -> initially like Windows, eventually implementing it's own containerisation system.
 
-# ====
-
-COMMAND ARGS EXTRA
-
-Support ^SKILL
-Support session creation?
-User calling a tool at a chat?
-
-```
-@AGENT - ask an agent, resetting it's named chat.
-+CHAT - continue a chat.
-... @CHAT - creates freshly named chat if an agent of the same name doesn't exist.
-
-^SKILL - include agent as skill (book in m8)
-
--- [QUERY] ... - supply user prompt
-```
-
-# ====
-
-ORGANISE M8-ST8
-
-Agent definitions search for peers by relative reference going outwards up mob levels.
-
-
-Note that in the future we may implement persistant chats ongoing between
-agents using send_message to each other by referencing
-
-?? How shoud send_message (to another agent) work?
-Do we set up persistent chats under a mob?
-
-```
-.m8-st8/@/=/REF.m8
-.m8-st8/@/+/CHAT.m8
-.m8-st8/@/[MOB]/AGENT.m8
-
-.m8-st8/@/+/[SESSION]/CHAT.m8
-```
 
 # ====
 
@@ -518,47 +380,15 @@ Maintain a small server-side history/snapshot per file path (e.g. save previous 
 Truncate very long view output with a note suggesting the caller grep for line numbers first, rather than dumping the whole file.
 Return clear errors, not silent failures, on old_str uniqueness violations, missing files, or invalid line numbers.
 
-# ====
-
 
 # ====
 
-Named Chats
-
-Making a named chat:
-m8 @quick +chat-session-name -- …
-m8 +chat-session-name -- …
-
-So essentially
-m8 @quick …
-Is just shorthand for:
-m8 @quick +quick …
-
-Forking a chat to a new name:
-m8 @=/xxx +chat-session-name
-m8 +chat-session-name -- …
-
-====
-Listing
-
-m8 list agents [MOB]
-Lists agents then sub-mob agents alphabetically.
-
-m8 list chats [MOB]
-
-…
-
-# ====
+# MOB CHATS
 
 Mob chats
 
 IDEAS CURRENTLY ALL OVER THE PLACE
 
-m8 @quick +teamy/
-m8 @review +teamy/
-m8 @thinker +teamy/
-m8 @big ^plan ^manager ??????? +teamy/orchistrator
-m8 +teamy/orchistrator -- 'get everyone to do something cool'
 
 m8 @quick @teamA/coder
 m8 @think @teamA/review
@@ -589,6 +419,9 @@ m8_st8/+/MOB/
 
 Where to record progress?
 
+{{mob}} placehold reflection for use in ensuring an agent
+can't call a parent mob agent? or just hardcode?
+
 
 
 # ====
@@ -596,19 +429,20 @@ Where to record progress?
 Specify the format independently of the Zig implementation, sooner than
   feels necessary. The moat is the data model and the format collapse,
   not the CLI, and a second implementation is the proof of it.
+  (dude was ona about Z-machine)
 
 # ====
+
+Other common LLM providers / Anthropic / OpenAI / Google?
+setup api.
+
+Reformat providers.json into a native m8 form?
 
 ~/.config/m8-st8/core/providers.json has a good default for url.
 Should we add to the default one some basic setups like for claude / openai etc?
 Is that too opinionated?
 There are some Mac commands in there for key access.
-Maybe we just make a folder of example setups.
-
-
-# ====
-
-Rename CALL_ID with propper prefix M8_CALL_ID
+Maybe we just make a folder of example setups
 
 # ==== REVIEW SUGGESTIONS
 
@@ -979,6 +813,14 @@ m8 dangling
 Start with graph structure, parent references, timestamps, and labels. Summaries
 can come later. This would make the filesystem-backed conversation model much
 easier to navigate.
+
+
+Listing agents and mobs? Do we even? ls right?
+```
+m8 list agents [MOB]
+Lists agents then sub-mob agents alphabetically.
+```
+
 
 ### Use machine-readable diagnostics
 
