@@ -1,6 +1,13 @@
 
 
 # ====
+
+This is creeping up...
+zig build -Doptimize=ReleaseSmall
+what can we do? We want this tiny.
+Can anything tighten or collapse without dropping anything meaningful?
+
+# ====
 Consider the following.
 
 * Local Wikipedia search with a vector database.
