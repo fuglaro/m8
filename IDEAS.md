@@ -10,59 +10,6 @@ Review everything again on the mission statement in the README.md
 * Distribution - shipped defaults; the operator's to replace.
 * Fun - proof the form holds.
 
-## Ledger Truth
-
-### DONE: Cut-off replies read as finished
-
-* `finish_reason` / `stop_reason` are dropped.
-* A `max_tokens` stop looks like a complete 🤖.
-* Continuing feeds the model its own severed sentence.
-* Design question: 🤖 is content-only and the sigil set is closed.
-* OMIT: Same question:
-  * Resolved model - what answered, versus what the 🧠 asked.
-* Not ledger:
-  * Usage, id, fingerprint, service tier.
-
-### DONE: Writes are not crash-safe
-
-* `session.zig` writes turns and `+` refs with plain `writeFile`.
-* Interrupt - partial turn.
-* Two runs - race on a ref.
-* Fix: temp file, fsync, rename; compare-and-swap for refs.
-
-### DONE: Bad 🛡 env name vanishes
-
-* `shield.zig:180` turns it into "no variable".
-* `toolbox.parse` returns `BadEnvironmentName` for the same mistake.
-* Should fail when the definition is read.
-
-### OMIT: Concurrent edits in munge
-
-* Omitted because this isn't munge's brand - that's a patch editing system.
-
-* `read` hands back a hash.
-* `write` takes it, refuses if the file moved.
-* Exact match catches most; this closes the race.
-
-### OMIT: Things that never end
-
-This should be built into tool design itself,
-and used in conjunction with a an agent loop.
-Agent loops are easily done in the layer orchistrating m8,
-and could be done with m8 with a looper toy model ->
-calls subagent, again and again. Or just a cron!
-
-* A tool that hangs or floods output hangs the harness.
-  * `launch.spawn` writes all input, then waits.
-* A model calling tools forever.
-* Agents calling each other in a cycle.
-* Caps are operational:
-  * timeout
-  * output size
-  * descendant count
-  * cancel on parent exit
-* Customisable - so a 🛡 or definition variable?
-
 ## Framework
 
 ### Format spec apart from the Zig
@@ -75,6 +22,8 @@ calls subagent, again and again. Or just a cron!
   * invariants - `parse(render(parse(x)))`, `decode(encode(l))`
   * invariants - streamed == complete, single == split
   * a tiny reader in Python or shell
+* Make a skill agents to understand manipulating themselves
+  dropped into core defaults.
 
 ### Smallest stable public surface
 
@@ -199,6 +148,10 @@ calls subagent, again and again. Or just a cron!
   * zmachine spun off the same way.
 * Comptime elimination of OS-specific code.
 * `zig build split` leaves stale binaries in `zig-out/bin`.
+* Build minimal options:
+  * No inbuilt defaults.
+  * No toys.
+* Named default? build for release small.
 
 ## Sandbox and Cross-OS
 
@@ -217,6 +170,16 @@ calls subagent, again and again. Or just a cron!
   * network
 
 ## Distribution
+
+### Docs
+
+* Completely redo the README succinct and clear and well described.
+* Active demo - easiest way to have text-only animation of a play.
+  - Hi m8, can you give yourself a tool to connect to this MCP.
+  - First use useful.
+* Webassembly build of active demo? Running Zork? Elisa?
+* Can this be in github or does it need to be hosted?
+  How to make prominent in README of github without big binary media?
 
 ### Core defaults
 
@@ -340,6 +303,7 @@ calls subagent, again and again. Or just a cron!
 * Glulx.
   * separate VM, bigger address space, Glk I/O
   * roughly doubles reach into modern IFComp
+* Test against terminal tests.
 
 ## Settled
 
