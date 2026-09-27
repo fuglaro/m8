@@ -31,6 +31,36 @@ pub const history = "=";
 /// A chat's pointer, inside the chat's own folder.
 pub const pointer = "+";
 
+/// What a 💭's value starts with when what it holds is kept aside.
+pub const aside = "@";
+
+/// A snip is a turn's aside, kept in the same `=` folder as the turn that
+/// names it. The prefix is longer than a turn's name and holds a character
+/// one never does, so the two can never be taken for each other.
+pub const snip_prefix = "snip-";
+
+/// The value a 💭 carries to keep `content` aside: `@snip-` and ten letters
+/// of its hash.
+///
+/// Named from what it holds rather than by chance, so the name exists the
+/// moment the thought does — shown on a terminal before anything is saved,
+/// and the file a save writes is that name. The same bytes are the same snip.
+pub fn asideFor(arena: Allocator, content: []const u8) ![]const u8 {
+    var h = std.hash.Wyhash.hash(0, content);
+    var id: [id_len]u8 = undefined;
+    for (&id) |*c| {
+        c.* = 'a' + @as(u8, @intCast(h % 26));
+        h /= 26;
+    }
+    return std.fmt.allocPrint(arena, "{s}{s}{s}", .{ aside, snip_prefix, &id });
+}
+
+/// The snip a 💭 names, relative to the turn naming it, or null for none.
+pub fn snipOf(r: doc.Record) ?[]const u8 {
+    if (r.sigil != .thought or !std.mem.startsWith(u8, r.value, aside ++ snip_prefix)) return null;
+    return r.value[aside.len..];
+}
+
 /// The main chat. A pointer with no chat folder around it, so it sits at the
 /// top of `@/`.
 pub const main = pointer;
@@ -201,6 +231,10 @@ fn newId(io: std.Io) [id_len]u8 {
 }
 
 /// Write `records` as the file called `name`, in the nearest config directory.
+///
+/// A turn's `💭@` is kept aside first: what it holds goes to the snip it
+/// names, beside the turn, and the turn keeps only the name. Which thoughts
+/// ask is the codec's decision; that they are kept is this.
 pub fn write(
     arena: Allocator,
     io: std.Io,
@@ -209,6 +243,49 @@ pub fn write(
     records: []const doc.Record,
 ) !void {
     if (dirs.len == 0) return Error.NoConfigDir;
+    const kept = if (isTurn(name)) try keepAside(arena, io, dirs, name, records) else records;
+    return writeFile(arena, io, dirs, name, kept);
+}
+
+/// The records with every `💭@` still holding its content written out to its
+/// snip, and left holding the name alone.
+fn keepAside(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    turn: []const u8,
+    records: []const doc.Record,
+) ![]const doc.Record {
+    const folder = std.fs.path.dirname(turn) orelse history;
+    var out: std.ArrayList(doc.Record) = .empty;
+    for (records) |r| {
+        const content = r.content orelse {
+            try out.append(arena, r);
+            continue;
+        };
+        // A bare `@` from something that did not name it is named here.
+        const value = if (r.sigil == .thought and std.mem.eql(u8, r.value, aside))
+            try asideFor(arena, content)
+        else
+            r.value;
+        const name = snipOf(.{ .sigil = r.sigil, .value = value }) orelse {
+            try out.append(arena, r);
+            continue;
+        };
+        const snip = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, name });
+        try writeFile(arena, io, dirs, snip, &.{.{ .sigil = .thought, .content = content }});
+        try out.append(arena, .{ .sigil = .thought, .value = value });
+    }
+    return out.items;
+}
+
+fn writeFile(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    name: []const u8,
+    records: []const doc.Record,
+) !void {
 
     const path = try std.fs.path.join(arena, &.{ dirs[0], try config.nameFile(arena, name) });
 
@@ -248,6 +325,17 @@ test "an id is lowercase letters only" {
     // 640 letters over 26 buckets: a letter never appearing would mean the
     // rejection step is folding the range wrong.
     for (seen) |s| try std.testing.expect(s);
+}
+
+test "a snip is named from what it holds, never like a turn" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const one = try asideFor(arena, ":lock_with_ink_pen:SIG");
+    try testing.expectEqualStrings(one, try asideFor(arena, ":lock_with_ink_pen:SIG"));
+    try testing.expect(!std.mem.eql(u8, one, try asideFor(arena, ":lock_with_ink_pen:SIH")));
+    try testing.expectEqual(aside.len + snip_prefix.len + id_len, one.len);
+    for (one[aside.len + snip_prefix.len ..]) |c| try testing.expect(c >= 'a' and c <= 'z');
 }
 
 test "a name says what kind it is by its shape alone" {

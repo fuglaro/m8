@@ -46,6 +46,9 @@ pub const Error = error{
     TopMisplaced,
     /// A 🔝 opened a top that nothing closed.
     TopUnclosed,
+    /// A 💭 names a snip that is not there. What it held was kept nowhere
+    /// else, so the thought cannot be given back as it was.
+    MissingSnip,
 };
 
 pub const ExpandError = Error || session.ReadError || toolbox.Error || std.Io.Writer.Error;
@@ -258,7 +261,7 @@ fn walk(
             } else .body,
             .skill => .top,
             else => {
-                try out.append(arena, try canonical(arena, top.mode, r));
+                try out.append(arena, try canonical(arena, top.mode, try unsnip(arena, io, dirs, top.name, r)));
                 continue;
             },
         };
@@ -289,6 +292,29 @@ fn walk(
     }
 
     return .{ .records = out.items, .origin = origin };
+}
+
+/// A 💭 whose content was kept aside, with it put back. Everything reading a
+/// ledger reads it whole; only the file on disk is kept tidy, and a file is
+/// what `cat` shows. A snip lives beside the turn that names it.
+fn unsnip(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    turn: []const u8,
+    r: doc.Record,
+) ExpandError!doc.Record {
+    if (r.content != null) return r;
+    const name = session.snipOf(r) orelse return r;
+    const folder = std.fs.path.dirname(turn) orelse session.history;
+    const path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, name });
+    const src = (try config.read(arena, io, dirs, try config.nameFile(arena, path))) orelse
+        return Error.MissingSnip;
+    var diag: doc.Diagnostic = .{};
+    for (try doc.parse(arena, src, &diag)) |kept| {
+        if (kept.sigil == .thought) return .{ .sigil = .thought, .value = r.value, .content = kept.content };
+    }
+    return Error.MissingSnip;
 }
 
 /// Nested content carries the quote of the document it sat in, and a ledger
@@ -483,6 +509,46 @@ test "a chat expands through its turns to the agent it began with" {
     for (want, l.records) |s, r| try testing.expectEqual(s, r.sigil);
     try testing.expectEqualStrings("mathy", l.origin);
     try testing.expectEqualStrings("tiny", (try runsOn(arena, l.records)).?.name);
+}
+
+test "a thought kept aside is a snip on disk and whole again when read" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-snip");
+    defer f.deinit(arena);
+    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n");
+
+    const dirs = [_][]const u8{f.dir};
+    const turn = "mathy/=/abcdefghij";
+    try session.write(arena, f.io, &dirs, turn, &.{
+        .{ .sigil = .agent, .value = "mathy" },
+        .{ .sigil = .thought, .content = "weighing it" },
+        .{ .sigil = .thought, .value = "@", .content = ":lock_with_ink_pen:SIG" },
+        .{ .sigil = .bot, .content = "Hi." },
+    });
+
+    // The turn names the snip and holds none of it.
+    const saved = (try config.read(arena, f.io, &dirs, try config.nameFile(arena, turn))).?;
+    try testing.expect(std.mem.indexOf(u8, saved, "SIG") == null);
+    try testing.expect(std.mem.indexOf(u8, saved, "#### :thought_balloon:@" ++ session.snip_prefix) != null);
+    // Named from what it holds, and beside the turn that names it.
+    const snip = try std.fmt.allocPrint(arena, "mathy/=/{s}", .{(try session.asideFor(arena, ":lock_with_ink_pen:SIG"))[1..]});
+    try testing.expect((try config.read(arena, f.io, &dirs, try config.nameFile(arena, snip))) != null);
+
+    // Read back, everything is where it was.
+    const l = try expand(arena, f.io, &dirs, turn);
+    try testing.expectEqual(@as(usize, 4), l.records.len);
+    try testing.expectEqualStrings("weighing it", l.records[1].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:SIG", l.records[2].content.?);
+    try testing.expect(session.snipOf(l.records[2]) != null);
+
+    // A snip that is gone is said, not quietly left out.
+    try f.agent(arena, "mathy/=/lost.md", "#### :brain:mathy\n\n#### :thought_balloon:@snip-nowherenea\n");
+    try testing.expectError(Error.MissingSnip, expand(arena, f.io, &dirs, "mathy/=/lost"));
 }
 
 test "tool calls stay, and only an unanswered one is still owed" {

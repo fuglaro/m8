@@ -491,6 +491,9 @@ const LiveReply = struct {
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
         if (bytes.len == 0) return;
+        // Kept aside is kept out of sight: a terminal shows the header alone,
+        // and the turn still holds all of it.
+        if (self.mode == .m8 and self.pending == .thought and std.mem.startsWith(u8, self.value, "@")) return;
         if (self.body == null) {
             if (self.written.*) try self.out.writeByte('\n');
             self.written.* = true;

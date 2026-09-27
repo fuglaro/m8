@@ -1016,8 +1016,8 @@ and a bare blockless header offers it. A definition header may not
 combine content and variable configuration.
 
 * Value only: 🧠 📚 🔏 🟢
-* Content only: 🙋 💭 🧭
-* Both: 🤖 🧰 📲 🧾 🚫 🛡️ 🏃
+* Content only: 🙋 🧭
+* Both: 🤖 💭 🧰 📲 🧾 🚫 🛡️ 🏃
 * Neither: 🔝
 
 ### Stopping Short
@@ -1052,6 +1052,33 @@ value and nothing under it.
   * `declined by CATEGORY` - a refusal naming its policy
   * `paused at` - a paused server-side turn
   * `stopped at` - a stop sequence, or a term not yet known
+
+### Kept Aside
+
+A 💭 whose value is `@` asks for what it holds to be kept
+out of the way.
+
+```m8
+▄ 💭
+│ weighing it
+
+▄ 💭@snip-oniwhbxumk
+```
+
+* Which thoughts ask is the codec's decision.
+  * A signature is the case today - it exists only to be
+    handed back, so it follows its thought as a `💭@`.
+* The name is ten letters of a hash of what it holds.
+  * Known the moment it exists, so the screen, the file and
+    the saved turn all say the same thing.
+  * `snip-` and a turn's ten letters never collide.
+* With content, it is not saved yet; without, it is in the
+  snip.
+  * Saving a turn writes the snip beside it, in its `=/`.
+  * Reading a ledger puts it back, so a codec gets exactly
+    what it wrote.
+* A terminal shows the header alone; a pipe carries all of
+  it, since whatever is next may be keeping the turn.
 
 ### Tops
 

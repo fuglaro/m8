@@ -107,18 +107,14 @@ Review everything again on the mission statement in the README.md
 * MAYBE: Agents advertise themselves as subagents.
 * MAYBE: Skill-finder minion - auto-post 🙋?
 
-### Hooks and Thought Signatures
+### Hooks
 
 * MAYBE: Hooks: Auto-action on response - if max_tokens on robot reply, auto compress/etc.
   - Wrapper command on responses? similar to shields?
-* Is Hooks how we can customise an agent to filter out thought
-  signatures on the cmdline output?
-* Should thought signatures be a separate metadata sigil?
-  - then it can be saved and addable as a refernce through a :brain:
-    by the provider? Hiding it as a brain ref...
-  - Could each thinking block be the same?
-  - Could this be an option in the agent that the provider
-    understands. Another meta directive to the provider???
+
+### MAYBE: Codec-specific metadata sigil
+
+* Consider shifting 🔏 into a promoted codec-metadata arbitrary sigil.
 
 ### Loose ends
 
@@ -334,3 +330,51 @@ Off the list - check any you disagree with.
 ## TODO
 
 * Validate and document everything can be reasonably composed.
+
+
+
+### DONE: Thought Signatures
+
+* Should thought signatures be a separate metadata sigil?
+  - then it can be saved and addable as a refernce through a :brain:
+    by the codec? Hiding it as a brain ref...
+  - Could each thinking block be the same?
+  - Could this be an option in the agent that the provider
+    understands. Another meta directive to the provider???
+  - Or allow:
+    - Mutliple :thought_balloons: per turn,
+      opininioned by codec so recomposable.
+    - Allow the :thought_ballon: to have/be a value,
+      which then operates exactly as a brain. e.g hide signature:
+      ```
+      #### :thought_balloon:
+      > **reasoning plan**
+      #### :thought_balloon:
+      > **validating concerns**
+      #### :thought_balloon:@mob/agent/chat/.fragments/asqihqrhasfa`
+      ```
+      (ref comes after content)
+      Then the codecs have the option of putting signatures
+      into additional thought balloons into the ref.
+      And to hide long unsigned thoughts:
+      ```
+      #### :thought_balloon:@mob/agent/chat/.fragments/jasfkljahaag`
+      > **reasoning plan**
+      #### :thought_balloon:@mob/agent/chat/.fragments/easgaegasgas`
+      > **validating concerns**
+      #### :thought_balloon:@mob/agent/chat/.fragments/asqihqrhasfa`
+      ```
+  - Start off without the metadata sigils, having the codecs
+    be opinionated and chosing the thought_balloon approach to
+    hide signatures. If the codec decides then it should not need
+    metadata yet.
+  - Currentlly the Open AI one drops something like:
+    ```
+    ▄ 💭
+    │ **Verifying haiku syllable count****Refining haiku lines for syllables**
+    │ :lock_with_ink_pen:rs_065ca51a49c06420016ab919a9c65087d296eb6419240c6daf...
+    ```
+    With each thought summary dropping sequentially.
+    Hopefully this plan makes improving that experience straightforwards.
+  - Look at other codecs to see if soemthing sensible is sensible there too.
+

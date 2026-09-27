@@ -166,7 +166,7 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
             .user => try message(s, "user", r.content orelse ""),
             .bot => try message(s, "assistant", r.content orelse ""),
             .thought => if (try signed(arena, r.content orelse "")) |thought|
-                try reasoning(s, thought),
+                try reasoning(s, try owedTo(arena, records, i, thought)),
             .call => {
                 try s.beginObject();
                 try s.objectField("type");
@@ -248,12 +248,12 @@ fn reasoning(s: *std.json.Stringify, thought: Thought) !void {
     try s.write(thought.id);
     try s.objectField("summary");
     try s.beginArray();
-    if (thought.text.len > 0) {
+    for (thought.parts) |part| {
         try s.beginObject();
         try s.objectField("type");
         try s.write("summary_text");
         try s.objectField("text");
-        try s.write(thought.text);
+        try s.write(part);
         try s.endObject();
     }
     try s.endArray();
@@ -269,7 +269,8 @@ fn reasoning(s: *std.json.Stringify, thought: Thought) !void {
 /// and the last may hold one, which is the grammar's rule and not this
 /// codec's exception to it.
 const Thought = struct {
-    text: []const u8 = "",
+    /// One per summary part: each is a 💭 of its own in the ledger.
+    parts: []const []const u8 = &.{},
     id: []const u8 = "",
     encrypted: []const u8 = "",
 };
@@ -292,11 +293,30 @@ fn signed(arena: Allocator, content: []const u8) !?Thought {
     // A thought this api never signed is one it will not take back.
     if (mark.len == 0) return null;
     const cut = std.mem.indexOfScalar(u8, mark, ',') orelse return null;
+    const parts: []const []const u8 = if (text.items.len == 0)
+        &.{}
+    else
+        try arena.dupe([]const u8, &.{text.items});
     return .{
-        .text = text.items,
+        .parts = parts,
         .id = std.mem.trim(u8, mark[0..cut], " \t"),
         .encrypted = std.mem.trim(u8, mark[cut + 1 ..], " \t"),
     };
+}
+
+/// A signed thought with the unsigned 💭 just before it gathered back in as
+/// its summary: an item is written as a 💭 per part and then its 🔏 kept
+/// aside, and this api wants them as one item again.
+fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Thought) !Thought {
+    var from = at;
+    while (from > 0 and records[from - 1].sigil == .thought and
+        (try signed(arena, records[from - 1].content orelse "")) == null) from -= 1;
+    if (from == at) return thought;
+
+    var parts: std.ArrayList([]const u8) = .empty;
+    for (records[from..at]) |r| try parts.append(arena, r.content orelse "");
+    try parts.appendSlice(arena, thought.parts);
+    return .{ .parts = parts.items, .id = thought.id, .encrypted = thought.encrypted };
 }
 
 /// The 🔏 a line carries, in either spelling. A nested sigil is read the way
@@ -310,14 +330,23 @@ fn signatureOn(line: []const u8) ?[]const u8 {
     return null;
 }
 
-/// A 💭's content, with the 🔏 written under what was thought.
-fn withSignature(arena: Allocator, text: []const u8, id: []const u8, enc: []const u8) ![]const u8 {
-    if (id.len == 0 and enc.len == 0) return arena.dupe(u8, text);
+/// A reasoning item's 🔏, as a 💭 of its own asking to be kept aside. The
+/// summary is for reading and the encrypted content only for giving the
+/// thought back, so only the summary stays in sight.
+fn signature(
+    arena: Allocator,
+    out: *std.ArrayList(doc.Record),
+    sink: ?api.Sink,
+    id: []const u8,
+    enc: []const u8,
+) !void {
+    if (id.len == 0 and enc.len == 0) return;
     // The spelling every file is written in; a reader is handed whichever one
     // they are being written.
-    const m = sigil.Sigil.signature.text(.md);
-    if (text.len == 0) return std.fmt.allocPrint(arena, "{s}{s},{s}", .{ m, id, enc });
-    return std.fmt.allocPrint(arena, "{s}\n{s}{s},{s}", .{ text, m, id, enc });
+    const kept = try std.fmt.allocPrint(arena, "{s}{s},{s}", .{ sigil.Sigil.signature.text(.md), id, enc });
+    const value = try api.asideFor(arena, kept);
+    if (sink) |s| try s.record(.thought, value, kept);
+    try out.append(arena, .{ .sigil = .thought, .value = value, .content = kept });
 }
 
 fn callId(value: []const u8) []const u8 {
@@ -395,9 +424,11 @@ fn event(built: *Building, v: std.json.Value) !bool {
     } else if (std.mem.eql(u8, kind, "response.reasoning_summary_text.delta") or
         std.mem.eql(u8, kind, "response.reasoning_text.delta"))
     {
-        // Two channels, one record. A model that summarises its thinking and
+        // Two channels, one sigil. A model that summarises its thinking and
         // one that shows it are both thinking, and the ledger says so the
-        // same way.
+        // same way — a 💭 per part, so one heading never runs into the next.
+        const index = num(v.object.get("summary_index")) orelse num(v.object.get("content_index")) orelse 0;
+        if (index != built.part) try built.nextPart(index);
         if (str(v.object.get("delta"))) |d| try built.say(.thought, d);
     } else if (std.mem.eql(u8, kind, "response.function_call_arguments.delta")) {
         if (str(v.object.get("delta"))) |d| try built.args.appendSlice(built.arena, d);
@@ -484,6 +515,9 @@ const Building = struct {
     encrypted: []const u8 = "",
     /// Of the response rather than any item, and only known at its end.
     reason: []const u8 = "",
+    /// The summary part being read, and how many before it became 💭 already.
+    part: i64 = 0,
+    parts: usize = 0,
     /// A refusal completes like anything else here, so the part's own type is
     /// what says the model declined.
     refused: bool = false,
@@ -493,6 +527,8 @@ const Building = struct {
     fn start(b: *Building, item: std.json.Value) !void {
         b.kind = .none;
         b.shown = false;
+        b.part = 0;
+        b.parts = 0;
         b.text = .empty;
         b.args = .empty;
         b.id = "";
@@ -539,11 +575,12 @@ const Building = struct {
             .reasoning => {
                 if (str(item.object.get("encrypted_content"))) |enc| b.encrypted = enc;
                 if (str(item.object.get("id"))) |got| b.id = got;
-                if (b.text.items.len > 0) return; // already streamed
+                if (b.text.items.len > 0 or b.parts > 0) return; // already streamed
                 const summary = item.object.get("summary") orelse return;
                 if (summary != .array) return;
-                for (summary.array.items) |part| {
+                for (summary.array.items, 0..) |part, i| {
                     if (part != .object) continue;
+                    if (i > 0) try b.nextPart(@intCast(i));
                     if (str(part.object.get("text"))) |t| try b.say(.thought, t);
                 }
             },
@@ -554,6 +591,19 @@ const Building = struct {
             },
             .none => {},
         }
+    }
+
+    /// Close the summary part being read as a 💭 of its own, and read the
+    /// next. A part that said nothing leaves nothing behind.
+    fn nextPart(b: *Building, index: i64) !void {
+        if (b.text.items.len > 0) {
+            try b.records.append(b.arena, .{ .sigil = .thought, .content = b.text.items });
+            b.parts += 1;
+        }
+        if (b.shown) try b.sink.end();
+        b.shown = false;
+        b.text = .empty;
+        b.part = index;
     }
 
     /// Into the record and out to whoever is reading, at once.
@@ -583,13 +633,10 @@ const Building = struct {
                 .content = b.text.items,
             }),
             .reasoning => {
-                const content = try withSignature(b.arena, b.text.items, b.id, b.encrypted);
-                // The 🔏 is part of the record and is only known once the
-                // item ends, so it is written last — to the reader as well,
-                // because what comes out of the pipe is the turn rather than
-                // a view of it.
-                try b.show(.thought, content[b.text.items.len..]);
-                try b.records.append(b.arena, .{ .sigil = .thought, .content = content });
+                // The last part closes, and the 🔏 — known only now the item
+                // has ended — follows as a record of its own.
+                try b.nextPart(b.part + 1);
+                try signature(b.arena, &b.records, b.sink, b.id, b.encrypted);
             },
             .function_call => {
                 const raw = if (b.args.items.len == 0) "{}" else b.args.items;
@@ -691,24 +738,20 @@ fn readItem(arena: Allocator, out: *std.ArrayList(doc.Record), item: std.json.Va
             .content = try contentText(arena, item.object.get("content")),
         });
     } else if (std.mem.eql(u8, which, "reasoning")) {
-        var text: std.ArrayList(u8) = .empty;
         if (item.object.get("summary")) |summary| if (summary == .array) {
             for (summary.array.items) |part| {
                 if (part != .object) continue;
                 const t = str(part.object.get("text")) orelse continue;
-                if (text.items.len > 0) try text.append(arena, '\n');
-                try text.appendSlice(arena, t);
+                try out.append(arena, .{ .sigil = .thought, .content = t });
             }
         };
-        try out.append(arena, .{
-            .sigil = .thought,
-            .content = try withSignature(
-                arena,
-                text.items,
-                str(item.object.get("id")) orelse "",
-                str(item.object.get("encrypted_content")) orelse "",
-            ),
-        });
+        try signature(
+            arena,
+            out,
+            null,
+            str(item.object.get("id")) orelse "",
+            str(item.object.get("encrypted_content")) orelse "",
+        );
     } else if (std.mem.eql(u8, which, "function_call")) {
         try out.append(arena, .{
             .sigil = .call,
@@ -783,6 +826,11 @@ fn structural(key: []const u8) bool {
         if (std.mem.eql(u8, key, k)) return true;
     }
     return false;
+}
+
+fn num(v: ?std.json.Value) ?i64 {
+    const got = v orelse return null;
+    return if (got == .integer) got.integer else null;
 }
 
 fn str(v: ?std.json.Value) ?[]const u8 {
@@ -974,23 +1022,23 @@ test "a streamed reply reads as the items it was made of" {
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
 
-    try testing.expectEqual(@as(usize, 3), reply.records.len);
+    try testing.expectEqual(@as(usize, 4), reply.records.len);
     try testing.expectEqual(sigil.Sigil.thought, reply.records[0].sigil);
-    // The id and the encrypted content are kept with the thought they sign,
-    // because this api wants both back before it will believe it.
-    try testing.expectEqualStrings(
-        "weighing it\n:lock_with_ink_pen:rs_1,ENCRYPTED",
-        reply.records[0].content.?,
-    );
-    try testing.expectEqual(sigil.Sigil.bot, reply.records[1].sigil);
-    try testing.expectEqualStrings("Let me look.", reply.records[1].content.?);
-    try testing.expectEqual(sigil.Sigil.call, reply.records[2].sigil);
-    try testing.expectEqualStrings("say,call_1", reply.records[2].value);
+    try testing.expectEqualStrings("weighing it", reply.records[0].content.?);
+    // The id and the encrypted content follow the thought they sign, in a 💭
+    // asking to be kept aside: this api wants both back before it will
+    // believe it, and nobody needs to read them.
+    try testing.expect(std.mem.startsWith(u8, reply.records[1].value, "@snip-"));
+    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", reply.records[1].content.?);
+    try testing.expectEqual(sigil.Sigil.bot, reply.records[2].sigil);
+    try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
+    try testing.expectEqual(sigil.Sigil.call, reply.records[3].sigil);
+    try testing.expectEqualStrings("say,call_1", reply.records[3].value);
 
     // Streamed as it arrived, and the 🔏 when the item that carried it ended.
     // The 📲 did not: a call cannot be shown until it is whole.
     try testing.expectEqualStrings(
-        "thought:weighing it\n:lock_with_ink_pen:rs_1,ENCRYPTED\nbot:Let me look.",
+        "thought:weighing it\nthought::lock_with_ink_pen:rs_1,ENCRYPTED\nbot:Let me look.",
         collect.seen.items,
     );
 
@@ -999,6 +1047,50 @@ test "a streamed reply reads as the items it was made of" {
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
+}
+
+test "each summary part is a 💭, and they go back as one item" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // Two headings in one item, which used to run together as `****`.
+    const body =
+        \\event: response.output_item.added
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}
+        \\
+        \\event: response.reasoning_summary_text.delta
+        \\data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"**Verifying**"}
+        \\
+        \\event: response.reasoning_summary_text.delta
+        \\data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":1,"delta":"**Refining**"}
+        \\
+        \\event: response.output_item.done
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"**Verifying**"},{"type":"summary_text","text":"**Refining**"}],"encrypted_content":"ENC"}}
+        \\
+        \\event: response.completed
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+    ;
+    const at_once =
+        \\{"id":"resp_1","object":"response","status":"completed","output":[
+        \\{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"**Verifying**"},{"type":"summary_text","text":"**Refining**"}],"encrypted_content":"ENC"}]}
+    ;
+    for ([_][]const u8{ body, at_once }) |got| {
+        var r: std.Io.Reader = .fixed(got);
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 3), reply.records.len);
+        try testing.expectEqualStrings("**Verifying**", reply.records[0].content.?);
+        try testing.expectEqualStrings("**Refining**", reply.records[1].content.?);
+        try testing.expect(std.mem.startsWith(u8, reply.records[2].value, "@snip-"));
+
+        // Encoded, the parts are one item's summary again, signed once.
+        const request = try encode(arena, reply.records, .{ .model = "gpt-5.5" });
+        try testing.expect(std.mem.indexOf(u8, request,
+            \\"summary":[{"type":"summary_text","text":"**Verifying**"},{"type":"summary_text","text":"**Refining**"}],"encrypted_content":"ENC"
+        ) != null);
+    }
 }
 
 test "a whole reply reads the same as a streamed one" {
@@ -1017,13 +1109,11 @@ test "a whole reply reads the same as a streamed one" {
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
 
-    try testing.expectEqual(@as(usize, 3), reply.records.len);
-    try testing.expectEqualStrings(
-        "weighing it\n:lock_with_ink_pen:rs_1,ENCRYPTED",
-        reply.records[0].content.?,
-    );
-    try testing.expectEqualStrings("Let me look.", reply.records[1].content.?);
-    try testing.expectEqualStrings("say,call_1", reply.records[2].value);
+    try testing.expectEqual(@as(usize, 4), reply.records.len);
+    try testing.expectEqualStrings("weighing it", reply.records[0].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", reply.records[1].content.?);
+    try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
+    try testing.expectEqualStrings("say,call_1", reply.records[3].value);
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
@@ -1064,10 +1154,11 @@ test "a request decodes to a ledger and encodes back to the same request" {
     try testing.expectEqual(sigil.Sigil.system, records[3].sigil);
     try testing.expectEqual(sigil.Sigil.user, records[4].sigil);
     try testing.expectEqual(sigil.Sigil.thought, records[5].sigil);
-    try testing.expectEqualStrings("hmm\n:lock_with_ink_pen:rs_1,ENC", records[5].content.?);
-    try testing.expectEqual(sigil.Sigil.call, records[6].sigil);
+    try testing.expectEqualStrings("hmm", records[5].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENC", records[6].content.?);
+    try testing.expectEqual(sigil.Sigil.call, records[7].sigil);
     // Nothing on the wire said whether it worked, so it comes back a 🧾.
-    try testing.expectEqual(sigil.Sigil.result, records[7].sigil);
+    try testing.expectEqual(sigil.Sigil.result, records[8].sigil);
 
     const m = (try modelform.parse(arena, records[0].value)).?;
     const tool = try toolbox.parse(arena, .md, records[1].value, records[1].content.?);
@@ -1182,12 +1273,10 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     // reply and not an error — and it says it was cut off, even with no
     // reason given.
     const reply = try parse(arena, &r, collect.sink());
-    try testing.expectEqual(@as(usize, 2), reply.records.len);
-    try testing.expectEqualStrings(
-        "working it through\n:lock_with_ink_pen:rs_1,ENC",
-        reply.records[0].content.?,
-    );
-    try testing.expectEqual(sigil.Sigil.bot, reply.records[1].sigil);
-    try testing.expectEqualStrings("(stopped at incomplete)", reply.records[1].value);
-    try testing.expect(reply.records[1].content == null);
+    try testing.expectEqual(@as(usize, 3), reply.records.len);
+    try testing.expectEqualStrings("working it through", reply.records[0].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENC", reply.records[1].content.?);
+    try testing.expectEqual(sigil.Sigil.bot, reply.records[2].sigil);
+    try testing.expectEqualStrings("(stopped at incomplete)", reply.records[2].value);
+    try testing.expect(reply.records[2].content == null);
 }

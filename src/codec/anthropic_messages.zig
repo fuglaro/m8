@@ -191,7 +191,7 @@ fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
             .thought => {
                 if (try signed(arena, r.content orelse "")) |thought| {
                     try turn.speak(.assistant);
-                    try writeThinking(s, thought);
+                    try writeThinking(s, try owedTo(arena, records, i, thought));
                 }
                 i += 1;
             },
@@ -402,6 +402,27 @@ fn signed(arena: Allocator, content: []const u8) !?Thought {
     return .{ .text = text.items, .signature = signature };
 }
 
+/// A signed thought with the unsigned 💭 just before it put back in front:
+/// one thinking block is written as what was thought and then the 🔏 kept
+/// aside, and this api wants the two as one block again.
+fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Thought) !Thought {
+    var from = at;
+    while (from > 0 and records[from - 1].sigil == .thought and
+        (try signed(arena, records[from - 1].content orelse "")) == null) from -= 1;
+    if (from == at) return thought;
+
+    var text: std.ArrayList(u8) = .empty;
+    for (records[from..at]) |r| {
+        if (text.items.len > 0) try text.append(arena, '\n');
+        try text.appendSlice(arena, r.content orelse "");
+    }
+    if (thought.text.len > 0) {
+        if (text.items.len > 0) try text.append(arena, '\n');
+        try text.appendSlice(arena, thought.text);
+    }
+    return .{ .text = text.items, .signature = thought.signature };
+}
+
 /// The 🔏 a line carries, in either spelling. A nested sigil is read the way
 /// it is written, and both spellings mean the same thing everywhere.
 fn signatureOn(line: []const u8) ?[]const u8 {
@@ -413,14 +434,24 @@ fn signatureOn(line: []const u8) ?[]const u8 {
     return null;
 }
 
-/// A 💭's content, with the 🔏 written under what was thought.
-fn withSignature(arena: Allocator, text: []const u8, signature: []const u8) ![]const u8 {
-    if (signature.len == 0) return arena.dupe(u8, text);
+/// A thinking block as records: what was thought, then its 🔏 in a 💭 of its
+/// own asking to be kept aside. The text is for reading and the signature
+/// only for giving the thought back, so only the text stays in sight.
+fn thinking(
+    arena: Allocator,
+    out: *std.ArrayList(doc.Record),
+    sink: ?api.Sink,
+    text: []const u8,
+    signature: []const u8,
+) !void {
+    if (text.len > 0) try out.append(arena, .{ .sigil = .thought, .content = text });
+    if (signature.len == 0) return;
     // The spelling every file is written in; a reader is handed whichever one
     // they are being written.
-    const mark = sigil.Sigil.signature.text(.md);
-    if (text.len == 0) return std.fmt.allocPrint(arena, "{s}{s}", .{ mark, signature });
-    return std.fmt.allocPrint(arena, "{s}\n{s}{s}", .{ text, mark, signature });
+    const kept = try std.fmt.allocPrint(arena, "{s}{s}", .{ sigil.Sigil.signature.text(.md), signature });
+    const value = try api.asideFor(arena, kept);
+    if (sink) |s| try s.record(.thought, value, kept);
+    try out.append(arena, .{ .sigil = .thought, .value = value, .content = kept });
 }
 
 fn callId(value: []const u8) []const u8 {
@@ -663,13 +694,12 @@ const Building = struct {
                 .content = b.text.items,
             }),
             .thinking => {
-                const content = try withSignature(b.arena, b.text.items, b.signature.items);
-                // The 🔏 is part of the record and is only known once the
-                // block ends, so it is written last — to the reader as well,
-                // because what comes out of the pipe is the turn rather than
-                // a view of it.
-                try b.show(.thought, content[b.text.items.len..]);
-                try b.records.append(b.arena, .{ .sigil = .thought, .content = content });
+                // The text has already streamed; its 💭 closes before the
+                // 🔏 is written as a record of its own, known only now the
+                // block has ended.
+                if (b.shown) try b.sink.end();
+                b.shown = false;
+                try thinking(b.arena, &b.records, b.sink, b.text.items, b.signature.items);
             },
             .tool_use => {
                 const raw = if (b.args.items.len == 0) "{}" else b.args.items;
@@ -796,14 +826,13 @@ fn readBlock(
             .content = str(block.object.get("text")) orelse "",
         });
     } else if (std.mem.eql(u8, which, "thinking")) {
-        try out.append(arena, .{
-            .sigil = .thought,
-            .content = try withSignature(
-                arena,
-                str(block.object.get("thinking")) orelse "",
-                str(block.object.get("signature")) orelse "",
-            ),
-        });
+        try thinking(
+            arena,
+            out,
+            null,
+            str(block.object.get("thinking")) orelse "",
+            str(block.object.get("signature")) orelse "",
+        );
     } else if (std.mem.eql(u8, which, "tool_use")) {
         var buf: std.Io.Writer.Allocating = .init(arena);
         if (block.object.get("input")) |input|
@@ -1099,24 +1128,24 @@ test "a streamed reply reads as the blocks it was made of" {
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
 
-    try testing.expectEqual(@as(usize, 3), reply.records.len);
+    try testing.expectEqual(@as(usize, 4), reply.records.len);
     try testing.expectEqual(sigil.Sigil.thought, reply.records[0].sigil);
-    // The signature is kept with the thought that it signs, so the reply can
-    // be sent back and believed.
-    try testing.expectEqualStrings(
-        "weighing it\n:lock_with_ink_pen:abc123",
-        reply.records[0].content.?,
-    );
-    try testing.expectEqual(sigil.Sigil.bot, reply.records[1].sigil);
-    try testing.expectEqualStrings("Let me look.", reply.records[1].content.?);
-    try testing.expectEqual(sigil.Sigil.call, reply.records[2].sigil);
-    try testing.expectEqualStrings("say,toolu_1", reply.records[2].value);
+    try testing.expectEqualStrings("weighing it", reply.records[0].content.?);
+    // The signature follows the thought it signs, in a 💭 asking to be kept
+    // aside, so the reply can be sent back and believed without being read.
+    try testing.expectEqual(sigil.Sigil.thought, reply.records[1].sigil);
+    try testing.expect(std.mem.startsWith(u8, reply.records[1].value, "@snip-"));
+    try testing.expectEqualStrings(":lock_with_ink_pen:abc123", reply.records[1].content.?);
+    try testing.expectEqual(sigil.Sigil.bot, reply.records[2].sigil);
+    try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
+    try testing.expectEqual(sigil.Sigil.call, reply.records[3].sigil);
+    try testing.expectEqualStrings("say,toolu_1", reply.records[3].value);
 
     // 💭 and 🤖 reached the reader as they arrived, and the 🔏 when the block
     // that carried it ended. The 📲 did not: a call cannot be shown until it
     // is whole.
     try testing.expectEqualStrings(
-        "thought:weighing it\n:lock_with_ink_pen:abc123\nbot:Let me look.",
+        "thought:weighing it\nthought::lock_with_ink_pen:abc123\nbot:Let me look.",
         collect.seen.items,
     );
 
@@ -1144,13 +1173,11 @@ test "a whole reply reads the same as a streamed one" {
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
 
-    try testing.expectEqual(@as(usize, 3), reply.records.len);
-    try testing.expectEqualStrings(
-        "weighing it\n:lock_with_ink_pen:abc123",
-        reply.records[0].content.?,
-    );
-    try testing.expectEqualStrings("Let me look.", reply.records[1].content.?);
-    try testing.expectEqualStrings("say,toolu_1", reply.records[2].value);
+    try testing.expectEqual(@as(usize, 4), reply.records.len);
+    try testing.expectEqualStrings("weighing it", reply.records[0].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:abc123", reply.records[1].content.?);
+    try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
+    try testing.expectEqualStrings("say,toolu_1", reply.records[3].value);
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
@@ -1282,11 +1309,13 @@ test "a request decodes to a ledger and encodes back to the same request" {
     try testing.expectEqual(sigil.Sigil.system, records[3].sigil);
     try testing.expectEqual(sigil.Sigil.user, records[4].sigil);
     try testing.expectEqual(sigil.Sigil.thought, records[5].sigil);
-    try testing.expectEqualStrings("hmm\n:lock_with_ink_pen:abc", records[5].content.?);
-    try testing.expectEqual(sigil.Sigil.call, records[6].sigil);
+    try testing.expectEqualStrings("hmm", records[5].content.?);
+    try testing.expect(std.mem.startsWith(u8, records[6].value, "@snip-"));
+    try testing.expectEqualStrings(":lock_with_ink_pen:abc", records[6].content.?);
+    try testing.expectEqual(sigil.Sigil.call, records[7].sigil);
     // is_error survives the round trip, which is this api's own; chat
     // completions could only ever hand back a 🧾.
-    try testing.expectEqual(sigil.Sigil.failed, records[7].sigil);
+    try testing.expectEqual(sigil.Sigil.failed, records[8].sigil);
 
     const m = (try modelform.parse(arena, records[0].value)).?;
     const tool = try toolbox.parse(arena, .md, records[1].value, records[1].content.?);
