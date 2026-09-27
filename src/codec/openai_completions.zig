@@ -36,7 +36,8 @@ pub const codec: api.Codec = .{
 
 // ------------------------------------------------------------------ encode
 
-pub fn encode(arena: Allocator, records: []const doc.Record, target: api.Target) ![]const u8 {
+pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) ![]const u8 {
+    const records = try api.spoken(arena, ledger);
     var buf: std.Io.Writer.Allocating = .init(arena);
     var s: std.json.Stringify = .{ .writer = &buf.writer };
 
@@ -285,6 +286,8 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
 fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
     var built: Run = .{ .arena = arena, .sink = sink };
     var building: std.ArrayList(Building) = .empty;
+    var reason: []const u8 = "";
+    var refused = false;
 
     var line = first;
     while (true) {
@@ -296,14 +299,20 @@ fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8
                 // delta means the thinking came first.
                 if (extractReasoning(v)) |fragment| try built.to(.thought, fragment);
                 if (extractDelta(v)) |fragment| try built.to(.bot, fragment);
+                if (extractRefusal(v)) |fragment| {
+                    try built.to(.bot, fragment);
+                    refused = true;
+                }
                 try gatherCalls(arena, &building, v);
+                // Null on every chunk but the one that ends the choice.
+                if (finishOf(v)) |f| reason = f;
             } else |_| {}
         }
         const raw = (try api.nextLine(arena, r)) orelse break;
         line = std.mem.trimEnd(u8, raw, "\r\n");
     }
     try built.stop();
-    return built.reply(try finish(arena, building.items));
+    return built.reply(try finish(arena, building.items), refusedOr(refused, reason));
 }
 
 /// One JSON object, from a provider that answered all at once.
@@ -327,13 +336,47 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     if (message.object.get("content")) |c| {
         if (c == .string) try built.to(.bot, c.string);
     }
+    var refused = false;
+    if (message.object.get("refusal")) |c| if (c == .string and c.string.len > 0) {
+        try built.to(.bot, c.string);
+        refused = true;
+    };
     try built.stop();
 
     var building: std.ArrayList(Building) = .empty;
     if (message.object.get("tool_calls")) |list| if (list == .array) {
         for (list.array.items) |item| try gatherOne(arena, &building, item);
     };
-    return built.reply(try finish(arena, building.items));
+    return built.reply(try finish(arena, building.items), refusedOr(refused, finishOf(v) orelse ""));
+}
+
+/// A refusal is words the model said, so they are its 🤖; this api still
+/// calls that finishing, so the field's own name is what says it declined.
+/// Anything else a choice ended on — running out, say — is said instead.
+fn refusedOr(refused: bool, reason: []const u8) []const u8 {
+    if (refused and (reason.len == 0 or std.mem.eql(u8, reason, "stop"))) return "refusal";
+    return reason;
+}
+
+/// How the first choice ended, in this api's words. `stop` covers a stop
+/// sequence as well as finishing, so the two cannot be told apart here.
+const stops = api.Stops.initComptime(.{
+    .{ "stop", "" },
+    .{ "tool_calls", "" },
+    .{ "function_call", "" },
+    .{ "length", "cut off at" },
+    .{ "content_filter", "filtered by" },
+    .{ "refusal", "declined with" },
+});
+
+fn finishOf(v: std.json.Value) ?[]const u8 {
+    if (v != .object) return null;
+    const choices = v.object.get("choices") orelse return null;
+    if (choices != .array or choices.array.items.len == 0) return null;
+    const first = choices.array.items[0];
+    if (first != .object) return null;
+    const f = first.object.get("finish_reason") orelse return null;
+    return if (f == .string) f.string else null;
 }
 
 /// The reply being built, as a run of records rather than one blob.
@@ -373,13 +416,14 @@ const Run = struct {
 
     /// The records, with the calls written on the end as 📲 — which is where
     /// this api puts them, since it gathers a turn's calls after its text
-    /// rather than in among it.
-    fn reply(self: *Run, calls: []const api.Call) !api.Reply {
+    /// rather than in among it — and how it stopped after those.
+    fn reply(self: *Run, calls: []const api.Call, reason: []const u8) !api.Reply {
         for (calls) |c| try self.records.append(self.arena, .{
             .sigil = .call,
             .value = try std.fmt.allocPrint(self.arena, "{s},{s}", .{ c.name, c.id }),
             .content = try toolbox.renderArgs(self.arena, .md, c.arguments),
         });
+        try api.stopped(self.arena, self.sink, &self.records, stops, reason);
         return .{ .records = self.records.items, .calls = calls };
     }
 };
@@ -463,6 +507,12 @@ fn extractReasoning(v: std.json.Value) ?[]const u8 {
         if (delta.object.get(name)) |x| if (x == .string) return x.string;
     }
     return null;
+}
+
+fn extractRefusal(v: std.json.Value) ?[]const u8 {
+    const delta = deltaOf(v) orelse return null;
+    const refusal = delta.object.get("refusal") orelse return null;
+    return if (refusal == .string) refusal.string else null;
 }
 
 fn extractDelta(v: std.json.Value) ?[]const u8 {
@@ -840,6 +890,95 @@ test "a call is gathered whichever shape it came in" {
             \\{"text":"hi"}
         , reply.calls[0].arguments);
     }
+}
+
+test "a reply cut off says so last, in this api's own word" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const streamed =
+        \\data: {"choices":[{"delta":{"content":"Moon"},"finish_reason":null}]}
+        \\
+        \\data: {"choices":[{"delta":{},"finish_reason":"length"}]}
+        \\
+        \\data: [DONE]
+        \\
+    ;
+    const at_once =
+        \\{"choices":[{"message":{"role":"assistant","content":"Moon"},"finish_reason":"length"}]}
+    ;
+    for ([_][]const u8{ streamed, at_once }) |body| {
+        var r = readerOver(body);
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 2), reply.records.len);
+        const last = reply.records[1];
+        try testing.expectEqual(sigil.Sigil.bot, last.sigil);
+        try testing.expectEqualStrings("(cut off at length)", last.value);
+        try testing.expect(last.content == null);
+        // What was said is still exactly what was said.
+        try testing.expectEqualStrings("Moon", try reply.said(arena));
+    }
+
+    // Finishing and asking for tools are what the ledger already shows.
+    for ([_][]const u8{ "stop", "tool_calls" }) |why| {
+        const body = try std.fmt.allocPrint(arena,
+            \\{{"choices":[{{"message":{{"role":"assistant","content":"Moon"}},"finish_reason":"{s}"}}]}}
+        , .{why});
+        var r = readerOver(body);
+        var collect: Collect = .{ .arena = arena };
+        try testing.expectEqual(@as(usize, 1), (try parse(arena, &r, collect.sink())).records.len);
+    }
+}
+
+test "a refusal is what the model said, and says it declined" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const streamed =
+        \\data: {"choices":[{"delta":{"refusal":"I can't help"},"finish_reason":null}]}
+        \\
+        \\data: {"choices":[{"delta":{"refusal":" with that."},"finish_reason":null}]}
+        \\
+        \\data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+        \\
+        \\data: [DONE]
+        \\
+    ;
+    const at_once =
+        \\{"choices":[{"message":{"role":"assistant","content":null,"refusal":"I can't help with that."},"finish_reason":"stop"}]}
+    ;
+    for ([_][]const u8{ streamed, at_once }) |body| {
+        var r = readerOver(body);
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 2), reply.records.len);
+        try testing.expectEqualStrings("I can't help with that.", reply.records[0].content.?);
+        try testing.expectEqualStrings("(declined with refusal)", reply.records[1].value);
+    }
+}
+
+test "a 🤖 with nothing under it never reaches the wire" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // Where converse puts it: after what was said, before the calls.
+    const records = [_]doc.Record{
+        .{ .sigil = .bot, .content = "Let me look." },
+        .{ .sigil = .bot, .value = "(cut off at length)" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
+        .{ .sigil = .result, .value = "c1", .content = "hi" },
+    };
+    const body = try encode(arena, &records, .{ .model = "tiny" });
+    const msgs = field(try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}), "messages").array.items;
+    // The reply and its call are still one message.
+    try testing.expectEqual(@as(usize, 2), msgs.len);
+    try testing.expectEqualStrings("Let me look.", field(msgs[0], "content").string);
+    try testing.expectEqual(@as(usize, 1), field(msgs[0], "tool_calls").array.items.len);
+    try testing.expect(std.mem.indexOf(u8, body, "cut off") == null);
 }
 
 test "a response that says nothing is nothing, not a failure" {

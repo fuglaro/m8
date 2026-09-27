@@ -472,6 +472,7 @@ const LiveReply = struct {
     /// and an empty 🤖 above the call would be a record of nothing.
     body: ?doc.ContentWriter = null,
     pending: ?sigil.Sigil = null,
+    value: []const u8 = "",
 
     fn sink(self: *LiveReply) codec.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
@@ -479,10 +480,12 @@ const LiveReply = struct {
 
     /// Remembered rather than written. A record with nothing in it is a record
     /// of nothing, and a codec is entitled to open one and find the model had
-    /// no more to say — so the header waits for a byte to justify it.
-    fn openFn(ctx: *anyopaque, s: sigil.Sigil, _: []const u8) anyerror!void {
+    /// no more to say — so the header waits for a byte, or a value, to justify
+    /// it.
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
         self.pending = s;
+        self.value = value;
     }
 
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
@@ -495,7 +498,7 @@ const LiveReply = struct {
                 self.out,
                 self.mode,
                 self.pending orelse .bot,
-                "",
+                self.value,
             );
         }
         try self.body.?.write(bytes);
@@ -504,9 +507,18 @@ const LiveReply = struct {
 
     fn closeFn(ctx: *anyopaque) anyerror!void {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
-        if (self.body) |*b| try b.finish();
+        if (self.body) |*b| {
+            try b.finish();
+        } else if (self.value.len > 0) {
+            // Said on the header alone — how a reply stopped short.
+            if (self.written.*) try self.out.writeByte('\n');
+            self.written.* = true;
+            try doc.write(self.out, self.mode, .{ .sigil = self.pending orelse .bot, .value = self.value });
+            if (self.live) try self.out.flush();
+        }
         self.body = null;
         self.pending = null;
+        self.value = "";
     }
 
     fn finish(self: *LiveReply) !void {

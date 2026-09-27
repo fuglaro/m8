@@ -95,16 +95,19 @@ const Live = struct {
     opened: bool = false,
     body: ?doc.ContentWriter = null,
     pending: ?sigil.Sigil = null,
+    value: []const u8 = "",
 
     fn sink(self: *Live) codec.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
     }
 
-    /// Remembered rather than written: the header waits for a byte, so a
-    /// record the model opened and left empty never reaches the pipe.
-    fn openFn(ctx: *anyopaque, s: sigil.Sigil, _: []const u8) anyerror!void {
+    /// Remembered rather than written: the header waits for a byte or a
+    /// value, so a record the model opened and left empty never reaches the
+    /// pipe.
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
         const self: *Live = @ptrCast(@alignCast(ctx));
         self.pending = s;
+        self.value = value;
     }
 
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
@@ -115,7 +118,7 @@ const Live = struct {
                 self.out,
                 self.mode,
                 self.pending orelse .bot,
-                "",
+                self.value,
             );
             self.opened = true;
         }
@@ -125,9 +128,18 @@ const Live = struct {
 
     fn closeFn(ctx: *anyopaque) anyerror!void {
         const self: *Live = @ptrCast(@alignCast(ctx));
-        if (self.body) |*b| try b.finish();
+        if (self.body) |*b| {
+            try b.finish();
+        } else if (self.value.len > 0) {
+            // Said on the header alone — how a reply stopped short.
+            if (self.opened) try self.out.writeByte('\n');
+            self.opened = true;
+            try doc.write(self.out, self.mode, .{ .sigil = self.pending orelse .bot, .value = self.value });
+            try self.out.flush();
+        }
         self.body = null;
         self.pending = null;
+        self.value = "";
     }
 
     fn finish(self: *Live) !void {

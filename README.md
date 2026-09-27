@@ -32,6 +32,20 @@ or agent structures. That is handed elegantly to
 the user in structures that are easily crafted,
 generated, shared, and provided as defaults.
 
+The mission:
+
+* The conversation is the artifact.
+  * Files you own, in one grammar.
+  * Agent, transcript, wire and tool protocol are that
+    grammar.
+* The ledger is the truth.
+  * Anything letting it say what did not happen is a
+    bug, not a gap.
+* Opinionated on form, and nothing else.
+  * Capability by composition, never a plugin api.
+* Small enough for a distribution to carry for thirty
+  years.
+
 Four things make it different:
 
 * One format does four jobs. An agent definition, a
@@ -215,6 +229,10 @@ ledger of files already is.
 A format that takes a virtual machine from 1979 in a
 model's seat will take whatever the api looks like next
 year.
+
+m8 makes orchestration easy rather than deciding it. A
+tool sets its own limits, and a shell loop is an agent
+loop.
 
 ### What a distribution gets
 
@@ -998,9 +1016,42 @@ and a bare blockless header offers it. A definition header may not
 combine content and variable configuration.
 
 * Value only: 🧠 📚 🔏 🟢
-* Content only: 🙋 🤖 💭 🧭
-* Both: 🧰 📲 🧾 🚫 🛡️ 🏃
+* Content only: 🙋 💭 🧭
+* Both: 🤖 🧰 📲 🧾 🚫 🛡️ 🏃
 * Neither: 🔝
+
+### Stopping Short
+
+A reply the model did not finish ends with a 🤖 that has a
+value and nothing under it.
+
+```m8
+▄ 🤖
+│ Moonlight on still ponds
+│ Crickets stitch the
+
+▄ 🤖(cut off at max_tokens)
+```
+
+* The value is `(words term)`.
+  * The words are for whoever reads the transcript.
+  * The last word is the provider's own term, untouched.
+* Finishing, and asking for tools, say nothing - the ledger
+  already shows both.
+* m8 carries it and never reads it.
+  * No loop decision is made on it - a call made while
+    bailing runs as asked.
+  * It is between the provider and the reader, or whatever
+    matches on the last word.
+* No api takes it back, so encoding drops it.
+* Each codec says its own terms:
+  * `cut off at` - out of output tokens
+  * `context full at` - out of context window
+  * `filtered by` - a content filter
+  * `declined with` - a refusal
+  * `declined by CATEGORY` - a refusal naming its policy
+  * `paused at` - a paused server-side turn
+  * `stopped at` - a stop sequence, or a term not yet known
 
 ### Tops
 
@@ -1515,6 +1566,12 @@ the agent and every word after it is a chat. So
 `x/` alone is a mob. A chat named like an agent in
 that same folder would hide the agent without
 anyone saying so, so that is an error naming both.
+
+An agent needs no way to spawn another. Calling one is
+already a command — `m8 @team/reviewer` starts it fresh,
+and addressing a chat carries one on — so a 🧰 whose
+command is that *is* a subagent, standing inside
+whatever shields that 🧰 does.
 
 ### Turns and chats
 

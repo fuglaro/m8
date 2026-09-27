@@ -162,10 +162,10 @@ pub fn project(
     return .{ .defs = defs.items, .runners = runners.items, .active = active.items };
 }
 
-fn envName(arena: Allocator, name: []const u8) (Error || Allocator.Error)![]const u8 {
+fn envName(arena: Allocator, name: []const u8) (error{BadEnvironmentName} || Allocator.Error)![]const u8 {
     if (std.mem.startsWith(u8, name, "M8_ARG_")) return arena.dupe(u8, name[0..]);
-    if (name.len == 0 or (!std.ascii.isAlphabetic(name[0]) and name[0] != '_')) return Error.BadEnvironmentName;
-    for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return Error.BadEnvironmentName;
+    if (name.len == 0 or (!std.ascii.isAlphabetic(name[0]) and name[0] != '_')) return error.BadEnvironmentName;
+    for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return error.BadEnvironmentName;
     const out = try arena.alloc(u8, "M8_ARG_".len + name.len);
     @memcpy(out[0.."M8_ARG_".len], "M8_ARG_");
     for (name, 0..) |c, i| out["M8_ARG_".len + i] = std.ascii.toUpper(c);
@@ -173,11 +173,14 @@ fn envName(arena: Allocator, name: []const u8) (Error || Allocator.Error)![]cons
 }
 
 /// `NAME`, or `NAME VAR value...`. Space separated, so a value holds no space.
-pub fn parseValue(arena: Allocator, value: []const u8) Allocator.Error!Activation {
+///
+/// A variable no shell could spell is refused when the definition is read, as
+/// a 🧰's is — dropping it would run the tool without what it was told.
+pub fn parseValue(arena: Allocator, value: []const u8) (error{BadEnvironmentName} || Allocator.Error)!Activation {
     var it = std.mem.tokenizeAny(u8, value, " \t");
     const name = it.next() orelse return .{ .name = "" };
     const raw_env_var = it.next() orelse return .{ .name = name };
-    const env_var = envName(arena, raw_env_var) catch return .{ .name = name };
+    const env_var = try envName(arena, raw_env_var);
     var values: std.ArrayList([]const u8) = .empty;
     while (it.next()) |v| try values.append(arena, v);
     return .{ .name = name, .env_var = env_var, .values = values.items };
@@ -502,6 +505,17 @@ test "a value carries a name, and optionally a variable and what to append" {
     try testing.expectEqualStrings("M8_ARG_SECURES", with.env_var);
     try testing.expectEqual(@as(usize, 2), with.values.len);
     try testing.expectEqualStrings("no-writes", with.values[1]);
+}
+
+test "a variable no shell could spell is refused, not dropped" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    try testing.expectError(Error.BadEnvironmentName, parseValue(arena, "sandbox byte-cap 20000"));
+    try testing.expectError(Error.BadEnvironmentName, parseValue(arena, "sandbox 2fast yes"));
+    // One already a tool's own is the wrapper reaching it, and passes as is.
+    const reach = try parseValue(arena, "sandbox M8_ARG_BYTE_CAP 20000");
+    try testing.expectEqualStrings("M8_ARG_BYTE_CAP", reach.env_var);
 }
 
 test "a wrapper opening with m8 reaches the m8 that is running" {

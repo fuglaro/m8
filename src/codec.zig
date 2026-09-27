@@ -122,13 +122,70 @@ pub const Reply = struct {
     pub fn said(r: Reply, arena: Allocator) ![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         for (r.records) |rec| {
-            if (rec.sigil != .bot) continue;
+            if (rec.sigil != .bot or rec.content == null) continue;
             if (out.items.len > 0) try out.append(arena, '\n');
             try out.appendSlice(arena, rec.content orelse "");
         }
         return out.items;
     }
 };
+
+/// What each of an api's stop reasons reads as: the words before the
+/// provider's own term. Empty for a reason that means the model finished or
+/// asked for tools, which the ledger already shows.
+pub const Stops = std.StaticStringMap([]const u8);
+
+/// A reply that stopped short, said as a 🤖 with a value and nothing under it.
+///
+/// A provider says why generation ended in its own dialect, and a ledger that
+/// dropped it would record a cut-off answer as a whole one. So each codec
+/// keeps it in the one form they share: a few words for whoever reads the
+/// transcript, with the provider's term last and untouched, which is what
+/// anything wanting to act on it can match without m8 knowing what any of
+/// them mean. A reason a codec has not heard of still reads as stopping.
+///
+/// Last in the reply, and out to the reader as well as into the records,
+/// because it is said of everything above it.
+pub fn stopped(
+    arena: Allocator,
+    sink: Sink,
+    records: *std.ArrayList(doc.Record),
+    stops: Stops,
+    reason: []const u8,
+) !void {
+    if (reason.len == 0) return;
+    const how = stops.get(reason) orelse "stopped at";
+    if (how.len == 0) return;
+    try stoppedAs(arena, sink, records, how, reason);
+}
+
+/// The same, with the words chosen by the codec — for a reason that carries
+/// detail of its own, such as which policy a refusal was made under.
+pub fn stoppedAs(
+    arena: Allocator,
+    sink: Sink,
+    records: *std.ArrayList(doc.Record),
+    how: []const u8,
+    reason: []const u8,
+) !void {
+    const value = try std.fmt.allocPrint(arena, "({s} {s})", .{ how, reason });
+    try sink.record(.bot, value, "");
+    try records.append(arena, .{ .sigil = .bot, .value = value });
+}
+
+/// The records an api can be told, which is all of them but a 🤖 with nothing
+/// under it. How a reply stopped is the ledger's to keep and no api takes it
+/// back, and an empty assistant turn is something several refuse outright.
+/// Dropped here, once, so no codec's pairing of a reply with its calls has to
+/// step around one.
+pub fn spoken(arena: Allocator, records: []const doc.Record) ![]const doc.Record {
+    var out: std.ArrayList(doc.Record) = .empty;
+    for (records) |r| {
+        if (r.sigil == .bot and r.content == null) continue;
+        try out.append(arena, r);
+    }
+    return out.items;
+}
 
 pub const Codec = struct {
     name: []const u8,

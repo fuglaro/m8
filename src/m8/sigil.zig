@@ -114,9 +114,13 @@ pub const Sigil = enum {
     }
 
     /// Whether the rest of the header line carries anything.
+    ///
+    /// A 🤖's value is how a reply stopped short, when it did — a remark
+    /// between the provider and whoever reads the ledger, which m8 carries
+    /// and never reads.
     pub fn takesValue(s: Sigil) bool {
         return switch (s) {
-            .user, .bot, .thought, .system, .top => false,
+            .user, .thought, .system, .top => false,
             else => true,
         };
     }

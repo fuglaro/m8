@@ -212,13 +212,19 @@ pub fn write(
 
     const path = try std.fs.path.join(arena, &.{ dirs[0], try config.nameFile(arena, name) });
 
-    const cwd = std.Io.Dir.cwd();
-    if (std.fs.path.dirname(path)) |parent| cwd.createDirPath(io, parent) catch {};
-
     // A file is markdown. The rendered spelling is only ever for a terminal.
     var buf: std.Io.Writer.Allocating = .init(arena);
     try doc.writeAll(&buf.writer, .md, records);
-    try cwd.writeFile(io, .{ .sub_path = path, .data = buf.written() });
+
+    // Written aside and renamed into place, so an interrupted run leaves the
+    // file as it was rather than half of a turn, and two runs moving one `+`
+    // cannot interleave — the last rename wins, and the turn that lost is
+    // still in `=/`. Not synced: this is for a process that stops, not a
+    // machine that does.
+    var file = try std.Io.Dir.cwd().createFileAtomic(io, path, .{ .make_path = true, .replace = true });
+    defer file.deinit(io);
+    try file.file.writeStreamingAll(io, buf.written());
+    try file.replace(io);
 }
 
 // ---------------------------------------------------------------- tests

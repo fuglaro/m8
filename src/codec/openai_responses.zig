@@ -58,7 +58,8 @@ pub const codec: api.Codec = .{
 
 // ------------------------------------------------------------------ encode
 
-pub fn encode(arena: Allocator, records: []const doc.Record, target: api.Target) ![]const u8 {
+pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) ![]const u8 {
+    const records = try api.spoken(arena, ledger);
     var buf: std.Io.Writer.Allocating = .init(arena);
     var s: std.json.Stringify = .{ .writer = &buf.writer };
 
@@ -388,6 +389,9 @@ fn event(built: *Building, v: std.json.Value) !bool {
         try built.stop();
     } else if (std.mem.eql(u8, kind, "response.output_text.delta")) {
         if (str(v.object.get("delta"))) |d| try built.say(.bot, d);
+    } else if (std.mem.eql(u8, kind, "response.refusal.delta")) {
+        if (str(v.object.get("delta"))) |d| try built.say(.bot, d);
+        built.refused = true;
     } else if (std.mem.eql(u8, kind, "response.reasoning_summary_text.delta") or
         std.mem.eql(u8, kind, "response.reasoning_text.delta"))
     {
@@ -397,11 +401,12 @@ fn event(built: *Building, v: std.json.Value) !bool {
         if (str(v.object.get("delta"))) |d| try built.say(.thought, d);
     } else if (std.mem.eql(u8, kind, "response.function_call_arguments.delta")) {
         if (str(v.object.get("delta"))) |d| try built.args.appendSlice(built.arena, d);
-    } else if (std.mem.eql(u8, kind, "response.completed") or
+    } else if (std.mem.eql(u8, kind, "response.completed")) {
+        return true;
+    } else if (std.mem.eql(u8, kind, "response.incomplete")) {
         // Cut off rather than failed: what was said still happened, and the
-        // ledger keeps it.
-        std.mem.eql(u8, kind, "response.incomplete"))
-    {
+        // ledger keeps it — along with that it was cut off.
+        if (v.object.get("response")) |resp| built.reason = incompleteOf(resp);
         return true;
     } else if (std.mem.eql(u8, kind, "response.failed") or std.mem.eql(u8, kind, "error")) {
         // A refusal, an overload or a bad request arrives here with a 200, so
@@ -424,6 +429,9 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     if (v.object.get("error")) |e| if (e != .null) return Error.ApiSaidError;
 
     var built: Building = .{ .arena = arena, .sink = sink };
+    if (str(v.object.get("status"))) |status| if (std.mem.eql(u8, status, "incomplete")) {
+        built.reason = incompleteOf(v);
+    };
     const output = v.object.get("output") orelse return built.finish();
     if (output != .array) return built.finish();
     for (output.array.items) |item| {
@@ -436,6 +444,23 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
 }
 
 pub const Error = error{ApiSaidError};
+
+/// Why a response is incomplete, in this api's words. Completing says nothing
+/// here at all: only an incomplete response carries a reason.
+const stops = api.Stops.initComptime(.{
+    .{ "max_output_tokens", "cut off at" },
+    .{ "content_filter", "filtered by" },
+    .{ "refusal", "declined with" },
+});
+
+/// The reason an incomplete response gives, or the status itself when it
+/// gives none, so that being cut off is never what goes unsaid.
+fn incompleteOf(response: std.json.Value) []const u8 {
+    if (response != .object) return "incomplete";
+    const details = response.object.get("incomplete_details") orelse return "incomplete";
+    if (details != .object) return "incomplete";
+    return str(details.object.get("reason")) orelse "incomplete";
+}
 
 /// The item being read, and the reply being built out of the items that were.
 ///
@@ -457,6 +482,11 @@ const Building = struct {
     name: []const u8 = "",
     call_id: []const u8 = "",
     encrypted: []const u8 = "",
+    /// Of the response rather than any item, and only known at its end.
+    reason: []const u8 = "",
+    /// A refusal completes like anything else here, so the part's own type is
+    /// what says the model declined.
+    refused: bool = false,
 
     const Kind = enum { none, message, reasoning, function_call };
 
@@ -494,9 +524,16 @@ const Building = struct {
                 for (content.array.items) |part| {
                     if (part != .object) continue;
                     const which = str(part.object.get("type")) orelse continue;
-                    if (!std.mem.eql(u8, which, "output_text")) continue;
+                    // A refusal is the model's words too, under its own field.
+                    const key = if (std.mem.eql(u8, which, "output_text"))
+                        "text"
+                    else if (std.mem.eql(u8, which, "refusal"))
+                        "refusal"
+                    else
+                        continue;
+                    if (std.mem.eql(u8, key, "refusal")) b.refused = true;
                     if (b.text.items.len > 0) continue; // already streamed
-                    try b.say(.bot, str(part.object.get("text")) orelse "");
+                    try b.say(.bot, str(part.object.get(key)) orelse "");
                 }
             },
             .reasoning => {
@@ -578,6 +615,8 @@ const Building = struct {
     /// ledger says so rather than losing it.
     fn finish(b: *Building) !api.Reply {
         if (b.kind != .none) try b.stop();
+        const reason = if (b.refused and b.reason.len == 0) "refusal" else b.reason;
+        try api.stopped(b.arena, b.sink, &b.records, stops, reason);
         return .{ .records = b.records.items, .calls = b.calls.items };
     }
 };
@@ -1068,6 +1107,56 @@ test "store and include are written unless the ledger said otherwise" {
     try testing.expectEqual(@as(usize, 0), field(said, "include").array.items.len);
 }
 
+test "an incomplete response says why last, in this api's own word" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const body =
+        \\{"id":"resp_1","object":"response","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[
+        \\{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Moon"}]}]}
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 2), reply.records.len);
+    try testing.expectEqualStrings("Moon", reply.records[0].content.?);
+    try testing.expectEqualStrings("(cut off at max_output_tokens)", reply.records[1].value);
+}
+
+test "a refusal is what the model said, and says it declined" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const streamed =
+        \\event: response.output_item.added
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}
+        \\
+        \\event: response.refusal.delta
+        \\data: {"type":"response.refusal.delta","output_index":0,"delta":"I can't help with that."}
+        \\
+        \\event: response.output_item.done
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"I can't help with that."}]}}
+        \\
+        \\event: response.completed
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+    ;
+    const at_once =
+        \\{"id":"resp_1","object":"response","status":"completed","output":[
+        \\{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"I can't help with that."}]}]}
+    ;
+    for ([_][]const u8{ streamed, at_once }) |body| {
+        var r: std.Io.Reader = .fixed(body);
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 2), reply.records.len);
+        try testing.expectEqualStrings("I can't help with that.", reply.records[0].content.?);
+        try testing.expectEqualStrings("(declined with refusal)", reply.records[1].value);
+    }
+}
+
 test "a model that shows its thinking and one that summarises it are both 💭" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
@@ -1090,11 +1179,15 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
     // Cut off rather than failed: what was said still happened, so it is a
-    // reply and not an error.
+    // reply and not an error — and it says it was cut off, even with no
+    // reason given.
     const reply = try parse(arena, &r, collect.sink());
-    try testing.expectEqual(@as(usize, 1), reply.records.len);
+    try testing.expectEqual(@as(usize, 2), reply.records.len);
     try testing.expectEqualStrings(
         "working it through\n:lock_with_ink_pen:rs_1,ENC",
         reply.records[0].content.?,
     );
+    try testing.expectEqual(sigil.Sigil.bot, reply.records[1].sigil);
+    try testing.expectEqualStrings("(stopped at incomplete)", reply.records[1].value);
+    try testing.expect(reply.records[1].content == null);
 }

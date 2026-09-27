@@ -57,7 +57,8 @@ pub const version = "2023-06-01";
 
 // ------------------------------------------------------------------ encode
 
-pub fn encode(arena: Allocator, records: []const doc.Record, target: api.Target) ![]const u8 {
+pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) ![]const u8 {
+    const records = try api.spoken(arena, ledger);
     var buf: std.Io.Writer.Allocating = .init(arena);
     var s: std.json.Stringify = .{ .writer = &buf.writer };
 
@@ -500,6 +501,12 @@ fn event(built: *Building, v: std.json.Value) !bool {
         if (str(d.object.get(carries))) |fragment| try built.delta(which, fragment);
     } else if (std.mem.eql(u8, kind, "content_block_stop")) {
         try built.stop();
+    } else if (std.mem.eql(u8, kind, "message_delta")) {
+        const d = v.object.get("delta") orelse return false;
+        if (d == .object) {
+            if (str(d.object.get("stop_reason"))) |why| built.reason = why;
+            built.category = categoryOf(d);
+        }
     } else if (std.mem.eql(u8, kind, "message_stop")) {
         return true;
     } else if (std.mem.eql(u8, kind, "error")) {
@@ -524,6 +531,8 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
         return Error.ApiSaidError;
 
     var built: Building = .{ .arena = arena, .sink = sink };
+    built.reason = str(v.object.get("stop_reason")) orelse "";
+    built.category = categoryOf(v);
     const content = v.object.get("content") orelse return built.finish();
     if (content != .array) return built.finish();
     for (content.array.items) |block| {
@@ -535,6 +544,25 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
 }
 
 pub const Error = error{ApiSaidError};
+
+/// How a message ended, in this api's words.
+const stops = api.Stops.initComptime(.{
+    .{ "end_turn", "" },
+    .{ "tool_use", "" },
+    .{ "max_tokens", "cut off at" },
+    .{ "model_context_window_exceeded", "context full at" },
+    .{ "stop_sequence", "stopped at" },
+    .{ "pause_turn", "paused at" },
+    .{ "refusal", "declined with" },
+});
+
+/// Which policy a refusal was made under, from the `stop_details` beside a
+/// stop reason. Empty when there is none, or it names none.
+fn categoryOf(holder: std.json.Value) []const u8 {
+    const details = holder.object.get("stop_details") orelse return "";
+    if (details != .object) return "";
+    return str(details.object.get("category")) orelse "";
+}
 
 /// The block being read, and the reply being built out of the blocks that
 /// were.
@@ -556,6 +584,9 @@ const Building = struct {
     id: []const u8 = "",
     name: []const u8 = "",
     args: std.ArrayList(u8) = .empty,
+    /// Of the message rather than any block, and only known at its end.
+    reason: []const u8 = "",
+    category: []const u8 = "",
 
     const Kind = enum { none, text, thinking, tool_use };
 
@@ -664,6 +695,13 @@ const Building = struct {
     /// ledger says so rather than losing it.
     fn finish(b: *Building) !api.Reply {
         if (b.kind != .none) try b.stop();
+        if (b.category.len > 0 and std.mem.eql(u8, b.reason, "refusal")) {
+            // Which policy, in its own word, ahead of the reason's.
+            const how = try std.fmt.allocPrint(b.arena, "declined by {s}", .{b.category});
+            try api.stoppedAs(b.arena, b.sink, &b.records, how, b.reason);
+        } else {
+            try api.stopped(b.arena, b.sink, &b.records, stops, b.reason);
+        }
         return .{ .records = b.records.items, .calls = b.calls.items };
     }
 };
@@ -1116,6 +1154,98 @@ test "a whole reply reads the same as a streamed one" {
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
+}
+
+test "a message cut off says so last, in this api's own word" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // Cut off inside a tool call: the call is kept as the model wrote it,
+    // and run as asked — how it stopped is said, not acted on.
+    const body =
+        \\event: content_block_start
+        \\data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+        \\
+        \\event: content_block_delta
+        \\data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Moon"}}
+        \\
+        \\event: content_block_stop
+        \\data: {"type":"content_block_stop","index":0}
+        \\
+        \\event: content_block_start
+        \\data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"say","input":{}}}
+        \\
+        \\event: content_block_delta
+        \\data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"text\":\"hi"}}
+        \\
+        \\event: content_block_stop
+        \\data: {"type":"content_block_stop","index":1}
+        \\
+        \\event: message_delta
+        \\data: {"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":9}}
+        \\
+        \\event: message_stop
+        \\data: {"type":"message_stop"}
+        \\
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 3), reply.records.len);
+    try testing.expectEqual(@as(usize, 1), reply.calls.len);
+    try testing.expectEqualStrings("(cut off at max_tokens)", reply.records[2].value);
+    try testing.expect(reply.records[2].content == null);
+
+    // Whole, each reason in its own words; one never heard of still reads as
+    // stopping, and finishing says nothing.
+    const cases = [_]struct { []const u8, ?[]const u8 }{
+        .{ "refusal", "(declined with refusal)" },
+        .{ "model_context_window_exceeded", "(context full at model_context_window_exceeded)" },
+        .{ "pause_turn", "(paused at pause_turn)" },
+        .{ "something_new", "(stopped at something_new)" },
+        .{ "end_turn", null },
+        .{ "tool_use", null },
+    };
+    for (cases) |c| {
+        const whole_body = try std.fmt.allocPrint(arena,
+            \\{{"type":"message","role":"assistant","content":[],"stop_reason":"{s}"}}
+        , .{c[0]});
+        var wr: std.Io.Reader = .fixed(whole_body);
+        var wc: Collect = .{ .arena = arena };
+        const got = try parse(arena, &wr, wc.sink());
+        if (c[1]) |want| {
+            try testing.expectEqual(@as(usize, 1), got.records.len);
+            try testing.expectEqualStrings(want, got.records[0].value);
+        } else {
+            try testing.expectEqual(@as(usize, 0), got.records.len);
+        }
+    }
+}
+
+test "a refusal names its policy, ahead of the reason's own word" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const streamed =
+        \\event: message_delta
+        \\data: {"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null,"stop_details":{"type":"refusal","category":"bio","explanation":null}},"usage":{"output_tokens":0}}
+        \\
+        \\event: message_stop
+        \\data: {"type":"message_stop"}
+        \\
+    ;
+    const at_once =
+        \\{"type":"message","role":"assistant","content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"bio","explanation":null}}
+    ;
+    for ([_][]const u8{ streamed, at_once }) |body| {
+        var r: std.Io.Reader = .fixed(body);
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 1), reply.records.len);
+        try testing.expectEqualStrings("(declined by bio refusal)", reply.records[0].value);
+    }
 }
 
 test "an error arriving with a 200 is still an error" {

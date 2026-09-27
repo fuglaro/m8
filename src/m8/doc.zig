@@ -416,6 +416,22 @@ test "a blank line closes the block, and records need none between them" {
     try testing.expectEqual(@as(usize, 4), d2.line);
 }
 
+test "a 🤖 may say how it stopped with nothing under it" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var d: Diagnostic = .{};
+    const src = "#### :robot:\n> Moon\n\n#### :robot:(cut off at max_tokens)\n";
+    const got = try parse(arena, src, &d);
+    try testing.expectEqual(@as(usize, 2), got.len);
+    try testing.expectEqualStrings("(cut off at max_tokens)", got[1].value);
+    try testing.expect(got[1].content == null);
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try writeAll(&out.writer, .md, got);
+    try testing.expectEqualStrings(src, out.written());
+}
+
 test "value and content are refused where the sigil takes none" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
