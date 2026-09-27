@@ -941,8 +941,10 @@ Exactly one space follows the quote and is stripped,
 so content is verbatim and a line that looks like a
 record is only a line. Missing that space is an
 error. A bare quote with no space is an empty
-content line. A fully blank line closes the block,
-and one is required between records.
+content line. A fully blank line closes the block.
+Headers may follow one another without a blank line;
+writers may use blank lines between records for
+readability.
 
 Sigils are a closed set, written as one codepoint
 within U+1F300 to U+1FAFF or as `:word:`. An unknown

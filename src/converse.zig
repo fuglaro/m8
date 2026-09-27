@@ -92,8 +92,8 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
 
     // Everything this run adds, in the order it happened.
     var turn: std.ArrayList(doc.Record) = .empty;
-    // Records are separated by a blank line, so writing one has to know
-    // whether anything came before it.
+    // Records normally get a blank line, so writing one has to know whether
+    // anything came before it. Live provider output may join equal sigils.
     var written = false;
     if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &written, r);
     // The rendered spelling is only ever written for a terminal, and a
@@ -262,7 +262,6 @@ fn answer(
             return failure(arena, c.id, "{s}", .{@errorName(e)}),
     };
     if (argv.len == 0) return failure(arena, c.id, "the command is empty", .{});
-
 
     // A tool's own 🛡 activate on top of whatever the agent already turned
     // on. Activation order is wrapping order, so the agent's are further out
@@ -468,6 +467,9 @@ const LiveReply = struct {
     mode: doc.Mode,
     live: bool,
     written: *bool,
+    /// The last provider record actually shown. Records of the same kind can
+    /// touch; every other transition keeps the usual blank-line separator.
+    last_sigil: ?sigil.Sigil = null,
     /// Opened on the first byte. A model that only calls a tool says nothing,
     /// and an empty 🤖 above the call would be a record of nothing.
     body: ?doc.ContentWriter = null,
@@ -476,6 +478,16 @@ const LiveReply = struct {
 
     fn sink(self: *LiveReply) codec.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
+    }
+
+    /// Start showing a record. The document parser does not need a blank line
+    /// between headers, so adjacent records of one kind can be kept together
+    /// on the live display without changing what the ledger means.
+    fn beginShown(self: *LiveReply, s: sigil.Sigil) !void {
+        const adjacent = if (self.last_sigil) |last| last == s else false;
+        if (self.written.* and !adjacent) try self.out.writeByte('\n');
+        self.written.* = true;
+        self.last_sigil = s;
     }
 
     /// Remembered rather than written. A record with nothing in it is a record
@@ -495,12 +507,12 @@ const LiveReply = struct {
         // and the turn still holds all of it.
         if (self.mode == .m8 and self.pending == .thought and std.mem.startsWith(u8, self.value, "@")) return;
         if (self.body == null) {
-            if (self.written.*) try self.out.writeByte('\n');
-            self.written.* = true;
+            const s = self.pending orelse .bot;
+            try self.beginShown(s);
             self.body = try doc.ContentWriter.begin(
                 self.out,
                 self.mode,
-                self.pending orelse .bot,
+                s,
                 self.value,
             );
         }
@@ -514,9 +526,9 @@ const LiveReply = struct {
             try b.finish();
         } else if (self.value.len > 0) {
             // Said on the header alone — how a reply stopped short.
-            if (self.written.*) try self.out.writeByte('\n');
-            self.written.* = true;
-            try doc.write(self.out, self.mode, .{ .sigil = self.pending orelse .bot, .value = self.value });
+            const s = self.pending orelse .bot;
+            try self.beginShown(s);
+            try doc.write(self.out, self.mode, .{ .sigil = s, .value = self.value });
             if (self.live) try self.out.flush();
         }
         self.body = null;
@@ -568,4 +580,33 @@ fn settle(
             .{status},
         ) });
     return out.items;
+}
+
+test "live reply separates changes of sigil" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var written = false;
+    var reply: LiveReply = .{
+        .out = &out.writer,
+        .mode = .md,
+        .live = false,
+        .written = &written,
+    };
+    const sink = reply.sink();
+
+    try sink.record(.thought, "", "one");
+    try sink.record(.thought, "", "two");
+    try sink.record(.bot, "", "answer");
+    try sink.record(.bot, "", "again");
+    try sink.record(.thought, "", "three");
+
+    try std.testing.expectEqualStrings(
+        "#### :thought_balloon:\n> one\n#### :thought_balloon:\n> two\n\n" ++
+            "#### :robot:\n> answer\n#### :robot:\n> again\n\n" ++
+            "#### :thought_balloon:\n> three\n",
+        out.written(),
+    );
 }
