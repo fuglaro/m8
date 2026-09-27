@@ -107,10 +107,18 @@ Review everything again on the mission statement in the README.md
 * MAYBE: Agents advertise themselves as subagents.
 * MAYBE: Skill-finder minion - auto-post 🙋?
 
-### Hooks
+### Hooks and Thought Signatures
 
 * MAYBE: Hooks: Auto-action on response - if max_tokens on robot reply, auto compress/etc.
   - Wrapper command on responses? similar to shields?
+* Is Hooks how we can customise an agent to filter out thought
+  signatures on the cmdline output?
+* Should thought signatures be a separate metadata sigil?
+  - then it can be saved and addable as a refernce through a :brain:
+    by the provider? Hiding it as a brain ref...
+  - Could each thinking block be the same?
+  - Could this be an option in the agent that the provider
+    understands. Another meta directive to the provider???
 
 ### Loose ends
 
