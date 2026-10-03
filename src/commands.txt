@@ -20,9 +20,6 @@ call
 call args
 call ask
 call munge
-call munge read
-call munge write
-call munge scan
 shield
 shield secure
 shield ask
@@ -31,4 +28,3 @@ filter
 providers
 providers url
 providers toy
-help

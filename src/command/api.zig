@@ -146,8 +146,15 @@ pub const Command = struct {
 /// two answer it differently. m8 reads it before a command sees its arguments;
 /// the words after an `@` are prose, and are the one exception.
 pub fn wantsHelp(args: []const []const u8) bool {
-    if (args.len == 0) return false;
-    return std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h");
+    return args.len > 0 and std.mem.eql(u8, args[0], "--help");
+}
+
+test "only a leading long help option asks for help" {
+    try std.testing.expect(wantsHelp(&.{"--help"}));
+    try std.testing.expect(wantsHelp(&.{ "--help", "more" }));
+    try std.testing.expect(!wantsHelp(&.{}));
+    try std.testing.expect(!wantsHelp(&.{"-h"}));
+    try std.testing.expect(!wantsHelp(&.{ "value", "--help" }));
 }
 
 /// The terminal, opened as its own channel.

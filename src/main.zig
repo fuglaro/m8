@@ -11,10 +11,10 @@
 //! it names itself: `m8 cat @mathy`. So there is one kind of command, and the
 //! `@` prompt is the pipeline of them written once.
 //!
-//! `--help` is read here rather than by whichever command was named, so no
-//! command has to remember to answer it and no two answer it differently. It
-//! names the `help` command, which is why `m8 send --help` and `m8 help send`
-//! are one page.
+//! `--help` is a process-level option: `m8 --help` is the overview and
+//! `m8 COMMAND --help` is that command's page. It is read before a command's
+//! own arguments, so no command has to remember to answer it and no two answer
+//! it differently.
 //!
 //! A terminal is written the rendered spelling and everything else markdown,
 //! decided once here and carried into every writer.
@@ -27,7 +27,6 @@ const std = @import("std");
 const command = @import("command.zig");
 const provider = @import("provider.zig");
 const address = @import("address.zig");
-const help = @import("command/help.zig");
 const harness = @import("harness.zig");
 const launch = @import("launch.zig");
 
@@ -95,11 +94,13 @@ pub fn main(init: std.process.Init) !u8 {
     const out = &stdout.interface;
     const err = &stderr.interface;
 
-    const helper = command.byPath(&.{help.name}).?;
-
-    // `m8 --help [COMMAND]` is `m8 help [COMMAND]`. The flag is a way of
-    // naming the command rather than a command's own argument.
-    if (command.api.wantsHelp(@ptrCast(args))) return launched(io, arena, init, helper, @ptrCast(args[1..]), self, out, err);
+    // The launcher owns its overview. Only the first word is reserved; after
+    // an address, `--help` is prose like everything else in the prompt.
+    if (command.api.wantsHelp(@ptrCast(args))) {
+        try overview(out);
+        try out.flush();
+        return 0;
+    }
 
     // An address, or nothing at all, is the prompt. Its words are prose, so
     // nothing in them is read here.
@@ -113,15 +114,69 @@ pub fn main(init: std.process.Init) !u8 {
     };
     const cmd_args: []const []const u8 = @ptrCast(args[1..]);
 
-    // `m8 COMMAND --help` is `m8 help COMMAND` too, read here so that no
-    // command has to parse the flag and no two answer it differently.
-    if (command.api.wantsHelp(cmd_args)) {
-        var words: std.ArrayList([]const u8) = .empty;
-        try words.append(arena, node.spec.name);
-        try words.appendSlice(arena, cmd_args[1..]);
-        return launched(io, arena, init, helper, words.items, self, out, err);
-    }
+    // `launch.under` answers a command's leading `--help` in the single
+    // binary; a split-out leaf answers the same option itself.
     return launched(io, arena, init, node, cmd_args, self, out, err);
+}
+
+/// What `m8 --help` says. This belongs to the launcher rather than command
+/// help: it describes the process syntax that the launcher itself owns.
+fn overview(w: *std.Io.Writer) !void {
+    try w.writeAll(
+        \\m8 — a composable shell harness
+        \\
+        \\  m8 [@ADDRESS[:|-] [WHATEVER YOU WANT TO SAY]]
+        \\  m8 COMMAND [ARGS]
+        \\
+        \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
+        \\on whichever chat was talked to last. A chat under an agent is a fork
+        \\of it, `:` asks without moving anything, and `-` starts a chat over.
+        \\
+        \\  m8 @mathy "Tell me about the Riemann Sphere."
+        \\  m8 @ "Tell me more."
+        \\  m8 @mathy/aside "A different thought."
+        \\
+        \\Every command reads stdin and writes stdout, so the same thing is a
+        \\pipeline too:
+        \\
+        \\  echo "And in one sentence?" | m8 cat @ | m8 send | m8 tag @
+        \\  m8 cat @mathy | m8 encode openai-completions >request.json
+        \\  m8 decode openai-completions local <request.json | m8 send
+        \\
+    );
+    try overviewCommands(w);
+    try overviewEnvironment(w);
+    try w.writeAll(
+        \\
+        \\m8 COMMAND --help says what one takes and what is under it.
+        \\m8 call NAME reaches m8's own filters and its inbuilt tools.
+        \\
+    );
+}
+
+fn overviewCommands(w: *std.Io.Writer) !void {
+    try w.writeAll("\ncommands:\n\n");
+    for (command.tree) |n| try w.print("  {s: <10} {s}\n", .{ n.spec.name, n.spec.summary });
+}
+
+/// Every variable m8 itself reads. A provider's own are on its page, since
+/// what they mean is that command's business rather than m8's.
+fn overviewEnvironment(w: *std.Io.Writer) !void {
+    try w.writeAll(
+        \\
+        \\environment:
+        \\
+        \\  XDG_CONFIG_HOME   where your own config is, as m8-st8 under it
+        \\  HOME              that, when XDG_CONFIG_HOME says nothing:
+        \\                    ~/.config/m8-st8
+        \\  PATH              where a provider or tool named as a bare word
+        \\                    is looked for, and where m8 finds itself
+        \\  TMPDIR            where a shielded tool's own directory is made;
+        \\                    /tmp when unset
+        \\  M8_PROVIDER_*     what a providers.json entry hands its command.
+        \\                    See m8 providers --help.
+        \\
+    );
 }
 
 /// Reach a command, whichever way this build reaches one. Each reads its own
@@ -146,4 +201,29 @@ fn launched(
     // but `m8 shield ask:` says more than `m8 shield:` and costs nothing.
     const called = try command.named(arena, node.path, cmd_args);
     return harness.run(io, arena, init.environ_map, reach, called, cmd_args, .inherited, self, out, err);
+}
+
+// ---------------------------------------------------------------- tests
+
+const testing = std.testing;
+
+test "the overview lists every command" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+
+    var out: std.Io.Writer.Allocating = .init(a.allocator());
+    try overview(&out.writer);
+    const said = out.written();
+
+    for (command.tree) |n| {
+        const c = n.spec;
+        var seen: usize = 0;
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, said, at, c.name)) |i| {
+            at = i + c.name.len;
+            // Only the listing, which is two spaces and then the name.
+            if (i >= 2 and said[i - 2] == ' ' and said[i - 1] == ' ') seen += 1;
+        }
+        try testing.expect(seen >= 1);
+    }
 }

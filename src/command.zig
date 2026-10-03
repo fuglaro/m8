@@ -36,7 +36,6 @@ const modules = .{
     @import("command/shield.zig"),
     @import("command/filter.zig"),
     @import("command/providers.zig"),
-    @import("command/help.zig"),
 };
 
 /// Inbuilt tools, as modules. Reached as `m8 call NAME`, never typed as a
@@ -60,15 +59,6 @@ fn commands(comptime ms: anytype) [ms.len]Command {
 
 pub fn find(name: []const u8) ?Command {
     for (all) |c| if (std.mem.eql(u8, c.name, name)) return c;
-    return null;
-}
-
-/// Every command there is, including the inbuilt tools. What `help` looks in,
-/// because a page for something that exists is worth having wherever it is
-/// reached from.
-pub fn findAny(name: []const u8) ?Command {
-    if (find(name)) |c| return c;
-    for (native) |c| if (std.mem.eql(u8, c.name, name)) return c;
     return null;
 }
 
@@ -313,8 +303,8 @@ test "every command has a name and a summary" {
 }
 
 test "every command has a page of its own" {
-    // The fallback in `help` prints a summary, which is better than nothing
-    // and is not good enough for a command that ships.
+    // The shared writer can fall back to a summary, which is better than
+    // nothing and is not good enough for a command that ships.
     for (all ++ native) |c| try testing.expect(c.help != null);
 }
 
@@ -328,10 +318,8 @@ test "no two commands share a name" {
 test "the tree gives every command a program spelling" {
     try testing.expectEqualStrings("m8-cat", byPath(&.{"cat"}).?.program);
     try testing.expectEqualStrings("m8-call-munge", byPath(&.{ "call", "munge" }).?.program);
-    try testing.expectEqualStrings(
-        "m8-call-munge-read",
-        byPath(&.{ "call", "munge", "read" }).?.program,
-    );
+    // Munge's operations are one tool, not commands or split programs.
+    try testing.expect(byPath(&.{ "call", "munge", "read" }) == null);
 
     // A tool reached through `call` that has a home at the top is one
     // program, not two: `m8 call cat` runs `m8-cat`.
@@ -354,7 +342,7 @@ test "a complaint names the path the words reached, not the top of it" {
     // As deep as the words go, and no deeper than a command.
     const deep = try named(a, &.{"call"}, &.{ "munge", "read", "x.md" });
     defer a.free(deep);
-    try testing.expectEqualStrings("call munge read", deep);
+    try testing.expectEqualStrings("call munge", deep);
 
     // A word that names nothing under it is the command's own argument.
     const top = try named(a, &.{"shield"}, &.{"bogus"});
@@ -388,7 +376,7 @@ test "what the tree names is what a command binary would run" {
     // Two walks over one registry, so they are checked against each other
     // rather than trusted to stay in step.
     try testing.expectEqualStrings("munge", comptime commandAt(words("call munge")).?.name);
-    try testing.expectEqualStrings("read", comptime commandAt(words("call munge read")).?.name);
+    try testing.expect(comptime commandAt(words("call munge read")) == null);
     try testing.expect(comptime commandAt(words("call cat")) == null);
     try testing.expect(comptime commandAt(words("nosuch")) == null);
 }
@@ -397,7 +385,7 @@ test "the runtime walk reaches what the comptime one does" {
     // The single binary answering to a program name and a split-out binary
     // being that command must land on the same one.
     try testing.expectEqualStrings("munge", at(&.{ "call", "munge" }).?.name);
-    try testing.expectEqualStrings("read", at(&.{ "call", "munge", "read" }).?.name);
+    try testing.expect(at(&.{ "call", "munge", "read" }) == null);
     try testing.expect(at(&.{ "call", "cat" }) == null);
     try testing.expect(at(&.{"nosuch"}) == null);
 

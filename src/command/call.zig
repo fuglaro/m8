@@ -56,7 +56,6 @@ fn run(ctx: Ctx) !u8 {
             rest = rest[1..];
             continue;
         }
-        if (std.mem.eql(u8, word, "--help") or std.mem.eql(u8, word, "-h")) return help(ctx);
         break;
     }
 
@@ -335,9 +334,6 @@ fn status(term: std.process.Child.Term) u8 {
     };
 }
 
-
-
-
 fn usage(ctx: Ctx, e: Error) !u8 {
     try page(ctx, ctx.err);
     try ctx.err.flush();
@@ -353,27 +349,7 @@ fn help(ctx: Ctx) !u8 {
 }
 
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
-    // Whatever is left names something `call` can reach: `m8 help call ask`
-    // and `m8 call ask --help` are the same page. A page lives beside its
-    // command, so where the commands are programs this asks the program.
-    if (ctx.args.len > 0) {
-        if (@import("../command.zig").callableNode(ctx.args[0])) |node| {
-            if (launch.split) {
-                var argv: std.ArrayList([]const u8) = .empty;
-                try argv.append(ctx.arena, "--help");
-                try argv.appendSlice(ctx.arena, ctx.args[1..]);
-                _ = try launch.under(ctx, .{ .spawn = node.program }, argv.items, .inherited);
-                return;
-            }
-            var sub = ctx;
-            sub.args = ctx.args[1..];
-            return @import("help.zig").write(
-                sub,
-                @import("../command.zig").findCallable(ctx.args[0]).?,
-                w,
-            );
-        }
-    }
+    _ = ctx;
     try w.writeAll(
         \\m8 call — run a command
         \\

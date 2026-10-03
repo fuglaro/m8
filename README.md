@@ -268,8 +268,9 @@ optimisation.
 * `zig build` is the single binary. A launcher reaching
   a command calls it.
 * `zig build split` is a program per command — `m8-cat` and
-  `m8-call-munge-read` — plus a launcher. Prompt mode, selected by
-  `--` or by a bare `m8`, is launcher syntax; commands are spawned.
+  `m8-call-munge` — plus a launcher. Munge's read, write and scan
+  operations stay in that one tool rather than becoming programs of
+  their own. Prompt mode is launcher syntax; commands are spawned.
 
 The difference is one comptime branch. What a launcher
 reads is a command's *spec* — its name, what it takes,
@@ -468,19 +469,17 @@ Every command has a page, and anything under a command
 has one too:
 
 ```bash
-m8 help                    every command, and what m8 reads
-m8 help send               one of them
-m8 send --help             the same page
-m8 help providers url      what is under one
-m8 providers url --help    the same page again
-m8 help @                  what an address is
+m8 --help                  every command, and what m8 reads
+m8 send --help             one command
+m8 providers url --help    something under one
+m8 call munge --help       one tool and all its operations
 ```
 
-`--help` is m8's rather than any command's, so no command
-has to parse it and no two answer it differently. The words
-after an `@` are prose, so a `--help` among them is said
-rather than read, and `m8 help @` is how that page is asked
-for.
+A leading `--help` is m8's rather than any command's, so no
+command has to parse it and no two answer it differently.
+It is the only help option; `-h` remains an ordinary argument.
+The words after an `@` are prose, so a `--help` among them is
+said rather than read.
 
 A page you asked for is written to stdout, where it can
 be paged and piped. A page handed back instead of what
@@ -1932,8 +1931,8 @@ m8 ships with no story files: it plays whichever are there,
 `.z1` through `.z8`. The name is the file's own and the folder's,
 spelled the way they are, like every other name in m8.
 Zork I to III are MIT-licensed source from Microsoft and their
-repositories carry the compiled files. `m8 help providers
-toy` lists what it can find.
+repositories carry the compiled files. `m8 providers toy
+--help` lists what it can find.
 
 `src/zmachine/README.md` is the rest of it: the seam between
 the machine and the provider, the invariant every stored

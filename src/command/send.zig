@@ -40,7 +40,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  m8 cat @mathy | m8 send | m8 tag @mathy
         \\
-        \\That is what `m8 @mathy` does. m8 help providers says what a provider
+        \\That is what `m8 @mathy` does. m8 providers --help says what a provider
         \\is and how to write another.
         \\
     );

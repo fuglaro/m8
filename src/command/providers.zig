@@ -79,20 +79,6 @@ fn run(ctx: Ctx) !u8 {
 // ------------------------------------------------------------------- pages
 
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
-    // Whatever is left names one of them: `m8 help providers url` and
-    // `m8 providers url --help` are the same page.
-    if (ctx.args.len > 0) {
-        if (@import("../command.zig").byPath(&.{ command.name, ctx.args[0] })) |node| {
-            if (launch.split) {
-                var argv: std.ArrayList([]const u8) = .empty;
-                try argv.append(ctx.arena, "--help");
-                try argv.appendSlice(ctx.arena, ctx.args[1..]);
-                _ = try launch.under(ctx, .{ .spawn = node.program }, argv.items, .inherited);
-                return;
-            }
-            return @import("help.zig").write(ctx, find(ctx.args[0]).?, w);
-        }
-    }
     try w.writeAll(
         \\m8 providers — the provider commands m8 ships with
         \\
@@ -142,8 +128,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
 /// Which models any of them serves is not here and is not missing. That is the
 /// ledger's business, written on the 🧠 that names one, so nothing in a config
 /// has to be kept in step with what a provider offers. `toy` is the one
-/// exception, because its models are m8's own — see `m8 help providers
-/// toy`.
+/// exception, because its models are m8's own — see `m8 providers toy
+/// --help`.
 pub fn configured(ctx: Ctx, w: *std.Io.Writer) !void {
     const from = try config.coreFile(ctx.arena, ctx.io, ctx.env, "providers.json");
     try w.print("\nproviders ({s}):\n\n", .{from orelse "the copy m8 ships with"});

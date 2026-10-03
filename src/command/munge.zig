@@ -20,7 +20,6 @@
 
 const std = @import("std");
 const api = @import("api.zig");
-const launch = @import("../launch.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -32,14 +31,14 @@ pub const command: api.Command = .{
     .help = help,
 };
 
-pub const subs = [_]api.Command{
+const operations = [_]api.Command{
     @import("munge/read.zig").command,
     @import("munge/write.zig").command,
     @import("munge/scan.zig").command,
 };
 
 pub fn find(name: []const u8) ?api.Command {
-    for (subs) |s| if (std.mem.eql(u8, s.name, name)) return s;
+    for (operations) |s| if (std.mem.eql(u8, s.name, name)) return s;
     return null;
 }
 
@@ -53,16 +52,6 @@ fn run(ctx: Ctx) !u8 {
     }
 
     const which = ctx.args[0];
-    if (launch.split) {
-        const node = @import("../command.zig").byPath(&.{ "call", command.name, which }) orelse {
-            try ctx.err.print("m8 call munge: no tool named '{s}'\n", .{which});
-            try help(ctx, ctx.err);
-            try ctx.err.flush();
-            return 1;
-        };
-        return launch.under(ctx, .{ .spawn = node.program }, ctx.args[1..], .inherited);
-    }
-
     const sub = find(which) orelse {
         try ctx.err.print("m8 call munge: no tool named '{s}'\n", .{which});
         try help(ctx, ctx.err);
@@ -73,37 +62,22 @@ fn run(ctx: Ctx) !u8 {
     var inner = ctx;
     inner.args = ctx.args[1..];
 
-    // The flag is m8's wherever it is written. `call` answered it for the
-    // name it saw, which was this one; the word after a subcommand is ours.
-    if (api.wantsHelp(inner.args)) {
-        inner.args = inner.args[1..];
-        try @import("help.zig").write(inner, sub, ctx.out);
-        try ctx.out.flush();
-        return 0;
-    }
-
+    // A child has no process-level options of its own. In particular,
+    // `--help` here is data (a path, pattern, or replacement); the one help
+    // page belongs to `munge` and documents all three operations.
     return sub.run(inner);
 }
 
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
-    // Whatever is left names one of them: `m8 help munge read` and
-    // `m8 call munge read --help` are the same page.
-    if (ctx.args.len > 0) {
-        if (find(ctx.args[0])) |s| {
-            var inner = ctx;
-            inner.args = ctx.args[1..];
-            return @import("help.zig").write(inner, s, w);
-        }
-    }
     try w.writeAll(
         \\m8 call munge — files, addressed in pages
         \\
-        \\  m8 call munge TOOL [ARGS]   one of the tools below
-        \\  m8 call munge TOOL --help   what that one takes
+        \\  m8 call munge --help        this page, including every operation
+        \\  m8 call munge TOOL [ARGS]   one of the operations below
         \\
     );
     try w.writeAll("\ntools:\n\n");
-    for (subs) |s| try w.print("  {s: <8} {s}\n", .{ s.name, s.summary });
+    for (operations) |s| try w.print("  {s: <8} {s}\n", .{ s.name, s.summary });
     try w.writeAll(
         \\
         \\Inbuilt tools, so they are reached through `call` and never typed as
@@ -115,6 +89,14 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\about, and the strings read out of it carry the precision.
         \\
     );
+
+    // These operations are implementation details of one tool, not commands
+    // or split programs. Their pages are collected here so the tool has one
+    // help boundary and their first argument remains entirely data.
+    for (operations) |s| {
+        try w.writeAll("\n――――――――――――――――――――――――――――――――――――――――――――――――\n\n");
+        try @import("help.zig").write(ctx, s, w);
+    }
 }
 
 // ---------------------------------------------------------------- tests
@@ -134,10 +116,12 @@ test "the tools are reached under munge and nowhere else" {
     try testing.expect(cmd.findCallable("munge") != null);
     try testing.expect(cmd.findCallable("read") == null);
     try testing.expect(cmd.find("read") == null);
+    try testing.expect(cmd.byPath(&.{ "call", "munge", "read" }) == null);
+    try testing.expectEqual(@as(usize, 0), cmd.byPath(&.{ "call", "munge" }).?.children.len);
 }
 
 test "every tool under munge has a name, a summary and a page" {
-    for (subs) |s| {
+    for (operations) |s| {
         try testing.expect(s.name.len > 0);
         try testing.expect(s.summary.len > 0);
         try testing.expect(s.help != null);

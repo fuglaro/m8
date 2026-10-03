@@ -65,6 +65,18 @@ pub fn under(ctx: Ctx, reach: Reach, args: []const []const u8, in: Stdin) !u8 {
 
     var inner = ctx;
     inner.args = args;
+
+    // In the single binary this is where a command receives its process-level
+    // option. A split-out command answers the same option in `harness.leaf`.
+    // Only the first word is reserved; everything after it belongs to the
+    // page, and every other occurrence belongs to the command.
+    if (c.help) |page| if (api.wantsHelp(args)) {
+        inner.args = args[1..];
+        try page(inner, ctx.out);
+        try ctx.out.flush();
+        return 0;
+    };
+
     inner.in = switch (in) {
         .bytes => |b| b,
         // The single binary hands stdin to whoever wants it, as it always did.

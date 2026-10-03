@@ -74,22 +74,7 @@ fn run(ctx: Ctx) !u8 {
 }
 
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
-    // Whatever is left names one of them: `m8 help shield ask` and
-    // `m8 shield ask --help` are the same page.
-    if (ctx.args.len > 0) {
-        if (@import("../command.zig").byPath(&.{ command.name, ctx.args[0] })) |node| {
-            if (launch.split) {
-                var argv: std.ArrayList([]const u8) = .empty;
-                try argv.append(ctx.arena, "--help");
-                try argv.appendSlice(ctx.arena, ctx.args[1..]);
-                _ = try launch.under(ctx, .{ .spawn = node.program }, argv.items, .inherited);
-                return;
-            }
-            var inner = ctx;
-            inner.args = ctx.args[1..];
-            return @import("help.zig").write(inner, find(ctx.args[0]).?, w);
-        }
-    }
+    _ = ctx;
     try w.writeAll(
         \\m8 shield — run a command inside one of the wrappers m8 ships with
         \\
@@ -111,4 +96,3 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         try w.print("  {s: <8} {s}\n", .{ n.spec.name, n.spec.summary });
     try w.writeAll("\nm8 shield NAME --help is that one's page.\n");
 }
-
