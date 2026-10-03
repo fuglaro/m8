@@ -35,7 +35,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 cat @mathy | m8 tag @mathy/aside          fork a chat
         \\  m8 cat @ | m8 send | m8 tag @mathy/other     keep a run elsewhere
         \\
-        \\  @chat     the turn goes in the chat's =/, the chat points at it,
+        \\  @chat     the turn goes in the chat's +/, the chat points at it,
         \\            and the main chat points at the chat
         \\  @         the chat the main chat points at, as above; or, when it
         \\            points at a turn, the main chat itself

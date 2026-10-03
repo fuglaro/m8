@@ -1,4 +1,4 @@
-#### :brain:/codex/gpt-5.6-luna,reasoning:{"summary":"auto","effort":"high"}
+#### :brain:/codex/gpt-5.6-sol,reasoning:{"summary":"auto","effort":"medium"}
 
 #### :compass:
 > You are a helpful coding assistant working alongside the user,

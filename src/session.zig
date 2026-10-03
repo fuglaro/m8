@@ -1,11 +1,11 @@
 //! Chats, and the turns they point at.
 //!
-//! Every name lives under `@/` in a config directory, and three kinds of file
-//! are generated there rather than authored:
+//! Authored names live under `@/` in a config directory. Three kinds of file
+//! are generated in the sibling `+/`, whose tree mirrors their logical names:
 //!
-//!   `X/=/id`  a turn, named by chance and never rewritten
-//!   `X/+`     a chat: a single 🧠 naming the turn it has got to
-//!   `+`       the main chat: a 🧠 naming a chat, or naming a turn outright
+//!   `+/X/+/id.md`  a turn, named by chance and never rewritten
+//!   `+/X/+.md`     a chat: a single 🧠 naming the turn it has got to
+//!   `+/+.md`       the main chat: a 🧠 naming a chat, or a turn outright
 //!
 //! It is git's objects and refs. A turn is an object, a chat is a ref, and
 //! the main chat is `HEAD` — attached when it names a chat, so it is the chat
@@ -26,7 +26,7 @@ const config = @import("config.zig");
 const model = @import("m8/model.zig");
 
 /// The folder turns are kept in, beside the chat that made them.
-pub const history = "=";
+pub const history = "+";
 
 /// A chat's pointer, inside the chat's own folder.
 pub const pointer = "+";
@@ -34,7 +34,7 @@ pub const pointer = "+";
 /// What a 💭's value starts with when what it holds is kept aside.
 pub const aside = "@";
 
-/// A snip is a turn's aside, kept in the same `=` folder as the turn that
+/// A snip is a turn's aside, kept in the same `+` folder as the turn that
 /// names it. The prefix is longer than a turn's name and holds a character
 /// one never does, so the two can never be taken for each other.
 pub const snip_prefix = "snip-";
@@ -61,8 +61,8 @@ pub fn snipOf(r: doc.Record) ?[]const u8 {
     return r.value[aside.len..];
 }
 
-/// The main chat. A pointer with no chat folder around it, so it sits at the
-/// top of `@/`.
+/// The main chat. A pointer with no chat folder around it, so on disk it sits
+/// at `+/+.md`.
 pub const main = pointer;
 
 pub const Error = error{
@@ -81,7 +81,7 @@ pub fn isGenerated(name: []const u8) bool {
     return isTurn(name) or isPointer(name);
 }
 
-/// Whether a name is a turn: anything inside a `=` folder.
+/// Whether a name is a turn: anything inside a `+` folder.
 pub fn isTurn(name: []const u8) bool {
     return std.mem.startsWith(u8, name, history ++ "/") or
         std.mem.indexOf(u8, name, "/" ++ history ++ "/") != null;
@@ -104,7 +104,7 @@ pub fn pointerOf(arena: Allocator, chat: []const u8) ![]const u8 {
 }
 
 /// Where a turn goes when it continues `parent` without advancing any chat:
-/// beside it. A turn's parent is in some chat's `=`; an agent's is the agent
+/// beside it. A turn's parent is in some chat's `+`; an agent's is the agent
 /// itself; a model, or nothing at all, has no folder and so takes the top one.
 pub fn besideParent(arena: Allocator, parent: []const u8) ![]const u8 {
     if (parent.len == 0 or model.is(parent)) return history;
@@ -204,7 +204,7 @@ pub fn unpoint(arena: Allocator, io: std.Io, dirs: []const []const u8, ptr: []co
 /// here is a secret, it is a filename in a directory you own.
 pub const id_len = 10;
 
-/// A fresh turn name in the `=` folder `in`.
+/// A fresh turn name in the `+` folder `in`.
 pub fn newName(arena: Allocator, io: std.Io, in: []const u8) ![]const u8 {
     return std.fmt.allocPrint(arena, "{s}/{s}", .{ in, newId(io) });
 }
@@ -296,7 +296,7 @@ fn writeFile(
     // Written aside and renamed into place, so an interrupted run leaves the
     // file as it was rather than half of a turn, and two runs moving one `+`
     // cannot interleave — the last rename wins, and the turn that lost is
-    // still in `=/`. Not synced: this is for a process that stops, not a
+    // still in `+/`. Not synced: this is for a process that stops, not a
     // machine that does.
     var file = try std.Io.Dir.cwd().createFileAtomic(io, path, .{ .make_path = true, .replace = true });
     defer file.deinit(io);
@@ -339,8 +339,8 @@ test "a snip is named from what it holds, never like a turn" {
 }
 
 test "a name says what kind it is by its shape alone" {
-    try testing.expect(isTurn("=/abc"));
-    try testing.expect(isTurn("mob/agent/chat1/=/abc"));
+    try testing.expect(isTurn("+/abc"));
+    try testing.expect(isTurn("mob/agent/chat1/+/abc"));
     try testing.expect(!isTurn("mob/agent"));
     try testing.expect(isPointer("+"));
     try testing.expect(isPointer("mob/agent/+"));
@@ -353,11 +353,11 @@ test "a turn that advances nothing goes beside its parent" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    try testing.expectEqualStrings("mob/agent/c/=", try besideParent(arena, "mob/agent/c/=/abc"));
-    try testing.expectEqualStrings("mob/agent/=", try besideParent(arena, "mob/agent"));
-    try testing.expectEqualStrings("=", try besideParent(arena, "/local/tiny"));
-    try testing.expectEqualStrings("=", try besideParent(arena, "=/abc"));
-    try testing.expectEqualStrings("=", try besideParent(arena, ""));
+    try testing.expectEqualStrings("mob/agent/c/+", try besideParent(arena, "mob/agent/c/+/abc"));
+    try testing.expectEqualStrings("mob/agent/+", try besideParent(arena, "mob/agent"));
+    try testing.expectEqualStrings("+", try besideParent(arena, "/local/tiny"));
+    try testing.expectEqualStrings("+", try besideParent(arena, "+/abc"));
+    try testing.expectEqualStrings("+", try besideParent(arena, ""));
 }
 
 const Fixture = struct {
@@ -373,7 +373,8 @@ const Fixture = struct {
     }
 
     fn write(f: Fixture, gpa: Allocator, name: []const u8, body: []const u8) !void {
-        const path = try std.fs.path.join(gpa, &.{ f.dir, config.names_dir, name });
+        const logical = if (std.mem.endsWith(u8, name, ".md")) name[0 .. name.len - 3] else name;
+        const path = try std.fs.path.join(gpa, &.{ f.dir, try config.nameFile(gpa, logical) });
         if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(f.io, d);
         try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = path, .data = body });
     }
@@ -401,18 +402,18 @@ test "a chat with no pointer reads as its parent's head" {
 
     // The agent's chat moves, and a chat forked from it follows until it
     // has a pointer of its own.
-    try f.write(arena, "mob/agent/+.md", "#### :brain:mob/agent/=/one\n");
-    try testing.expectEqualStrings("mob/agent/=/one", try head(arena, f.io, &dirs, "mob/agent/c1"));
-    try f.write(arena, "mob/agent/c1/+.md", "#### :brain:mob/agent/c1/=/two\n");
-    try testing.expectEqualStrings("mob/agent/c1/=/two", try head(arena, f.io, &dirs, "mob/agent/c1/sub"));
+    try f.write(arena, "mob/agent/+.md", "#### :brain:mob/agent/+/one\n");
+    try testing.expectEqualStrings("mob/agent/+/one", try head(arena, f.io, &dirs, "mob/agent/c1"));
+    try f.write(arena, "mob/agent/c1/+.md", "#### :brain:mob/agent/c1/+/two\n");
+    try testing.expectEqualStrings("mob/agent/c1/+/two", try head(arena, f.io, &dirs, "mob/agent/c1/sub"));
 
     // The main chat attached to a chat reads as that chat.
     try f.write(arena, "+.md", "#### :brain:mob/agent/c1/+\n");
-    try testing.expectEqualStrings("mob/agent/c1/=/two", try settle(arena, f.io, &dirs, main));
+    try testing.expectEqualStrings("mob/agent/c1/+/two", try settle(arena, f.io, &dirs, main));
 
     // Unpointing goes back to the parent, and never removes a turn.
     try unpoint(arena, f.io, &dirs, "mob/agent/c1/+");
-    try testing.expectEqualStrings("mob/agent/=/one", try head(arena, f.io, &dirs, "mob/agent/c1"));
+    try testing.expectEqualStrings("mob/agent/+/one", try head(arena, f.io, &dirs, "mob/agent/c1"));
 
     try testing.expectError(error.UnknownAgent, head(arena, f.io, &dirs, "nobody/c"));
 }

@@ -59,7 +59,7 @@
 ;;   process trying to widen the profile it is already inside.
 ;;
 ;; Always allowed, in every mode, and the pair to that:
-;;   writing to a mob's .tmpdir/ under @/ in a config directory. It is the
+;;   writing to a mob's .tmpdir/ under +/ in a config directory. It is the
 ;;   mob's scratch, which m8 makes before a tool runs and guarantees is
 ;;   writable. It carries no tag either, so no combination of
 ;;   flags can take it away.
@@ -167,7 +167,7 @@
 ;; kind of directory always open inside a config directory is the one that
 ;; says nothing about what runs.
 (deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))
-(allow file-write* (regex #"(^|/)\.?m8-st8/@/([^/]+/)*\.tmpdir($|/)"))
+(allow file-write* (regex #"(^|/)\.?m8-st8/\+/([^/]+/)*\.tmpdir($|/)"))
 
 ;; --- non-local internet access ---
 (allow network*)                      ;;!! !airgap

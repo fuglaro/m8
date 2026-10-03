@@ -101,7 +101,7 @@ fn promptPage(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  @                  the main chat
         \\  @mob/agent         that agent's own chat
         \\  @mob/agent/chat1   a chat under it, forked from it until it moves
-        \\  @…/=/gftafinvgrdy  a turn
+        \\  @…/+/gftafinvgrdy  a turn
         \\  @/local/tiny       a model
         \\
         \\`:brain:` and 🧠 mark one as well, so a 🧠 line pasted back in is

@@ -161,7 +161,7 @@ test "the mark is the whole of the distinction" {
 
     try testing.expect((try parse(arena, "mathy")) == null);
     try testing.expect((try parse(arena, "team/reviewer")) == null);
-    try testing.expect((try parse(arena, "=/tduyxbutjb")) == null);
+    try testing.expect((try parse(arena, "+/tduyxbutjb")) == null);
     try testing.expect((try parse(arena, "/local/tiny")) != null);
 }
 

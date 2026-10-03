@@ -1,4 +1,4 @@
-#### :brain:pagey/=/yzihaowuev
+#### :brain:pagey/+/yzihaowuev
 
 #### :raising_hand:
 > Help me understand how local MCP commands typically work in harnesses. What's the shape of it, the API, how they connect, is it stdio streaming? Is it socket? How is it secure to the user??

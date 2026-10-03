@@ -165,7 +165,8 @@ const Fixture = struct {
     }
 
     fn agent(f: Fixture, gpa: Allocator, name: []const u8, body: []const u8) !void {
-        const path = try std.fs.path.join(gpa, &.{ f.dir, config.names_dir, name });
+        const logical = if (std.mem.endsWith(u8, name, ".md")) name[0 .. name.len - 3] else name;
+        const path = try std.fs.path.join(gpa, &.{ f.dir, try config.nameFile(gpa, logical) });
         if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(f.io, d);
         try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = path, .data = body });
     }

@@ -3,15 +3,16 @@
 //!   @                   the main chat
 //!   @mob/agent          that agent's own chat
 //!   @mob/agent/chat1    a chat under it, as deep as chats go
-//!   @…/=/gftafinvgrdy   a turn
+//!   @…/+/gftafinvgrdy   a turn
 //!   @/local/tiny        a model
 //!
 //! `@`, `:brain:` and 🧠 all mark one, so a 🧠 line pasted back in names what
 //! it printed. A trailing `:` asks without moving anything, and a trailing
 //! `-` takes a chat's pointer away so that it reads as its parent again.
 //!
-//! A name is a path under `@/`, and the folder part is the mob — until the
-//! walk meets an agent file, after which every word is a chat under it. So
+//! An authored name is a path under `@/`, and the folder part is the mob —
+//! until the walk meets an agent file, after which every word is a chat under
+//! it. Generated chat state mirrors that path under the sibling `+/`. So
 //! `x.md` beside `x/` is an agent and its chats, and `x/` alone is a mob. The
 //! one thing that cannot be told apart is a chat that is also an agent's
 //! name, and that is said rather than chosen between.
@@ -155,7 +156,7 @@ pub fn read(arena: Allocator, io: std.Io, dirs: []const []const u8, a: Address) 
 
 /// Where a turn tagged at this address is kept.
 ///
-/// A turn goes in the `=` of the chat it advances. One that advances no chat
+/// A turn goes in the `+` of the chat it advances. One that advances no chat
 /// goes beside the turn it continues, which is `parent` settled.
 pub fn home(
     arena: Allocator,
@@ -260,7 +261,8 @@ const Fixture = struct {
     }
 
     fn write(f: Fixture, gpa: Allocator, name: []const u8, text: []const u8) !void {
-        const path = try std.fs.path.join(gpa, &.{ f.dir, config.names_dir, name });
+        const logical = if (std.mem.endsWith(u8, name, ".md")) name[0 .. name.len - 3] else name;
+        const path = try std.fs.path.join(gpa, &.{ f.dir, try config.nameFile(gpa, logical) });
         if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(f.io, d);
         try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = path, .data = text });
     }
@@ -294,7 +296,7 @@ test "every mark reads as an address, and suffixes are read off the end" {
     try testing.expectEqual(Suffix.oneshot, (try resolve(arena, f.io, &dirs, "@mob/agent:", &d)).suffix);
     try testing.expectEqual(Suffix.reset, (try resolve(arena, f.io, &dirs, "@mob/agent/c1-", &d)).suffix);
     try testing.expectEqual(Kind.model, (try resolve(arena, f.io, &dirs, "@/local/tiny:", &d)).kind);
-    try testing.expectEqual(Kind.turn, (try resolve(arena, f.io, &dirs, "@mob/agent/=/abc", &d)).kind);
+    try testing.expectEqual(Kind.turn, (try resolve(arena, f.io, &dirs, "@mob/agent/+/abc", &d)).kind);
     try testing.expectError(error.UnknownAgent, resolve(arena, f.io, &dirs, "@nobody", &d));
 }
 
@@ -340,7 +342,7 @@ test "tagging keeps a turn in the chat it advances, and moves main with it" {
         .{ .sigil = .agent, .value = try read(arena, f.io, &dirs, chat) },
         .{ .sigil = .user, .content = "hi" },
     });
-    try testing.expect(std.mem.startsWith(u8, turn, "mob/agent/c1/=/"));
+    try testing.expect(std.mem.startsWith(u8, turn, "mob/agent/c1/+/"));
     try testing.expectEqualStrings(turn, try read(arena, f.io, &dirs, chat));
     try testing.expectEqualStrings("mob/agent/c1/+", (try session.deref(arena, f.io, &dirs, session.main)).?);
 
@@ -358,7 +360,7 @@ test "tagging keeps a turn in the chat it advances, and moves main with it" {
         .{ .sigil = .agent, .value = next },
         .{ .sigil = .user, .content = "by the way" },
     });
-    try testing.expect(std.mem.startsWith(u8, aside, "mob/agent/c1/=/"));
+    try testing.expect(std.mem.startsWith(u8, aside, "mob/agent/c1/+/"));
     try testing.expectEqualStrings(next, try read(arena, f.io, &dirs, chat));
 
     // A turn named outright detaches main, and a lone 🧠 is pointed at.

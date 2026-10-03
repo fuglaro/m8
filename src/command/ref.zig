@@ -89,9 +89,9 @@ test "what m8 @ writes becomes its 🧠 alone" {
     var out: std.Io.Writer.Allocating = .init(a.allocator());
     var err: std.Io.Writer.Allocating = .init(a.allocator());
 
-    const said = "#### :robot:\n> hi\n\n#### :brain:x/=/abcdefghij\n";
+    const said = "#### :robot:\n> hi\n\n#### :brain:x/+/abcdefghij\n";
     try testing.expectEqual(@as(u8, 0), try call(a.allocator(), said, &out.writer, &err.writer));
-    try testing.expectEqualStrings("#### :brain:x/=/abcdefghij\n", out.written());
+    try testing.expectEqualStrings("#### :brain:x/+/abcdefghij\n", out.written());
 }
 
 test "a turn nobody kept has no reference, even with its parent in it" {
@@ -100,7 +100,7 @@ test "a turn nobody kept has no reference, even with its parent in it" {
     var out: std.Io.Writer.Allocating = .init(a.allocator());
     var err: std.Io.Writer.Allocating = .init(a.allocator());
 
-    const sent = "#### :brain:x/=/parent\n\n#### :raising_hand:\n> hi\n\n#### :robot:\n> hi\n";
+    const sent = "#### :brain:x/+/parent\n\n#### :raising_hand:\n> hi\n\n#### :robot:\n> hi\n";
     try testing.expectEqual(@as(u8, 1), try call(a.allocator(), sent, &out.writer, &err.writer));
     try testing.expectEqualStrings("", out.written());
 }

@@ -437,7 +437,8 @@ const Fixture = struct {
     }
 
     fn agent(f: Fixture, gpa: Allocator, name: []const u8, body: []const u8) !void {
-        const path = try std.fs.path.join(gpa, &.{ f.dir, config.names_dir, name });
+        const logical = if (std.mem.endsWith(u8, name, ".md")) name[0 .. name.len - 3] else name;
+        const path = try std.fs.path.join(gpa, &.{ f.dir, try config.nameFile(gpa, logical) });
         if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(f.io, d);
         try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = path, .data = body });
     }
@@ -497,9 +498,9 @@ test "a chat expands through its turns to the agent it began with" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-chat");
     defer f.deinit(arena);
     try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :compass:\n> Be brief.\n");
-    try f.agent(arena, "=/one.md", "#### :brain:mathy\n\n#### :raising_hand:\n> Hi.\n\n#### :robot:\n> Hello.\n");
-    try f.agent(arena, "=/two.md", "#### :brain:=/one\n\n#### :raising_hand:\n> More.\n\n#### :robot:\n> Sure.\n");
-    try f.agent(arena, "mathy/+.md", "#### :brain:=/two\n");
+    try f.agent(arena, "+/one.md", "#### :brain:mathy\n\n#### :raising_hand:\n> Hi.\n\n#### :robot:\n> Hello.\n");
+    try f.agent(arena, "+/two.md", "#### :brain:+/one\n\n#### :raising_hand:\n> More.\n\n#### :robot:\n> Sure.\n");
+    try f.agent(arena, "mathy/+.md", "#### :brain:+/two\n");
 
     const dirs = [_][]const u8{f.dir};
     const l = try expand(arena, f.io, &dirs, "mathy/+");
@@ -523,7 +524,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n");
 
     const dirs = [_][]const u8{f.dir};
-    const turn = "mathy/=/abcdefghij";
+    const turn = "mathy/+/abcdefghij";
     try session.write(arena, f.io, &dirs, turn, &.{
         .{ .sigil = .agent, .value = "mathy" },
         .{ .sigil = .thought, .content = "weighing it" },
@@ -536,7 +537,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try testing.expect(std.mem.indexOf(u8, saved, "SIG") == null);
     try testing.expect(std.mem.indexOf(u8, saved, "#### :thought_balloon:@" ++ session.snip_prefix) != null);
     // Named from what it holds, and beside the turn that names it.
-    const snip = try std.fmt.allocPrint(arena, "mathy/=/{s}", .{(try session.asideFor(arena, ":lock_with_ink_pen:SIG"))[1..]});
+    const snip = try std.fmt.allocPrint(arena, "mathy/+/{s}", .{(try session.asideFor(arena, ":lock_with_ink_pen:SIG"))[1..]});
     try testing.expect((try config.read(arena, f.io, &dirs, try config.nameFile(arena, snip))) != null);
 
     // Read back, everything is where it was.
@@ -547,8 +548,8 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try testing.expect(session.snipOf(l.records[2]) != null);
 
     // A snip that is gone is said, not quietly left out.
-    try f.agent(arena, "mathy/=/lost.md", "#### :brain:mathy\n\n#### :thought_balloon:@snip-nowherenea\n");
-    try testing.expectError(Error.MissingSnip, expand(arena, f.io, &dirs, "mathy/=/lost"));
+    try f.agent(arena, "mathy/+/lost.md", "#### :brain:mathy\n\n#### :thought_balloon:@snip-nowherenea\n");
+    try testing.expectError(Error.MissingSnip, expand(arena, f.io, &dirs, "mathy/+/lost"));
 }
 
 test "tool calls stay, and only an unanswered one is still owed" {
@@ -560,7 +561,7 @@ test "tool calls stay, and only an unanswered one is still owed" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-calls");
     defer f.deinit(arena);
-    try f.agent(arena, "=/t.md",
+    try f.agent(arena, "+/t.md",
         \\#### :brain:/local/tiny
         \\
         \\#### :calling:say,c1
@@ -574,7 +575,7 @@ test "tool calls stay, and only an unanswered one is still owed" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "=/t");
+    const l = try expand(arena, f.io, &dirs, "+/t");
 
     // Four records, the calls among them.
     try testing.expectEqual(@as(usize, 4), l.records.len);
@@ -605,7 +606,7 @@ test "a conversation is as long as it is, whatever the include cap says" {
     const turns = 5000;
     var parent: []const u8 = "mathy";
     for (0..turns) |i| {
-        const name = try std.fmt.allocPrint(arena, "=/t{d}", .{i});
+        const name = try std.fmt.allocPrint(arena, "+/t{d}", .{i});
         try f.agent(
             arena,
             try std.fmt.allocPrint(arena, "{s}.md", .{name}),
@@ -644,15 +645,15 @@ test "lineage that closes on itself says so, rather than running out of depth" {
     defer f.deinit(arena);
     // m8 never writes this: a turn names one that existed before it did. Only
     // an edited file is shaped like this, and it is still worth naming.
-    try f.agent(arena, "=/a.md", "#### :brain:=/b\n\n#### :raising_hand:\n> one\n");
-    try f.agent(arena, "=/b.md", "#### :brain:=/a\n\n#### :raising_hand:\n> two\n");
+    try f.agent(arena, "+/a.md", "#### :brain:+/b\n\n#### :raising_hand:\n> one\n");
+    try f.agent(arena, "+/b.md", "#### :brain:+/a\n\n#### :raising_hand:\n> two\n");
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "=/a"));
+    try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "+/a"));
 
     // A turn naming itself is the same fault, one link shorter.
-    try f.agent(arena, "=/self.md", "#### :brain:=/self\n");
-    try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "=/self"));
+    try f.agent(arena, "+/self.md", "#### :brain:+/self\n");
+    try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "+/self"));
 }
 
 test "an agent met twice is not a cycle" {

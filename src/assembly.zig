@@ -73,7 +73,7 @@ fn sigils(arena: Allocator, a: Assembled) ![]const doc.Record {
     return doc.parse(arena, a.document, &diag);
 }
 
-const chat_lead: []const doc.Record = &.{.{ .sigil = .agent, .value = "mob/agent/=/last" }};
+const chat_lead: []const doc.Record = &.{.{ .sigil = .agent, .value = "mob/agent/+/last" }};
 
 test "nothing piped: the lead, then the prompt" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -83,7 +83,7 @@ test "nothing piped: the lead, then the prompt" {
     const got = try assemble(arena, chat_lead, "hello", "");
     const r = try sigils(arena, got);
     try testing.expectEqual(@as(usize, 2), r.len);
-    try testing.expectEqualStrings("mob/agent/=/last", r[0].value);
+    try testing.expectEqualStrings("mob/agent/+/last", r[0].value);
     try testing.expectEqualStrings("hello", r[1].content.?);
     try testing.expect(!got.said_nothing);
 
@@ -100,7 +100,7 @@ test "an m8 document piped in follows the lead as it is" {
     const got = try assemble(arena, chat_lead, "more", piped);
     const r = try sigils(arena, got);
     try testing.expectEqual(@as(usize, 4), r.len);
-    try testing.expectEqualStrings("mob/agent/=/last", r[0].value);
+    try testing.expectEqualStrings("mob/agent/+/last", r[0].value);
     try testing.expectEqualStrings("/local/tiny", r[1].value);
     try testing.expectEqualStrings("piped", r[2].content.?);
     try testing.expectEqualStrings("more", r[3].content.?);

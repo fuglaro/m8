@@ -8,14 +8,14 @@ fuglaro@localhost> m8 @pagey 'One word -> do you like Haiku?'
 ▄ 🤖
 │ Yes.
 
-▄ 🧠pagey/=/swlyayqtjk
+▄ 🧠pagey/+/swlyayqtjk
 fuglaro@localhost> m8 @ 'Throw me a quick one please.'
 ▄ 🤖
 │ Moonlight on still ponds
 │ Crickets stitch the dark with song
 │ Dawn waits behind hills
 
-▄ 🧠pagey/=/psbarddrym
+▄ 🧠pagey/+/psbarddrym
 fuglaro@localhost>
 ```
 
@@ -58,7 +58,7 @@ Four things make it different:
   and forgetting are things a projection does — never
   something done to the ledger on the way past.
 * Turns are files, and chats simply reference them.
-  A `=/` folder holds immutable turns naming their
+  A `+/` folder holds immutable turns naming their
   parent, and a `+` is a movable reference into them.
   It is git's objects and refs, for conversations,
   on the filesystem.
@@ -341,7 +341,7 @@ same place.
 * [CTK](https://github.com/queelius/ctk), Forky and
   GitChat proved conversations are trees worth forking
   and grafting. Each does it in a database or an app.
-  `=` and `+` do it in a directory, where `ls` and `cat`
+  `+.md` and `+/` do it in a directory, where `ls` and `cat`
   already work: git's object and ref split, applied to
   conversations.
 
@@ -386,14 +386,14 @@ echo "Tell me about the Riemann Sphere\nin detail." | m8 @mathy
 ▄ 🤖
 │ The Riemann Sphere is a ...
 
-▄ 🧠mathy/=/tduyxbutjb
+▄ 🧠mathy/+/tduyxbutjb
 ```
 
 The reply went to a tty, so it is rendered. The turn
 it saved is a file, so it is markdown:
 
 ```bash
-cat ".m8-st8/@/mathy/=/tduyxbutjb.md"
+cat ".m8-st8/+/mathy/+/tduyxbutjb.md"
 ```
 ```
 #### :brain:mathy
@@ -407,14 +407,14 @@ cat ".m8-st8/@/mathy/=/tduyxbutjb.md"
 ```
 
 ```bash
-m8 @mathy/=/tduyxbutjb "Tell me more."
+m8 @mathy/+/tduyxbutjb "Tell me more."
 ```
 ```
 ▄ 🤖
 │ Additionally,
 │ ...
 
-▄ 🧠mathy/=/ypfpkuimzg
+▄ 🧠mathy/+/ypfpkuimzg
 ```
 
 * `@` sits where a command would, and is not one. The
@@ -428,7 +428,7 @@ m8 @mathy/=/tduyxbutjb "Tell me more."
   @                   the main chat
   @mathy              mathy's own chat
   @mathy/aside        a chat under it, as deep as chats go
-  @mathy/=/tduyxbutjb a turn
+  @mathy/+/tduyxbutjb a turn
   @/local/tiny        a model
   ```
 * `:brain:` and 🧠 mark an address as well as `@` does,
@@ -1076,7 +1076,7 @@ out of the way.
   * `snip-` and a turn's ten letters never collide.
 * With content, it is not saved yet; without, it is in the
   snip.
-  * Saving a turn writes the snip beside it, in its `=/`.
+  * Saving a turn writes the snip beside it, in its `+/`.
   * Reading a ledger puts it back, so a codec gets exactly
     what it wrote.
 * A terminal shows the header alone; a pipe carries all of
@@ -1557,9 +1557,10 @@ with a `git clone`, and a provider is a command that runs
 on your machine. Each is a whole-file override of the copy
 m8 ships with, not a merge.
 
-Every name lives under `@/`, so `@mathy` on the command
-line is `@/mathy.md` on disk, and the rest of a config
-directory is nothing a name can reach.
+Authored names live under `@/`, so `@mathy` on the command
+line is `@/mathy.md` on disk. Generated state lives in the
+sibling `+/`, mirroring the same logical paths. The rest of a
+config directory is nothing a name can reach.
 
 ```
 .m8-st8/
@@ -1569,14 +1570,15 @@ directory is nothing a name can reach.
     providers.json
   models/
   @/
-    +.md                      @, the main chat
     mathy.md                  mathy, the agent
-    mathy/+.md                @mathy, its own chat
-    mathy/=/tduyxbutjb.md     @mathy/=/tduyxbutjb
-    mathy/aside/+.md          @mathy/aside
     team/reviewer.md          @team/reviewer
+  +/
+    +.md                      @, the main chat
+    mathy/+.md                @mathy, its own chat
+    mathy/+/tduyxbutjb.md     @mathy/+/tduyxbutjb
+    mathy/aside/+.md          @mathy/aside
     team/.tmpdir/             the team mob's scratch
-    =/psbarddrym.md           a turn a model answered
+    +/psbarddrym.md           a turn a model answered
 ```
 
 ### Mobs
@@ -1587,7 +1589,8 @@ and starting scripts, as bundled packages.
 A name is a path, so the folder part is the mob
 it belongs to. Mobs bundle the agents, skills and
 starting scripts that travel together, and each
-mob's agents share its `.tmpdir/` for scratch.
+mob's agents share its mirrored `+/<mob>/.tmpdir/`
+for scratch.
 
 Walking down a name, the first agent file met is
 the agent and every word after it is a chat. So
@@ -1607,18 +1610,18 @@ whatever shields that 🧰 does.
 Turns and chats are generated rather than authored,
 and they are git's objects and refs.
 
-* A turn is a file in a `=/` folder, named with ten
+* A turn is a file in a `+/` folder, named with ten
   lowercase letters and never rewritten. It holds
   only what it continues and the exchange.
 * A chat is a `+.md`: a single 🧠 naming the turn
   it has got to, rewritten every time it moves.
-* The main chat is `@/+.md`. Attached, it names a
+* The main chat is `+/+.md` on disk. Attached, it names a
   chat, and talking to it moves that chat. Detached,
   it names a turn — after `m8 @/local/tiny` or
-  `m8 @mathy/=/tduyxbutjb` — and moves itself.
+  `m8 @mathy/+/tduyxbutjb` — and moves itself.
 
 ```m8
-▄ 🧠mathy/=/tduyxbutjb
+▄ 🧠mathy/+/tduyxbutjb
 
 ▄ 🙋
 │ Tell me more.
@@ -1627,10 +1630,10 @@ and they are git's objects and refs.
 │ Additionally, ...
 ```
 
-A turn goes in the `=/` of the chat it advances. One
+A turn goes in the `+/` of the chat it advances. One
 that advances no chat — a side question, or a turn
 talked to directly — goes beside the turn it
-continues, and a model's go in the top `=/`.
+continues, and a model's go in the top `+/`.
 
 A chat with no `+.md` of its own reads as its
 parent's head. That is the whole of forking and
@@ -1654,7 +1657,7 @@ turns naming one parent, and copies nothing.
 
 Two different things are written 🧠. An agent
 naming an agent is a mob reaching into a mob; a
-name in `=` or `+` is lineage, the turn this one
+name through `+` is lineage, the turn this one
 continues. Both are as deep as they are — nine
 mobs is nine mobs, a thousand turns is a thousand
 turns, and neither is a fault.

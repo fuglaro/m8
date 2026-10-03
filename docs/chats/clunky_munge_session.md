@@ -11765,7 +11765,7 @@
 >   +/+.md                ++
 >   +/mathy.md            +mathy
 >   +/team/reviewer.md    +team/reviewer
->   =/tduyxbutjb.md       @=/tduyxbutjb
+>   +/tduyxbutjb.md       @+/tduyxbutjb
 > ```
 >
 > ### Mobs

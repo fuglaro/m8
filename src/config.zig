@@ -93,18 +93,32 @@ fn exists(io: std.Io, path: []const u8) bool {
     return true;
 }
 
-/// Where every name lives. A 🧠 names a file under here, so `@mathy` on the
-/// command line is `@/mathy.md` on disk, and the rest of a config directory —
-/// `core/`, `models/` — is nothing a name can reach.
-pub const names_dir = "@";
+/// Authored definitions live here. A 🧠 still names one by the same logical
+/// path: `@mathy` on the command line is `@/mathy.md` on disk.
+pub const definitions_dir = "@";
 
-/// The file a name is, relative to a config directory.
-pub fn nameFile(arena: Allocator, name: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(arena, "{s}/{s}.md", .{ names_dir, name });
+/// Generated state lives alongside definitions rather than among them. Its
+/// tree mirrors the logical names under `@/`: the pointer `mathy/+` is
+/// `+/mathy/+.md`, and the turn `mathy/+/abc` is `+/mathy/+/abc.md`.
+pub const state_dir = "+";
+
+/// Whether a logical name is generated state. `+` is reserved as the pointer
+/// and history path component, so its presence says this without disk access.
+fn isStateName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "+") or
+        std.mem.startsWith(u8, name, "+/") or
+        std.mem.endsWith(u8, name, "/+") or
+        std.mem.indexOf(u8, name, "/+/") != null;
 }
 
-/// Where a mob keeps its scratch. Inside the mob's own folder rather than
-/// beside it, so everything a mob needs travels with it.
+/// The file a logical name is, relative to a config directory.
+pub fn nameFile(arena: Allocator, name: []const u8) ![]const u8 {
+    const root = if (isStateName(name)) state_dir else definitions_dir;
+    return std.fmt.allocPrint(arena, "{s}/{s}.md", .{ root, name });
+}
+
+/// Where a mob keeps its scratch. Inside the mob's mirrored state folder, so
+/// authored definitions and all generated or mutable material stay apart.
 ///
 /// Keeping it out of a version control system is the repository's business
 /// rather than m8's — this one carries a `.gitignore` in its own config
@@ -165,7 +179,7 @@ pub fn mobTmp(
         }
     }
 
-    const tmp = try std.fs.path.join(arena, &.{ base, names_dir, mob, tmp_dir_name });
+    const tmp = try std.fs.path.join(arena, &.{ base, state_dir, mob, tmp_dir_name });
     try std.Io.Dir.cwd().createDirPath(io, tmp);
     // No trailing slash, ever, so no tool has to strip one.
     return std.mem.trimEnd(u8, tmp, "/");
@@ -204,6 +218,18 @@ pub const default_providers = @embedFile("core/providers.json");
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+
+test "definitions and generated state have separate roots" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    try testing.expectEqualStrings("@/mathy.md", try nameFile(arena, "mathy"));
+    try testing.expectEqualStrings("@/team/reviewer.md", try nameFile(arena, "team/reviewer"));
+    try testing.expectEqualStrings("+/+.md", try nameFile(arena, "+"));
+    try testing.expectEqualStrings("+/mathy/+.md", try nameFile(arena, "mathy/+"));
+    try testing.expectEqualStrings("+/mathy/+/abcdefghij.md", try nameFile(arena, "mathy/+/abcdefghij"));
+}
 
 /// A throwaway config tree. Real directories, because what is being tested is
 /// which file gets picked out of several.
@@ -256,6 +282,24 @@ test "read takes the file from the nearest directory that has one" {
     // project one, rather than being replaced by it.
     try testing.expectEqualStrings("far only", (try read(arena, t.io, &dirs, "only.md")).?);
     try testing.expect((try read(arena, t.io, &dirs, "absent.md")) == null);
+}
+
+test "mob scratch is generated state beside definitions" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const t = try Tree.init(arena, &threaded, "m8-config-scratch");
+    defer t.deinit(arena);
+    try t.write(arena, "@/team/reviewer.md", "#### :brain:/local/tiny\n");
+    const dirs = [_][]const u8{t.root};
+
+    const got = (try mobTmp(arena, t.io, &dirs, "team/reviewer")).?;
+    try testing.expectEqualStrings(try t.join(arena, "+/team/.tmpdir"), got);
+    var scratch = try std.Io.Dir.cwd().openDir(t.io, got, .{});
+    scratch.close(t.io);
 }
 
 test "core is read from the user's directory and nowhere else" {

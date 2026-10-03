@@ -319,15 +319,15 @@ Review everything again on the mission statement in the README.md
 ## TODO
 
 * Validate and document common workflow can be reasonably composed with components.
-* Figure out componentised multi-agent management e.g: https://herdr.dev/
+* Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
 
 
 
 ## BITTY ISSUES
 
 ```
->>> m8 cat @pagey/=/NOFILEHERE
-▄ 🧠pagey/=/NOFILEHERE
+>>> m8 cat @pagey/+/NOFILEHERE
+▄ 🧠pagey/+/NOFILEHERE
 ```
 
 * DONE: No blank lines between recipt, green circle, call sigils, just like we did across though_balloons.
