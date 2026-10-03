@@ -92,10 +92,10 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
 
     // Everything this run adds, in the order it happened.
     var turn: std.ArrayList(doc.Record) = .empty;
-    // Records normally get a blank line, so writing one has to know whether
-    // anything came before it. Live provider output may join equal sigils.
-    var written = false;
-    if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &written, r);
+    // Records normally get a blank line, so writing one has to know what came
+    // before it. Some records belong together and are shown touching.
+    var shown: Shown = .{};
+    if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);
     // The rendered spelling is only ever written for a terminal, and a
     // terminal is the only reader that can watch a reply arrive.
     const live = mode == .m8;
@@ -109,7 +109,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
             .name = ledger.callName(asked.value),
             .arguments = try toolbox.parseArgs(arena, .md, asked.content orelse ""),
         })) |record| {
-            try show(arena, out, mode, &written, record);
+            try show(arena, out, mode, &shown, record);
             try records.append(arena, record);
             try turn.append(arena, record);
         }
@@ -124,7 +124,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
             .out = out,
             .mode = mode,
             .live = live,
-            .written = &written,
+            .shown = &shown,
         };
         const request = try wire.encode(arena, records.items, .{
             .model = def.model,
@@ -170,7 +170,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
             };
             // Show the call before running it: on a terminal that is the only
             // sign anything is happening while a tool takes its time.
-            try show(arena, out, mode, &written, asked);
+            try show(arena, out, mode, &shown, asked);
             try out.flush();
             try keep(arena, &records, asked);
             try turn.append(arena, asked);
@@ -178,7 +178,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
             // The answer comes from the tool, not the model, and was already
             // checked against what a tool may say.
             for (try answer(ctx, scratch, shields, offered, c)) |record| {
-                try show(arena, out, mode, &written, record);
+                try show(arena, out, mode, &shown, record);
                 try records.append(arena, record);
                 try turn.append(arena, record);
             }
@@ -447,16 +447,41 @@ fn keep(arena: Allocator, records: *std.ArrayList(doc.Record), r: doc.Record) !v
     try records.append(arena, r);
 }
 
+/// What was last put on the display, so the next record knows whether a
+/// blank line separates it. Only the display: the parser does not need a
+/// blank line between headers, and what is saved keeps them all.
+const Shown = struct {
+    written: bool = false,
+    last: ?sigil.Sigil = null,
+
+    fn begin(self: *Shown, out: *std.Io.Writer, s: sigil.Sigil) !void {
+        if (self.written and !touches(self.last, s)) try out.writeByte('\n');
+        self.written = true;
+        self.last = s;
+    }
+
+    /// A reply's 💭 run together and so do its 🤖, and a call runs into its
+    /// answer: 📲 then 🧾 then 🟢 or 🚫 is one exchange. Every other
+    /// transition keeps the usual blank line.
+    fn touches(last: ?sigil.Sigil, s: sigil.Sigil) bool {
+        const l = last orelse return false;
+        return switch (s) {
+            .thought, .bot => l == s,
+            .result, .ok, .failed => l == .call or l == .result,
+            else => false,
+        };
+    }
+};
+
 /// Write a record, with the blank line that separates it from the last one.
 fn show(
     arena: Allocator,
     out: *std.Io.Writer,
     mode: doc.Mode,
-    written: *bool,
+    shown: *Shown,
     r: doc.Record,
 ) !void {
-    if (written.*) try out.writeByte('\n');
-    written.* = true;
+    try shown.begin(out, r.sigil);
     try doc.write(out, mode, try ledger.rendered(arena, mode, r));
 }
 
@@ -466,10 +491,7 @@ const LiveReply = struct {
     out: *std.Io.Writer,
     mode: doc.Mode,
     live: bool,
-    written: *bool,
-    /// The last provider record actually shown. Records of the same kind can
-    /// touch; every other transition keeps the usual blank-line separator.
-    last_sigil: ?sigil.Sigil = null,
+    shown: *Shown,
     /// Opened on the first byte. A model that only calls a tool says nothing,
     /// and an empty 🤖 above the call would be a record of nothing.
     body: ?doc.ContentWriter = null,
@@ -478,16 +500,6 @@ const LiveReply = struct {
 
     fn sink(self: *LiveReply) codec.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
-    }
-
-    /// Start showing a record. The document parser does not need a blank line
-    /// between headers, so adjacent records of one kind can be kept together
-    /// on the live display without changing what the ledger means.
-    fn beginShown(self: *LiveReply, s: sigil.Sigil) !void {
-        const adjacent = if (self.last_sigil) |last| last == s else false;
-        if (self.written.* and !adjacent) try self.out.writeByte('\n');
-        self.written.* = true;
-        self.last_sigil = s;
     }
 
     /// Remembered rather than written. A record with nothing in it is a record
@@ -508,7 +520,7 @@ const LiveReply = struct {
         if (self.mode == .m8 and self.pending == .thought and std.mem.startsWith(u8, self.value, "@")) return;
         if (self.body == null) {
             const s = self.pending orelse .bot;
-            try self.beginShown(s);
+            try self.shown.begin(self.out, s);
             self.body = try doc.ContentWriter.begin(
                 self.out,
                 self.mode,
@@ -527,7 +539,7 @@ const LiveReply = struct {
         } else if (self.value.len > 0) {
             // Said on the header alone — how a reply stopped short.
             const s = self.pending orelse .bot;
-            try self.beginShown(s);
+            try self.shown.begin(self.out, s);
             try doc.write(self.out, self.mode, .{ .sigil = s, .value = self.value });
             if (self.live) try self.out.flush();
         }
@@ -588,12 +600,12 @@ test "live reply separates changes of sigil" {
     const arena = a.allocator();
 
     var out: std.Io.Writer.Allocating = .init(arena);
-    var written = false;
+    var shown: Shown = .{};
     var reply: LiveReply = .{
         .out = &out.writer,
         .mode = .md,
         .live = false,
-        .written = &written,
+        .shown = &shown,
     };
     const sink = reply.sink();
 
@@ -607,6 +619,34 @@ test "live reply separates changes of sigil" {
         "#### :thought_balloon:\n> one\n#### :thought_balloon:\n> two\n\n" ++
             "#### :robot:\n> answer\n#### :robot:\n> again\n\n" ++
             "#### :thought_balloon:\n> three\n",
+        out.written(),
+    );
+}
+
+test "a call runs into its answer" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var shown: Shown = .{};
+    for ([_]doc.Record{
+        .{ .sigil = .bot, .content = "looking" },
+        .{ .sigil = .call, .value = "read,c1", .content = "* path x" },
+        .{ .sigil = .result, .value = "c1", .content = "one" },
+        .{ .sigil = .result, .value = "c1", .content = "two" },
+        .{ .sigil = .ok, .value = "c1" },
+        .{ .sigil = .call, .value = "read,c2", .content = "* path y" },
+        .{ .sigil = .failed, .value = "c2", .content = "no" },
+        .{ .sigil = .bot, .content = "done" },
+    }) |r| try show(arena, &out.writer, .md, &shown, r);
+
+    try std.testing.expectEqualStrings(
+        "#### :robot:\n> looking\n\n" ++
+            "#### :calling:read,c1\n> * path x\n" ++
+            "#### :receipt:c1\n> one\n#### :receipt:c1\n> two\n#### :green_circle:c1\n\n" ++
+            "#### :calling:read,c2\n> * path y\n#### :no_entry_sign:c2\n> no\n\n" ++
+            "#### :robot:\n> done\n",
         out.written(),
     );
 }

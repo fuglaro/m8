@@ -14,7 +14,6 @@ Review everything again on the mission statement in the README.md
 
 ### Format spec apart from the Zig
 
-* Sooner than feels necessary.
 * The moat is the data model and format collapse, not the CLI.
 * A second implementation is the proof.
 * Pieces:
@@ -228,8 +227,9 @@ Review everything again on the mission statement in the README.md
   * Built into tools.
   * Why maybe - a convention imposed on every file.
 * MAYBE: MCP - generic runner tool; output schemas.
-  * Pi excludes MCP.
   * How would it apply without? 🧰 rendered from a server, per the README?
+  * Generic MCP wrapper launcher/runner tool (one for local one for remote).
+  * Test with Blender. Test with web service.
 * MAYBE: Wrapper scripts in a config folder.
   * For commands a template cannot say.
 * Every inbuilt tool runnable under `m8 call args`.
@@ -243,6 +243,12 @@ Review everything again on the mission statement in the README.md
 * Nudges in definitions:
   * several calls in one reply
   * string-match anchors for several changes in one file
+* `m8 last` > unwraps last non-ref entry to stdout.
+* Media workflows -> gen image -> see image -> show image (colored ascii rendering).
+  Maybe with a text-image format we find/make??? Custom markdown? ```palettemap...
+  Leveraging unicode colors as a LUT??? Needs to be reasonably
+  cross-common-font compatible so constraining to some common standardised ones
+  is crucial - if even possible. 2 char wide grid?
 
 ### Codecs
 
@@ -309,24 +315,19 @@ Review everything again on the mission statement in the README.md
   * roughly doubles reach into modern IFComp
 * Test against terminal tests.
 
-## Settled
-
-Off the list - check any you disagree with.
-
-* Remove edline - gone.
-* PositiveInt, Pascal-case types - pass-through with `,key:value` extras.
-* Validate types early - decided against; the provider finds mistakes.
-* Deterministic rendering - `std.json.ObjectMap` keeps insertion order.
-* Enforce required params - `converse.zig:250`.
-* Two toolbox modes, `BYTE_CAP` on pagey - definition variables.
-* Back-to-back toolbox variable lines - pagey carries them.
-* Binary search results - `scan` names binaries.
-* `m8 cat`, `m8 top` - exist.
-* Zork agent-as-user - nothing to build.
-* Tools responding with text - `speaks` defaults to text (🧾).
-  * Unless you meant something else.
-* Review's `m8 new` / `show` / `fork` - not real commands.
 
 ## TODO
 
-* Validate and document everything can be reasonably composed.
+* Validate and document common workflow can be reasonably composed with components.
+* Figure out componentised multi-agent management e.g: https://herdr.dev/
+
+
+
+## BITTY ISSUES
+
+```
+>>> m8 cat @pagey/=/NOFILEHERE
+▄ 🧠pagey/=/NOFILEHERE
+```
+
+* DONE: No blank lines between recipt, green circle, call sigils, just like we did across though_balloons.
