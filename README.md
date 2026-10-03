@@ -514,8 +514,11 @@ m8 top @tight-docs | m8 @mathy "Tidy the README."
 ```
 
 Piping is not required, and neither is a prompt when
-something was piped. With neither, there is nothing to
-say, and m8 says so.
+something was piped. With neither, a terminal collects
+lines until Ctrl-D, then shows the submitted 🙋 before
+waiting for the reply; Ctrl-D before anything was entered
+quietly cancels. An empty non-terminal input still has
+nothing to say, and m8 says so.
 
 A document is told from prose by its first line alone,
 so one that opens like a document and then goes wrong is
