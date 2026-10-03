@@ -30,26 +30,39 @@ const address = @import("address.zig");
 const harness = @import("harness.zig");
 const launch = @import("launch.zig");
 
-comptime {
-    _ = @import("m8/sigil.zig");
-    _ = @import("m8/markdown.zig");
-    _ = @import("m8/doc.zig");
-    _ = @import("m8/model.zig");
-    _ = @import("session.zig");
-    _ = @import("sandbox.zig");
-    _ = @import("toolbox.zig");
-    _ = @import("shield.zig");
-    _ = @import("provider.zig");
-    _ = @import("agent.zig");
-    _ = @import("ledger.zig");
-    _ = @import("assembly.zig");
-    _ = @import("codec.zig");
-    _ = @import("config.zig");
-    _ = @import("command.zig");
-    _ = @import("launch.zig");
-    _ = @import("address.zig");
-    _ = @import("prompt.zig");
-    _ = @import("zmachine/zmachine.zig");
+/// What `m8 --help` says. This belongs to the launcher rather than command
+/// help: it describes the process syntax that the launcher itself owns.
+fn overview(w: *std.Io.Writer) !void {
+    try w.writeAll(
+        \\m8 - the composable agentic shell harness
+        \\
+        \\  m8 @AGENT[:|-] [REQUEST_MESSAGE]
+        \\  m8 COMMAND [ARGS]
+        \\
+        \\@AGENT sends a REQUEST_MESSAGE or stdin 
+        \\
+        \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
+        \\on whichever chat was talked to last. A chat under an agent is a fork
+        \\of it, `:` asks without moving anything, and `-` starts a chat over.
+        \\
+        \\  m8 @mathy "Tell me about the Riemann Sphere."
+        \\  m8 @ "Tell me more."
+        \\  m8 @mathy/aside "A different thought."
+        \\
+        \\Every command reads stdin and writes stdout, so the same thing is a
+        \\pipeline too:
+        \\
+        \\  echo "And in one sentence?" | m8 cat @ | m8 send | m8 tag @
+        \\  m8 cat @mathy | m8 encode openai-completions >request.json
+        \\  m8 decode openai-completions local <request.json | m8 send
+        \\
+    );
+    try overviewCommands(w);
+}
+
+fn overviewCommands(w: *std.Io.Writer) !void {
+    try w.writeAll("\nCOMMANDS:\n");
+    for (command.tree) |n| try w.print("  {s: <10} {s}\n", .{ n.spec.name, n.spec.summary });
 }
 
 pub fn main(init: std.process.Init) !u8 {
@@ -117,66 +130,6 @@ pub fn main(init: std.process.Init) !u8 {
     // `launch.under` answers a command's leading `--help` in the single
     // binary; a split-out leaf answers the same option itself.
     return launched(io, arena, init, node, cmd_args, self, out, err);
-}
-
-/// What `m8 --help` says. This belongs to the launcher rather than command
-/// help: it describes the process syntax that the launcher itself owns.
-fn overview(w: *std.Io.Writer) !void {
-    try w.writeAll(
-        \\m8 — a composable shell harness
-        \\
-        \\  m8 [@ADDRESS[:|-] [WHATEVER YOU WANT TO SAY]]
-        \\  m8 COMMAND [ARGS]
-        \\
-        \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
-        \\on whichever chat was talked to last. A chat under an agent is a fork
-        \\of it, `:` asks without moving anything, and `-` starts a chat over.
-        \\
-        \\  m8 @mathy "Tell me about the Riemann Sphere."
-        \\  m8 @ "Tell me more."
-        \\  m8 @mathy/aside "A different thought."
-        \\
-        \\Every command reads stdin and writes stdout, so the same thing is a
-        \\pipeline too:
-        \\
-        \\  echo "And in one sentence?" | m8 cat @ | m8 send | m8 tag @
-        \\  m8 cat @mathy | m8 encode openai-completions >request.json
-        \\  m8 decode openai-completions local <request.json | m8 send
-        \\
-    );
-    try overviewCommands(w);
-    try overviewEnvironment(w);
-    try w.writeAll(
-        \\
-        \\m8 COMMAND --help says what one takes and what is under it.
-        \\m8 call NAME reaches m8's own filters and its inbuilt tools.
-        \\
-    );
-}
-
-fn overviewCommands(w: *std.Io.Writer) !void {
-    try w.writeAll("\ncommands:\n\n");
-    for (command.tree) |n| try w.print("  {s: <10} {s}\n", .{ n.spec.name, n.spec.summary });
-}
-
-/// Every variable m8 itself reads. A provider's own are on its page, since
-/// what they mean is that command's business rather than m8's.
-fn overviewEnvironment(w: *std.Io.Writer) !void {
-    try w.writeAll(
-        \\
-        \\environment:
-        \\
-        \\  XDG_CONFIG_HOME   where your own config is, as m8-st8 under it
-        \\  HOME              that, when XDG_CONFIG_HOME says nothing:
-        \\                    ~/.config/m8-st8
-        \\  PATH              where a provider or tool named as a bare word
-        \\                    is looked for, and where m8 finds itself
-        \\  TMPDIR            where a shielded tool's own directory is made;
-        \\                    /tmp when unset
-        \\  M8_PROVIDER_*     what a providers.json entry hands its command.
-        \\                    See m8 providers --help.
-        \\
-    );
 }
 
 /// Reach a command, whichever way this build reaches one. Each reads its own
