@@ -127,7 +127,7 @@ fn append(
     const first_line = lineNumber(old_bytes, if (had == null) 0 else from);
     const last_line = lineNumber(out.items, out.items.len -| 1);
     try line.print(ctx.arena, ", changing lines {d}-{d}", .{ first_line, last_line });
-    return finish(ctx, dry_run, line.items, old_bytes, out.items);
+    return finish(ctx, path, dry_run, line.items, old_bytes, out.items);
 }
 
 // ---------------------------------------------------------------- replacing
@@ -273,12 +273,13 @@ fn replace(
             return failure(ctx, "cannot write {s}", .{path});
     }
 
-    return receipt(ctx, pages, found, put.len == 0, bytes, out.items, dry_run);
+    return receipt(ctx, path, pages, found, put.len == 0, bytes, out.items, dry_run);
 }
 
 /// What happened, in pages, and how honestly it matched.
 fn receipt(
     ctx: Ctx,
+    path: []const u8,
     pages: []const read.Page,
     found: Found,
     removed: bool,
@@ -306,7 +307,7 @@ fn receipt(
     try line.print(ctx.arena, ", changing lines {d}-{d}", .{ changed.first, changed.last });
     if (found.how.len > 0) try line.print(ctx.arena, ". Matched {s}", .{found.how});
 
-    return finish(ctx, dry_run, line.items, old_text, new_text);
+    return finish(ctx, path, dry_run, line.items, old_text, new_text);
 }
 
 const DiffLine = struct {
@@ -329,15 +330,16 @@ fn lineNumber(text: []const u8, at: usize) usize {
 /// untouched.
 fn finish(
     ctx: Ctx,
+    path: []const u8,
     dry_run: bool,
     receipt_text: []const u8,
     old_text: []const u8,
     new_text: []const u8,
 ) !u8 {
     if (dry_run) try ctx.out.writeAll("Proposed changes would result in:\n");
-    try ctx.out.print("{s}\n", .{receipt_text});
     const diff = try makeDiff(ctx.arena, old_text, new_text);
     try ctx.out.writeAll(diff);
+    try ctx.out.print("[{s}: {s}.]\n", .{ path, receipt_text });
     try ctx.out.flush();
     return 0;
 }

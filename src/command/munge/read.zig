@@ -104,13 +104,13 @@ fn run(ctx: Ctx) !u8 {
         // Out of scope is answered in the shape of an answer, because a model
         // reads it the same way and the next call is what matters.
         .beyond => |s| {
-            try ctx.out.print("[Pages {d}-{d} of 1-{d}: out of scope.]\n", .{ s.from, s.to, pages.len });
+            try ctx.out.print("[{s}: Pages {d}-{d} of 1-{d}: out of scope.]\n", .{ path, s.from, s.to, pages.len });
             try ctx.out.flush();
             return 0;
         },
     };
 
-    return write(ctx, bytes, pages, want, cap, asked != null);
+    return write(ctx, path, bytes, pages, want, cap, asked != null);
 }
 
 // -------------------------------------------------------------------- pages
@@ -326,7 +326,7 @@ fn clamp(s: Span, len: usize) Span {
 // ------------------------------------------------------------------ writing
 
 /// The content, and then what a model needs to ask for the next of it.
-fn write(ctx: Ctx, bytes: []const u8, pages: []const Page, want: Span, cap: usize, asked: bool) !u8 {
+fn write(ctx: Ctx, path: []const u8, bytes: []const u8, pages: []const Page, want: Span, cap: usize, asked: bool) !u8 {
     // Whole pages go, or they do not. A page cut to fit would be a page whose
     // number no longer means what every other answer means by it.
     var to = want.from;
@@ -365,15 +365,15 @@ fn write(ctx: Ctx, bytes: []const u8, pages: []const Page, want: Span, cap: usiz
     const whole = !asked and !capped;
     if (!whole) {
         try endMarker(ctx, to + 1, pages.len);
-        try ctx.out.print("[Pages {d}-{d} of 1-{d}. Lines {d}-{d}.", .{
-            want.from + 1,    to + 1,         pages.len,
+        try ctx.out.print("[{s}: Pages {d}-{d} of 1-{d}. Lines {d}-{d}.", .{
+            path, want.from + 1, to + 1, pages.len,
             first.first_line, last.last_line,
         });
         if (first.opens_mid) try ctx.out.print(" Opens mid-line {d}.", .{first.first_line});
         if (last.ends_mid) try ctx.out.print(" Ends mid-line {d}.", .{last.last_line});
         if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
-        if (to + 1 < pages.len) try pageAdvice(ctx, want.from, to, pages.len);
         try ctx.out.writeAll("]\n");
+        if (to + 1 < pages.len) try pageAdvice(ctx, want.from, to, pages.len);
     }
 
     try ctx.out.flush();
@@ -397,7 +397,7 @@ fn endMarker(ctx: Ctx, last_page: usize, total: usize) !void {
 fn pageAdvice(ctx: Ctx, from: usize, to: usize, total: usize) !void {
     const width = to - from + 1;
     const right = @min(total, to + width);
-    try ctx.out.print(" Use pages to continue or refocus, e.g. pages=\"{d}-{d}\", \"{d}-{d}\", or \"{d}-{d}\".", .{
+    try ctx.out.print("(Use pages to continue or refocus, e.g. pages=\"{d}-{d}\", \"{d}-{d}\", or \"{d}-{d}\".)\n", .{
         to,       right,
         from + 1, right,
         from + 2, @min(total, to + 2),
@@ -444,7 +444,7 @@ fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig, asked: ?[]co
         .span => |s| s,
         .whole => Span{ .from = 0, .to = count - 1 },
         .beyond => |s| {
-            try ctx.out.print("[Pages {d}-{d} of 1-{d}: out of scope.]\n", .{ s.from, s.to, count });
+            try ctx.out.print("[{s}: Pages {d}-{d} of 1-{d}: out of scope.]\n", .{ path, s.from, s.to, count });
             try ctx.out.flush();
             return 0;
         },
@@ -484,12 +484,14 @@ fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig, asked: ?[]co
 
     // A directory is a paginated document even when it has no entries.
     try endMarker(ctx, last_page + 1, count);
-    try ctx.out.print("[Pages {d}-{d} of 1-{d}.", .{ span.from + 1, last_page + 1, count });
+    try ctx.out.print("[{s}: Pages {d}-{d} of 1-{d}.", .{ path, span.from + 1, last_page + 1, count });
     if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
+    try ctx.out.writeAll("]\n");
     if (last_page + 1 < count) {
         try pageAdvice(ctx, span.from, last_page, count);
-    } else if (rows.items.len == 0) try ctx.out.writeAll(" Empty directory.");
-    try ctx.out.writeAll("]\n");
+    } else if (rows.items.len == 0) {
+        try ctx.out.writeAll("(Empty directory.)\n");
+    }
     try ctx.out.flush();
     return 0;
 }

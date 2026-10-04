@@ -61,6 +61,7 @@ Review everything again on the mission statement in the README.md
   * `+` refs always change.
   * Does changing an agent change histories naming it?
 * Can a tool parameter value take a template?
+* Show :raising_hand: on stdin/arg request?
 
 ## Mobs, Agents and Subagents
 
