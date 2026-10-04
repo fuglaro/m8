@@ -152,7 +152,7 @@ Current system:
 
 ## Build and Size
 
-* ReleaseSmall: 1.04 MB (2026-09-27).
+* ReleaseSmall: 569 KB (2026-10-04).
 * Tighten or collapse without losing anything meaningful?
 * Comptime groups: framework, defaults, fun.
   * Size of framework alone?

@@ -46,7 +46,7 @@ const common =
     "line has to break somewhere sensible.\n" ++
     "nums -3 -1 32767 -32768\n" ++
     "obj brass lamp in cave cap 7\n" ++
-    "rand 976 814\n";
+    "rand 18 264\n";
 
 fn playAll(arena: std.mem.Allocator, bytes: []const u8, inputs: []const []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;

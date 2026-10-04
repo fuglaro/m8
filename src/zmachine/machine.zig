@@ -123,11 +123,7 @@ pub const Rng = struct {
         @memcpy(input[0..8], &r.seed);
         std.mem.writeInt(u64, input[8..16], r.reseeds, .little);
 
-        var out: [8]u8 = undefined;
-        var h = std.crypto.hash.Blake3.init(.{});
-        h.update(&input);
-        h.final(&out);
-        r.state = std.mem.readInt(u64, &out, .little);
+        r.state = std.hash.Wyhash.hash(0, &input);
     }
 
     /// `random -n`: the game asked for a specific seed, and is entitled to

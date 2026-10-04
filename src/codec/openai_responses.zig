@@ -443,7 +443,15 @@ fn event(built: *Building, v: std.json.Value) !bool {
         // A refusal, an overload or a bad request arrives here with a 200, so
         // this is the only thing that would notice it. Saying nothing would
         // record a turn in which the model simply said nothing.
-        return Error.ApiSaidError;
+        if (built.kind != .none) try built.stop();
+        // A failed response carries its error inside; a bare `error` event
+        // is one.
+        const e = if (v.object.get("response")) |resp|
+            (if (resp == .object) resp.object.get("error") else null)
+        else
+            v;
+        try api.failed(built.arena, built.sink, e);
+        return true;
     }
     return false;
 }
@@ -457,7 +465,10 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body.items, .{}) catch
         return error.MalformedResponse;
     if (v != .object) return error.MalformedResponse;
-    if (v.object.get("error")) |e| if (e != .null) return Error.ApiSaidError;
+    if (v.object.get("error")) |e| if (e != .null) {
+        try api.failed(arena, sink, e);
+        return .{};
+    };
 
     var built: Building = .{ .arena = arena, .sink = sink };
     if (str(v.object.get("status"))) |status| if (std.mem.eql(u8, status, "incomplete")) {
@@ -473,8 +484,6 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     }
     return built.finish();
 }
-
-pub const Error = error{ApiSaidError};
 
 /// Why a response is incomplete, in this api's words. Completing says nothing
 /// here at all: only an incomplete response carries a reason.
@@ -1105,7 +1114,7 @@ test "a whole reply reads the same as a streamed one" {
     , reply.calls[0].arguments);
 }
 
-test "an error arriving with a 200 is still an error" {
+test "an error is what the api said, and the reply says so" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -1117,7 +1126,11 @@ test "an error arriving with a 200 is still an error" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    try testing.expectError(Error.ApiSaidError, parse(arena, &r, collect.sink()));
+    _ = try parse(arena, &r, collect.sink());
+    const said = collect.got.records.items;
+    try testing.expectEqual(@as(usize, 1), said.len);
+    try testing.expectEqualStrings("(oops - failed with server_error)", said[0].value);
+    try testing.expect(said[0].content == null);
 }
 
 test "a request decodes to a ledger and encodes back to the same request" {

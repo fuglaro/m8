@@ -295,6 +295,11 @@ fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8
             const payload = std.mem.trim(u8, line["data:".len..], " ");
             if (std.mem.eql(u8, payload, "[DONE]")) break;
             if (std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{})) |v| {
+                if (errorOf(v)) |e| {
+                    try built.stop();
+                    try api.failed(arena, sink, e);
+                    return built.reply(try finish(arena, building.items), "");
+                }
                 // Reasoning before content: a server that puts both in one
                 // delta means the thinking came first.
                 if (extractReasoning(v)) |fragment| try built.to(.thought, fragment);
@@ -325,6 +330,10 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body.items, .{}) catch
         return error.MalformedResponse;
 
+    if (errorOf(v)) |e| {
+        try api.failed(arena, sink, e);
+        return .{};
+    }
     const message = messageOf(v) orelse return .{};
     var built: Run = .{ .arena = arena, .sink = sink };
     for ([_][]const u8{ "reasoning_content", "reasoning" }) |name| {
@@ -348,6 +357,14 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
         for (list.array.items) |item| try gatherOne(arena, &building, item);
     };
     return built.reply(try finish(arena, building.items), refusedOr(refused, finishOf(v) orelse ""));
+}
+
+/// What an answer holds in place of choices when the api refused the request
+/// itself — a bad key, an unknown model, an overload.
+fn errorOf(v: std.json.Value) ?std.json.Value {
+    if (v != .object) return null;
+    const e = v.object.get("error") orelse return null;
+    return if (e == .null) null else e;
 }
 
 /// A refusal is words the model said, so they are its 🤖; this api still
@@ -885,6 +902,22 @@ test "a call is gathered whichever shape it came in" {
             \\{"text":"hi"}
         , reply.calls[0].arguments);
     }
+}
+
+test "an error is what the api said, and the reply says so" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var r: std.Io.Reader = .fixed(
+        \\{"error":{"message":"Incorrect API key provided.","type":"invalid_request_error","code":"invalid_api_key"}}
+    );
+    var collect: Collect = .{ .arena = arena };
+    _ = try parse(arena, &r, collect.sink());
+    const said = collect.got.records.items;
+    try testing.expectEqual(@as(usize, 1), said.len);
+    try testing.expectEqualStrings("(Incorrect API key provided. - failed with invalid_request_error)", said[0].value);
+    try testing.expect(said[0].content == null);
 }
 
 test "a reply cut off says so last, in this api's own word" {

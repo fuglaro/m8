@@ -44,9 +44,18 @@ pub const Story = story.Story;
 /// interpreter. Saying which one produced a transcript is what makes the
 /// difference detectable rather than mysterious. The hash is over the source
 /// rather than a number somebody remembers to bump, because somebody does not.
+///
+/// It is worked out while compiling, so the binary carries twelve characters
+/// rather than the sources they were made from. A checksum, not an identity:
+/// it says two interpreters differ, which is all a replay needs to be told.
 pub fn semantic(out: *[12]u8) void {
-    var h = std.crypto.hash.sha2.Sha256.init(.{});
-    inline for (.{
+    out.* = comptime stamp();
+}
+
+fn stamp() [12]u8 {
+    @setEvalBranchQuota(100_000_000);
+    var h = std.hash.Wyhash.init(0);
+    for (.{
         @embedFile("story.zig"),
         @embedFile("text.zig"),
         @embedFile("object.zig"),
@@ -57,9 +66,9 @@ pub fn semantic(out: *[12]u8) void {
         @embedFile("zmachine.zig"),
     }) |source| h.update(source);
 
-    var digest: [32]u8 = undefined;
-    h.final(&digest);
-    _ = std.fmt.bufPrint(out, "{x}", .{digest[0..6]}) catch {};
+    var out: [12]u8 = undefined;
+    _ = std.fmt.bufPrint(&out, "{x:0>12}", .{h.final() >> 16}) catch unreachable;
+    return out;
 }
 
 /// What is running, and the whole of what a stored ledger needs in order to be
@@ -78,36 +87,31 @@ pub const Provenance = struct {
     version: u8,
     release: u16,
     serial: []const u8,
-    sha256: [64]u8,
+    /// A checksum of the file, enough to say a replay met a different one.
+    checksum: [16]u8,
     semantic: [12]u8,
 
     pub fn of(name: []const u8, bytes: []const u8, s: *const Story) Provenance {
-        var digest: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
-
         var p: Provenance = .{
             .name = name,
             .version = s.version,
             .release = s.release(),
             .serial = s.serial(),
-            .sha256 = undefined,
+            .checksum = undefined,
             .semantic = undefined,
         };
-        _ = std.fmt.bufPrint(&p.sha256, "{x}", .{digest}) catch {};
+        _ = std.fmt.bufPrint(&p.checksum, "{x:0>16}", .{std.hash.Wyhash.hash(0, bytes)}) catch {};
         semantic(&p.semantic);
         return p;
     }
 
     pub fn write(p: Provenance, w: *std.Io.Writer) !void {
-        try w.print("Loading {s} (Release {d} / Serial {s} /\n", .{
+        try w.print("Loading {s} (Release {d} / Serial {s} / hash:{s})\n", .{
             p.name,
             p.release,
             p.serial,
+            p.checksum,
         });
-        // On its own line: seventy-two characters with its bracket, where
-        // everything else the machine prints wraps at eighty. A hash that
-        // overhangs is the one thing on the page that looks like a mistake.
-        try w.print("sha256:{s})\n", .{p.sha256});
         // No seed derivation here. The rule lives in this file and this file
         // is in the semantic hash, so it cannot change without the hash
         // changing — a second number saying so would only be a number
@@ -122,11 +126,9 @@ pub const Provenance = struct {
 /// welcome message would otherwise silently change every world every stored
 /// ledger describes, and nobody would think to look there.
 pub fn seedFrom(message: []const u8) [8]u8 {
-    var digest: [32]u8 = undefined;
-    var h = std.crypto.hash.Blake3.init(.{});
-    h.update(message);
-    h.final(&digest);
-    return digest[0..8].*;
+    var seed: [8]u8 = undefined;
+    std.mem.writeInt(u64, &seed, std.hash.Wyhash.hash(0, message), .little);
+    return seed;
 }
 
 pub const Wants = enum { line, char, nothing };

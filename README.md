@@ -243,6 +243,9 @@ loop.
   Nothing vendored, nothing fetched at build time, no
   libcurl, no OpenSSL, nothing to CVE-track that is not
   the toolchain.
+* No TLS or http of its own either. Reaching a url is
+  handed to the `curl` already on the machine, which a
+  distribution keeps patched anyway.
 * No daemon, no database, no account, no telemetry, no
   bundled weights, and no network needed to build or
   test. `toy` answers locally, so the loop, tool
@@ -285,10 +288,10 @@ that is suddenly carrying a stack it has no business
 carrying — so the sizes in `zig-out/bin` are a reading
 of the architecture. Most commands sit within a few
 kilobytes of a hello-world against this std, and the
-ones that do not say why: TLS is in the command that
-posts to a url, the codecs are in the ones that speak to
-a model, and a nested agent turn is in the shield that
-asks one.
+ones that do not say why: the codecs are in the ones
+that speak to a model, and a nested agent turn is in the
+shield that asks one. The command that posts to a url is
+not among them, because the posting is curl's.
 
 Nothing about the command line changes between the two,
 and a distribution picks by what it is packaging rather
@@ -1074,6 +1077,8 @@ value and nothing under it.
   * `declined with` - a refusal
   * `declined by CATEGORY` - a refusal naming its policy
   * `paused at` - a paused server-side turn
+  * `MESSAGE - failed with` - an error from the api,
+    with what it said ahead of the words
   * `stopped at` - a stop sequence, or a term not yet known
 
 ### Kept Aside

@@ -4,6 +4,11 @@
 //! any other rather than the privileged path: it reads a request on stdin and
 //! writes the response on stdout, and everything it needs arrives in its
 //! environment.
+//!
+//! The reaching is curl's. TLS, certificates, proxies and http itself are
+//! what curl is for and what a distribution already keeps patched, so none of
+//! it is carried here: this turns an entry into a curl command line and gets
+//! out of the way.
 
 const std = @import("std");
 const api = @import("../api.zig");
@@ -31,6 +36,10 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\response back as it arrives, in whatever size it arrives in — so a
         \\provider that streams reaches whatever is next in the pipe while the
         \\model is still saying it.
+        \\
+        \\The posting is done by `curl`, which has to be on PATH. Whatever the
+        \\api answers is passed on, an error as much as a reply; only a url
+        \\that could not be reached at all is a failure here.
         \\
         \\There is no path m8 appends. Which api lives where is a fact about a
         \\provider rather than about a format, so the whole endpoint is the url.
@@ -104,72 +113,52 @@ fn run(ctx: Ctx) !u8 {
         return 1;
     };
 
-    var in_buf: [64 * 1024]u8 = undefined;
-    var in = std.Io.File.stdin().readerStreaming(ctx.io, &in_buf);
-    const request = try in.interface.allocRemaining(ctx.arena, .unlimited);
+    var lines: std.ArrayList(u8) = .empty;
+    try headers(ctx, &lines);
 
-    var extra: std.ArrayList(std.http.Header) = .empty;
-    try headers(ctx, &extra);
+    var environ = try ctx.env.clone(ctx.arena);
+    try environ.put(headers_var, lines.items);
 
-    var client: std.http.Client = .{ .allocator = ctx.arena, .io = ctx.io };
-    defer client.deinit();
-
-    const uri = std.Uri.parse(endpoint) catch {
-        try ctx.err.print("m8 providers url: '{s}' is not a url\n", .{endpoint});
-        return 1;
-    };
-
-    var req = client.request(.POST, uri, .{
-        .headers = .{ .content_type = .{ .override = "application/json" } },
-        .extra_headers = extra.items,
+    // curl reads the request from the stdin it inherits and writes the answer
+    // to the stdout it inherits, so nothing passes through here on the way
+    // and a stream stays one: `-N` hands on what has arrived rather than
+    // what would round out a buffer.
+    //
+    // No `--fail`. A status that is not 200 still has a body, and the body is
+    // what the api said — the codec reads it as it reads any other answer.
+    // What is left to fail is the reaching itself, which curl says on stderr.
+    var child = std.process.spawn(ctx.io, .{
+        .argv = &.{ "sh", "-c", script, "m8 providers url", endpoint },
+        .environ_map = &environ,
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
     }) catch |e| {
         try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
         return 1;
     };
-    defer req.deinit();
-
-    req.transfer_encoding = .{ .content_length = request.len };
-    req.sendBodyComplete(@constCast(request)) catch |e| {
-        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
-        return 1;
+    return switch (child.wait(ctx.io) catch return 1) {
+        .exited => |code| code,
+        else => 1,
     };
-
-    var redirect_buf: [8192]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch |e| {
-        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
-        return 1;
-    };
-    if (response.head.status != .ok) {
-        try ctx.err.print("m8 providers url: {s} answered {d}\n", .{
-            endpoint,
-            @intFromEnum(response.head.status),
-        });
-        return 1;
-    }
-
-    // Passed through as whatever arrives, in whatever size it arrives in.
-    //
-    // `fill(1)` waits for a byte and no more, so what is handed on is what
-    // has actually turned up rather than what would round out a buffer.
-    // `readSliceShort` is only short at the end of a stream — it fills first
-    // — so using it here would hold a reply back until it was over, which is
-    // a stream that only looks like one.
-    var transfer_buf: [64 * 1024]u8 = undefined;
-    const r = response.reader(&transfer_buf);
-    while (true) {
-        r.fill(1) catch |e| switch (e) {
-            error.EndOfStream => break,
-            else => return e,
-        };
-        const chunk = r.buffered();
-        // Whoever was reading has stopped — `| head` and the like. That is
-        // their business, not a failure of ours.
-        ctx.out.writeAll(chunk) catch return 0;
-        ctx.out.flush() catch return 0;
-        r.toss(chunk.len);
-    }
-    return 0;
 }
+
+/// Where the header lines wait between here and curl.
+const headers_var = "M8_PROVIDER_URL_HEADERS";
+
+/// The curl command line.
+///
+/// Headers reach curl as a file on descriptor 3 rather than as arguments: an
+/// argument is in `ps` for every user on the machine, and one of these is a
+/// key.
+const script =
+    \\exec curl -sS -N -H 'content-type: application/json' -H @/dev/fd/3 --data-binary @- "$1" 3<<M8_END
+    \\$
+++ headers_var ++
+    \\
+    \\M8_END
+    \\
+;
 
 /// Where the key goes, and in what.
 ///
@@ -189,17 +178,14 @@ fn run(ctx: Ctx) !u8 {
 /// A command rather than a value, which is the whole reason a key was ever
 /// one: a config can commit safely and still reach a keychain. A constant is
 /// `echo` and costs a fork nobody will notice beside a model call.
-fn headers(ctx: Ctx, into: *std.ArrayList(std.http.Header)) !void {
+fn headers(ctx: Ctx, into: *std.ArrayList(u8)) !void {
     const prefix = provider.env_prefix ++ "HEADER_";
     var it = ctx.env.iterator();
     while (it.next()) |e| {
         const named = e.key_ptr.*;
         if (!std.mem.startsWith(u8, named, prefix)) continue;
         const value = (try ran(ctx, e.value_ptr.*)) orelse continue;
-        try into.append(ctx.arena, .{
-            .name = try headerName(ctx, named[prefix.len..]),
-            .value = value,
-        });
+        try into.print(ctx.arena, "{s}: {s}\n", .{ try headerName(ctx, named[prefix.len..]), value });
     }
 }
 

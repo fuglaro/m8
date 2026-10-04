@@ -212,6 +212,37 @@ pub fn stoppedAs(
     try sink.record(.bot, try std.fmt.allocPrint(arena, "({s} {s})", .{ how, reason }), "");
 }
 
+/// An api that answered with an error, said the way a reply that stopped
+/// short is: what it said, then the words, then its own term last.
+///
+/// The error is what came back, so it is the reply — shown where an answer
+/// would have been and kept in the ledger, rather than thrown past both. It
+/// has nothing under it, so no api is ever told it again.
+///
+/// `e` is the object holding the api's `message` beside its `type` or `code`.
+pub fn failed(arena: Allocator, sink: Sink, e: ?std.json.Value) !void {
+    var message: []const u8 = "";
+    var term: []const u8 = "error";
+    if (e) |v| if (v == .object) {
+        if (v.object.get("message")) |m| if (m == .string) {
+            message = m.string;
+        };
+        for ([_][]const u8{ "code", "type" }) |name| {
+            if (v.object.get(name)) |t| if (t == .string and t.string.len > 0) {
+                term = t.string;
+            };
+        }
+    };
+    if (message.len == 0) return stoppedAs(arena, sink, "failed with", term);
+
+    // A value is one line, so a message that was several is said as one.
+    const line = try arena.dupe(u8, message);
+    for (line) |*c| if (c.* == '\n' or c.* == '\r') {
+        c.* = ' ';
+    };
+    try stoppedAs(arena, sink, try std.fmt.allocPrint(arena, "{s} - failed with", .{line}), term);
+}
+
 /// The records an api can be told, which is all of them but a 🤖 with nothing
 /// under it. How a reply stopped is the ledger's to keep and no api takes it
 /// back, and an empty assistant turn is something several refuse outright.

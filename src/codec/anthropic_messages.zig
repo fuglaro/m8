@@ -544,7 +544,9 @@ fn event(built: *Building, v: std.json.Value) !bool {
         // An overload or a bad request arrives here with a 200, so this is
         // the only thing that would notice it. Saying nothing would record a
         // turn in which the model simply said nothing.
-        return Error.ApiSaidError;
+        if (built.kind != .none) try built.stop();
+        try api.failed(built.arena, built.sink, v.object.get("error"));
+        return true;
     }
     return false;
 }
@@ -558,8 +560,10 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body.items, .{}) catch
         return error.MalformedResponse;
     if (v != .object) return error.MalformedResponse;
-    if (v.object.get("type")) |t| if (t == .string and std.mem.eql(u8, t.string, "error"))
-        return Error.ApiSaidError;
+    if (v.object.get("type")) |t| if (t == .string and std.mem.eql(u8, t.string, "error")) {
+        try api.failed(arena, sink, v.object.get("error"));
+        return .{};
+    };
 
     var built: Building = .{ .arena = arena, .sink = sink };
     built.reason = str(v.object.get("stop_reason")) orelse "";
@@ -573,8 +577,6 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     }
     return built.finish();
 }
-
-pub const Error = error{ApiSaidError};
 
 /// How a message ended, in this api's words.
 const stops = api.Stops.initComptime(.{
@@ -1260,7 +1262,7 @@ test "a refusal names its policy, ahead of the reason's own word" {
     }
 }
 
-test "an error arriving with a 200 is still an error" {
+test "an error is what the api said, and the reply says so" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -1272,7 +1274,22 @@ test "an error arriving with a 200 is still an error" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    try testing.expectError(Error.ApiSaidError, parse(arena, &r, collect.sink()));
+    _ = try parse(arena, &r, collect.sink());
+    const said = collect.got.records.items;
+    try testing.expectEqual(@as(usize, 1), said.len);
+    try testing.expectEqualStrings("(Overloaded - failed with overloaded_error)", said[0].value);
+    try testing.expect(said[0].content == null);
+
+    // Whole, which is how a status that is not 200 arrives.
+    var whole_r: std.Io.Reader = .fixed(
+        \\{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}
+    );
+    var again: Collect = .{ .arena = arena };
+    _ = try parse(arena, &whole_r, again.sink());
+    try testing.expectEqualStrings(
+        "(invalid x-api-key - failed with authentication_error)",
+        again.got.records.items[0].value,
+    );
 }
 
 test "a request decodes to a ledger and encodes back to the same request" {
