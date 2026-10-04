@@ -40,6 +40,16 @@ Review everything again on the mission statement in the README.md
 * Squash remaining `{{CODE}}` and `{{M8}}` at framework level.
   * `shield.code_mark` and friends.
 
+Current system:
+| Spelling | Meaning | Implementation |
+ |---|---|---|
+ | `{{CODE}}` | fenced code inserted into a runner argv | `shield.zig:fill()` |
+ | `{{M8}}` | current m8 executable path inserted into wrappers | shield substitution |
+ | `{{__arg__}}` | tool call property exposed through the environment and optionally expanded by `m8 call` | toolbox + `argline.zig` |
+ | `____` | whole call JSON in the environment / call template | toolbox + `argline.zig` |
+ | `M8_CALL_ID` | call identity in the environment | converse/call path |
+
+
 ### MAYBE: Attachments
 
 * Why maybe - a new sigil against a closed set; could a reference do it?
@@ -318,6 +328,7 @@ Review everything again on the mission statement in the README.md
 
 ## TODO
 
+* Cody needs to be able to have sub-agents so it isn't a token burner.
 * Validate and document common workflow can be reasonably composed with components.
 * Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
 

@@ -21,7 +21,7 @@
 
 #### :toolbox:list
 > > List the contents of a directory.
-> `m8` `call` `m8` `munge` `read` `--` `{{path|}}`
+> `m8` `call` `m8` `munge` `read` `{{path|}}`
 > * path string
 >   Path of the directory to inspect (relative, absolute, or ~).
 >   Use "." for the project root.

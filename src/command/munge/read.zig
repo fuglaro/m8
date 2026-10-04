@@ -366,7 +366,7 @@ fn write(ctx: Ctx, path: []const u8, bytes: []const u8, pages: []const Page, wan
     if (!whole) {
         try endMarker(ctx, to + 1, pages.len);
         try ctx.out.print("[{s}: Pages {d}-{d} of 1-{d}. Lines {d}-{d}.", .{
-            path, want.from + 1, to + 1, pages.len,
+            path,             want.from + 1,  to + 1, pages.len,
             first.first_line, last.last_line,
         });
         if (first.opens_mid) try ctx.out.print(" Opens mid-line {d}.", .{first.first_line});

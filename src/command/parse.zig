@@ -114,7 +114,7 @@ const Live = struct {
         const self: *Live = @ptrCast(@alignCast(ctx));
         // Kept aside is kept out of sight on a terminal. A pipe carries all
         // of it, because whatever is next may be keeping the turn.
-        if (self.mode == .m8 and self.pending == .thought and std.mem.startsWith(u8, self.value, "@")) return;
+        if (self.mode == .m8 and self.pending == .thought and std.mem.eql(u8, self.value, "snip")) return;
         if (self.body == null) {
             if (self.opened) try self.out.writeByte('\n');
             self.body = try doc.ContentWriter.begin(

@@ -34,10 +34,8 @@ const toolbox = @import("toolbox.zig");
 
 pub const Error = error{UnknownCodec};
 
-/// The value a 💭 carries to ask that what it holds be kept aside. Which
-/// thoughts ask is a codec's opinion — a signature, say, that only exists to be
-/// handed back — and naming and keeping them is the ledger's.
-pub const asideFor = @import("session.zig").asideFor;
+/// The transient value a provider gives a 💭 whose content should be kept aside.
+pub const snip = @import("session.zig").snip;
 
 /// How a request is read when decoding. m8 never writes a key twice, but a
 /// request from elsewhere may, and the last one is how most JSON reads it.

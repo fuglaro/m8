@@ -561,7 +561,7 @@ const LiveReply = struct {
         if (bytes.len == 0) return;
         // Kept aside is kept out of sight: a terminal shows the header alone,
         // and the turn still holds all of it.
-        if (self.mode == .m8 and self.pending == .thought and std.mem.startsWith(u8, self.value, "@")) return;
+        if (self.mode == .m8 and self.pending == .thought and std.mem.eql(u8, self.value, session.snip)) return;
         if (self.body == null) {
             const s = self.pending orelse .bot;
             try self.shown.begin(self.out, s);

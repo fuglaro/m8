@@ -344,7 +344,7 @@ fn signature(
     // The spelling every file is written in; a reader is handed whichever one
     // they are being written.
     const kept = try std.fmt.allocPrint(arena, "{s}{s},{s}", .{ sigil.Sigil.signature.text(.md), id, enc });
-    const value = try api.asideFor(arena, kept);
+    const value = api.snip;
     if (sink) |s| try s.record(.thought, value, kept);
     try out.append(arena, .{ .sigil = .thought, .value = value, .content = kept });
 }
@@ -1028,7 +1028,7 @@ test "a streamed reply reads as the items it was made of" {
     // The id and the encrypted content follow the thought they sign, in a 💭
     // asking to be kept aside: this api wants both back before it will
     // believe it, and nobody needs to read them.
-    try testing.expect(std.mem.startsWith(u8, reply.records[1].value, "@snip-"));
+    try testing.expectEqualStrings(api.snip, reply.records[1].value);
     try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", reply.records[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, reply.records[2].sigil);
     try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
@@ -1083,7 +1083,7 @@ test "each summary part is a 💭, and they go back as one item" {
         try testing.expectEqual(@as(usize, 3), reply.records.len);
         try testing.expectEqualStrings("**Verifying**", reply.records[0].content.?);
         try testing.expectEqualStrings("**Refining**", reply.records[1].content.?);
-        try testing.expect(std.mem.startsWith(u8, reply.records[2].value, "@snip-"));
+        try testing.expectEqualStrings(api.snip, reply.records[2].value);
 
         // Encoded, the parts are one item's summary again, signed once.
         const request = try encode(arena, reply.records, .{ .model = "gpt-5.5" });

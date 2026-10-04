@@ -528,16 +528,16 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try session.write(arena, f.io, &dirs, turn, &.{
         .{ .sigil = .agent, .value = "mathy" },
         .{ .sigil = .thought, .content = "weighing it" },
-        .{ .sigil = .thought, .value = "@", .content = ":lock_with_ink_pen:SIG" },
+        .{ .sigil = .thought, .value = "snip", .content = ":lock_with_ink_pen:SIG" },
         .{ .sigil = .bot, .content = "Hi." },
     });
 
     // The turn names the snip and holds none of it.
     const saved = (try config.read(arena, f.io, &dirs, try config.nameFile(arena, turn))).?;
     try testing.expect(std.mem.indexOf(u8, saved, "SIG") == null);
-    try testing.expect(std.mem.indexOf(u8, saved, "#### :thought_balloon:@" ++ session.snip_prefix) != null);
+    try testing.expect(std.mem.indexOf(u8, saved, "#### :thought_balloon:mathy/+/" ++ session.snip_prefix) != null);
     // Named from what it holds, and beside the turn that names it.
-    const snip = try std.fmt.allocPrint(arena, "mathy/+/{s}", .{(try session.asideFor(arena, ":lock_with_ink_pen:SIG"))[1..]});
+    const snip = try std.fmt.allocPrint(arena, "mathy/+/{s}", .{try session.snipFor(arena, ":lock_with_ink_pen:SIG")});
     try testing.expect((try config.read(arena, f.io, &dirs, try config.nameFile(arena, snip))) != null);
 
     // Read back, everything is where it was.
@@ -548,7 +548,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try testing.expect(session.snipOf(l.records[2]) != null);
 
     // A snip that is gone is said, not quietly left out.
-    try f.agent(arena, "mathy/+/lost.md", "#### :brain:mathy\n\n#### :thought_balloon:@snip-nowherenea\n");
+    try f.agent(arena, "mathy/+/lost.md", "#### :brain:mathy\n\n#### :thought_balloon:mathy/+/snip-nowherenea\n");
     try testing.expectError(Error.MissingSnip, expand(arena, f.io, &dirs, "mathy/+/lost"));
 }
 

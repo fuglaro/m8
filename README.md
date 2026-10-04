@@ -1078,26 +1078,23 @@ value and nothing under it.
 
 ### Kept Aside
 
-A 💭 whose value is `@` asks for what it holds to be kept
-out of the way.
+A 💭 whose value is `snip` asks for what it holds to be kept
+out of the way. Providers use this transient value; saving the turn
+replaces it with the path of the snip.
 
 ```m8
-▄ 💭
+▄ 💭snip
 │ weighing it
 
-▄ 💭@snip-oniwhbxumk
+▄ 💭mathy/+/snip-oniwhbxumk
 ```
 
 * Which thoughts ask is the codec's decision.
-  * A signature is the case today - it exists only to be
-    handed back, so it follows its thought as a `💭@`.
+  * A signature is the case today - it exists only to be handed back.
 * The name is ten letters of a hash of what it holds.
-  * Known the moment it exists, so the screen, the file and
-    the saved turn all say the same thing.
-  * `snip-` and a turn's ten letters never collide.
-* With content, it is not saved yet; without, it is in the
-  snip.
   * Saving a turn writes the snip beside it, in its `+/`.
+  * `snip-` and a turn's ten letters never collide.
+* The saved turn carries the path; the snip carries the content.
   * Reading a ledger puts it back, so a codec gets exactly
     what it wrote.
 * A terminal shows the header alone; a pipe carries all of

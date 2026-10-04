@@ -449,7 +449,7 @@ fn thinking(
     // The spelling every file is written in; a reader is handed whichever one
     // they are being written.
     const kept = try std.fmt.allocPrint(arena, "{s}{s}", .{ sigil.Sigil.signature.text(.md), signature });
-    const value = try api.asideFor(arena, kept);
+    const value = api.snip;
     if (sink) |s| try s.record(.thought, value, kept);
     try out.append(arena, .{ .sigil = .thought, .value = value, .content = kept });
 }
@@ -1134,7 +1134,7 @@ test "a streamed reply reads as the blocks it was made of" {
     // The signature follows the thought it signs, in a 💭 asking to be kept
     // aside, so the reply can be sent back and believed without being read.
     try testing.expectEqual(sigil.Sigil.thought, reply.records[1].sigil);
-    try testing.expect(std.mem.startsWith(u8, reply.records[1].value, "@snip-"));
+    try testing.expectEqualStrings(api.snip, reply.records[1].value);
     try testing.expectEqualStrings(":lock_with_ink_pen:abc123", reply.records[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, reply.records[2].sigil);
     try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
@@ -1310,7 +1310,7 @@ test "a request decodes to a ledger and encodes back to the same request" {
     try testing.expectEqual(sigil.Sigil.user, records[4].sigil);
     try testing.expectEqual(sigil.Sigil.thought, records[5].sigil);
     try testing.expectEqualStrings("hmm", records[5].content.?);
-    try testing.expect(std.mem.startsWith(u8, records[6].value, "@snip-"));
+    try testing.expectEqualStrings(api.snip, records[6].value);
     try testing.expectEqualStrings(":lock_with_ink_pen:abc", records[6].content.?);
     try testing.expectEqual(sigil.Sigil.call, records[7].sigil);
     // is_error survives the round trip, which is this api's own; chat

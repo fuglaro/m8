@@ -117,7 +117,7 @@ pub const Sigil = enum {
     ///
     /// A 🤖's value is how a reply stopped short, when it did — a remark
     /// between the provider and whoever reads the ledger, which m8 carries
-    /// and never reads. A 💭's is `@`: what it holds is kept aside, in a snip,
+    /// and never reads. A 💭's is `snip`: what it holds is kept aside, in a snip,
     /// which is the codec's call and m8's to store.
     pub fn takesValue(s: Sigil) bool {
         return switch (s) {

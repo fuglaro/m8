@@ -9,7 +9,7 @@
 #### :thought_balloon:
 > **Detailing MCP security considerations and transport protocols**
 
-#### :thought_balloon:@snip-ezlenbnzxh
+#### :thought_balloon:pagey/+/snip-ezlenbnzxh
 
 #### :thought_balloon:
 > **Outlining MCP command lifecycle and mediation**
@@ -20,7 +20,7 @@
 #### :thought_balloon:
 > **Explaining MCP authorization and trust limits**
 
-#### :thought_balloon:@snip-oudjcnnlpg
+#### :thought_balloon:pagey/+/snip-oudjcnnlpg
 
 #### :robot:
 > MCP usually has three pieces:
