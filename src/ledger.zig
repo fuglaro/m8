@@ -536,8 +536,17 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     const saved = (try config.read(arena, f.io, &dirs, try config.nameFile(arena, turn))).?;
     try testing.expect(std.mem.indexOf(u8, saved, "SIG") == null);
     try testing.expect(std.mem.indexOf(u8, saved, "#### :thought_balloon:mathy/+/" ++ session.snip_prefix) != null);
-    // Named from what it holds, and beside the turn that names it.
-    const snip = try std.fmt.allocPrint(arena, "mathy/+/{s}", .{try session.snipFor(arena, ":lock_with_ink_pen:SIG")});
+    // Named before its content, and beside the turn that names it.
+    var saved_diag: doc.Diagnostic = .{};
+    const saved_records = try doc.parse(arena, saved, &saved_diag);
+    var snip: []const u8 = "";
+    for (saved_records) |r| {
+        if (session.snipOf(r)) |name| {
+            snip = try std.fmt.allocPrint(arena, "mathy/+/{s}", .{name});
+            break;
+        }
+    }
+    try testing.expect(snip.len > 0);
     try testing.expect((try config.read(arena, f.io, &dirs, try config.nameFile(arena, snip))) != null);
 
     // Read back, everything is where it was.

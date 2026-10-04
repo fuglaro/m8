@@ -126,6 +126,14 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
 
     // Lineage names what it continues, never a pointer to it: pointers move.
     const settled = try session.settleAll(arena, io, dirs, given);
+    var parent: []const u8 = "";
+    for (settled) |r| {
+        if (r.sigil == .agent) {
+            parent = r.value;
+            break;
+        }
+    }
+    const snip_folder = try session.besideParent(arena, parent);
 
     // Everything this run adds, in the order it happened.
     var turn: std.ArrayList(doc.Record) = .empty;
@@ -160,6 +168,9 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
     // already gates every call for anyone who wants that.
     while (true) {
         var reply: LiveReply = .{
+            .arena = arena,
+            .io = io,
+            .snip_folder = snip_folder,
             .out = out,
             .mode = mode,
             .live = live,
@@ -191,7 +202,13 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
         // replayable. A 📲 is skipped here and appended below instead: a call
         // and the answer to it belong together in the ledger, and the loop
         // that runs the tool is what knows where that is.
-        for (answered.records) |r| {
+        var snip_at: usize = 0;
+        for (answered.records) |raw| {
+            var r = raw;
+            if (r.sigil == .thought and std.mem.eql(u8, r.value, session.snip)) {
+                r.value = reply.snip_names.items[snip_at];
+                snip_at += 1;
+            }
             if (r.sigil == .call) continue;
             try keep(arena, &records, r);
             try turn.append(arena, r);
@@ -532,6 +549,9 @@ fn show(
 /// Bridges the provider's byte stream into the document, flushing each
 /// fragment so the text appears as it is generated rather than at the end.
 const LiveReply = struct {
+    arena: Allocator,
+    io: std.Io,
+    snip_folder: []const u8 = "",
     out: *std.Io.Writer,
     mode: doc.Mode,
     live: bool,
@@ -541,6 +561,8 @@ const LiveReply = struct {
     body: ?doc.ContentWriter = null,
     pending: ?sigil.Sigil = null,
     value: []const u8 = "",
+    snipped: bool = false,
+    snip_names: std.ArrayList([]const u8) = .empty,
 
     fn sink(self: *LiveReply) codec.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
@@ -553,7 +575,15 @@ const LiveReply = struct {
     fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
         self.pending = s;
-        self.value = value;
+        self.snipped = s == .thought and std.mem.eql(u8, value, session.snip);
+        self.value = if (self.snipped) blk: {
+            const name = if (self.snip_folder.len > 0)
+                try session.snipPath(self.arena, self.io, self.snip_folder)
+            else
+                try session.newSnip(self.arena, self.io);
+            try self.snip_names.append(self.arena, name);
+            break :blk name;
+        } else value;
     }
 
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
@@ -561,7 +591,7 @@ const LiveReply = struct {
         if (bytes.len == 0) return;
         // Kept aside is kept out of sight: a terminal shows the header alone,
         // and the turn still holds all of it.
-        if (self.mode == .m8 and self.pending == .thought and std.mem.eql(u8, self.value, session.snip)) return;
+        if (self.mode == .m8 and self.snipped) return;
         if (self.body == null) {
             const s = self.pending orelse .bot;
             try self.shown.begin(self.out, s);
@@ -676,6 +706,8 @@ test "live reply separates changes of sigil" {
     var out: std.Io.Writer.Allocating = .init(arena);
     var shown: Shown = .{};
     var reply: LiveReply = .{
+        .arena = arena,
+        .io = undefined,
         .out = &out.writer,
         .mode = .md,
         .live = false,

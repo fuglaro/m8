@@ -1091,7 +1091,7 @@ replaces it with the path of the snip.
 
 * Which thoughts ask is the codec's decision.
   * A signature is the case today - it exists only to be handed back.
-* The name is ten letters of a hash of what it holds.
+* The name is `snip-` and ten random letters, allocated before it is written.
   * Saving a turn writes the snip beside it, in its `+/`.
   * `snip-` and a turn's ten letters never collide.
 * The saved turn carries the path; the snip carries the content.

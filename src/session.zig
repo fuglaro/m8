@@ -39,23 +39,19 @@ pub const snip = "snip";
 /// one never does, so the two can never be taken for each other.
 pub const snip_prefix = "snip-";
 
-/// The persisted name for `content`: `snip-` and ten letters of its hash.
-///
-/// Named from what it holds rather than by chance. The name is made when a
-/// turn is kept, and the same bytes are the same snip.
-pub fn snipFor(arena: Allocator, content: []const u8) ![]const u8 {
-    var h = std.hash.Wyhash.hash(0, content);
-    var id: [id_len]u8 = undefined;
-    for (&id) |*c| {
-        c.* = 'a' + @as(u8, @intCast(h % 26));
-        h /= 26;
-    }
-    return std.fmt.allocPrint(arena, "{s}{s}", .{ snip_prefix, &id });
+/// A fresh short reference for a snip, allocated before its content arrives.
+pub fn newSnip(arena: Allocator, io: std.Io) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}{s}", .{ snip_prefix, &newId(io) });
+}
+
+pub fn snipPath(arena: Allocator, io: std.Io, folder: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, try newSnip(arena, io) });
 }
 
 /// The snip a persisted 💭 names, or null for none.
 pub fn snipOf(r: doc.Record) ?[]const u8 {
     if (r.sigil != .thought) return null;
+    if (std.mem.startsWith(u8, r.value, snip_prefix)) return r.value;
     const at = std.mem.lastIndexOf(u8, r.value, "/+/") orelse return null;
     const name = r.value[at + 3 ..];
     return if (std.mem.startsWith(u8, name, snip_prefix)) name else null;
@@ -264,7 +260,7 @@ fn keepAside(
             continue;
         };
         const name = if (r.sigil == .thought and std.mem.eql(u8, r.value, snip))
-            try snipFor(arena, content)
+            try newSnip(arena, io)
         else
             snipOf(r) orelse {
                 try out.append(arena, r);
@@ -324,13 +320,13 @@ test "an id is lowercase letters only" {
     for (seen) |s| try std.testing.expect(s);
 }
 
-test "a snip is named from what it holds, never like a turn" {
+test "a snip is a fresh short reference" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    const arena = a.allocator();
-    const one = try snipFor(arena, ":lock_with_ink_pen:SIG");
-    try testing.expectEqualStrings(one, try snipFor(arena, ":lock_with_ink_pen:SIG"));
-    try testing.expect(!std.mem.eql(u8, one, try snipFor(arena, ":lock_with_ink_pen:SIH")));
+    const one = try newSnip(a.allocator(), threaded.io());
+    try testing.expect(std.mem.startsWith(u8, one, snip_prefix));
     try testing.expectEqual(snip_prefix.len + id_len, one.len);
     for (one[snip_prefix.len..]) |c| try testing.expect(c >= 'a' and c <= 'z');
 }
