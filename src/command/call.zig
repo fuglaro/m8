@@ -1,7 +1,6 @@
 //! `call` — run a command.
 //!
-//!     m8 call NAME [ARGS]      an m8 command
-//!     m8 call -- PROG [ARGS]   a program from the environment
+//!     m8 call PROG [ARGS]   run a program from the environment
 //!
 //! What a command may not do is not asked about here. A 🛡 is the process a
 //! command runs inside, so refusing, asking and confining are all arranged
@@ -11,95 +10,35 @@
 //! Output is m8: the child's stdout becomes a 🧾 receipt. A non-zero exit is a
 //! 🚫 naming the code, with the child's stderr after it when there was any —
 //! a failure with no reason in it tells a model only that something broke.
-//! `--raw` hands stdout straight through instead — which also hands
-//! over the descriptor, so a child under `--raw` can seek and truncate
-//! whatever the caller redirected to. Capturing is the default for that
-//! reason as much as for the format.
+//! Stdin remains whatever descriptor call was given. Stdout is captured only
+//! so it can be written as the m8 answer while the program is still speaking.
 
 const std = @import("std");
 const api = @import("api.zig");
-const launch = @import("../launch.zig");
 const doc = @import("../m8/doc.zig");
+const argline = @import("argline.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "call",
-    .summary = "run an m8 command, or a program",
+    .summary = "run a program and write its result as m8",
     // A spawned program owns stdin. Reading it here would take the bytes it
-    // is waiting for; an m8 command that wants the document gets it below.
+    // is waiting for.
     .takes = .nothing,
     .run = run,
     .help = page,
 };
 
-pub const Error = error{
-    UnknownCommand,
-    NothingToRun,
-    /// `ask` was in force and the answer was no, or there was nobody to ask.
-    Refused,
-};
+pub const Error = error{NothingToRun};
 
 fn run(ctx: Ctx) !u8 {
-    var rest: []const []const u8 = ctx.args;
-    var env_program = false;
-    var raw = false;
-
-    while (rest.len > 0) {
-        const word = rest[0];
-        if (std.mem.eql(u8, word, "--")) {
-            rest = rest[1..];
-            env_program = true;
-            break;
-        }
-        if (std.mem.eql(u8, word, "--raw")) {
-            raw = true;
-            rest = rest[1..];
-            continue;
-        }
-        break;
-    }
-
-    if (rest.len == 0) {
-        if (!env_program) return help(ctx);
-        try ctx.err.writeAll("m8 call: nothing after --\n");
-        return usage(ctx, Error.NothingToRun);
-    }
-
-    if (!env_program) {
-        // Where the commands are programs, reaching one is running it — and
-        // the flag, the document and the page all arrive the way they would
-        // have anyway, because a command out here answers for itself.
-        if (launch.split) {
-            const node = @import("../command.zig").callableNode(rest[0]) orelse {
-                try ctx.err.print("m8 call: no command named '{s}'\n", .{rest[0]});
-                return usage(ctx, Error.UnknownCommand);
-            };
-            return launch.under(ctx, .{ .spawn = node.program }, rest[1..], .inherited);
-        }
-
-        const inner = @import("../command.zig").findCallable(rest[0]) orelse {
-            try ctx.err.print("m8 call: no command named '{s}'\n", .{rest[0]});
-            return usage(ctx, Error.UnknownCommand);
-        };
-        var sub = ctx;
-        sub.args = rest[1..];
-        // The flag is m8's wherever it is written, and an inbuilt tool has no
-        // other way to be asked: it is never a command of its own.
-        if (api.wantsHelp(sub.args)) {
-            sub.args = sub.args[1..];
-            try @import("help.zig").write(sub, inner, ctx.out);
-            try ctx.out.flush();
-            return 0;
-        }
-        var in_buf: [64 * 1024]u8 = undefined;
-        // Whatever the inner command wants, it gets stdin: a tool is a filter
-        // in somebody else's pipeline, and there is no command line here to
-        // assemble a ledger from.
-        if (inner.takes != .nothing) sub.in = try api.readDocument(ctx.io, ctx.arena, &in_buf);
-        return inner.run(sub);
-    }
-
-    return execute(ctx, rest, if (raw) .raw else .framed);
+    if (ctx.args.len == 0) return help(ctx);
+    // Which call this answers is said in the environment, like everything
+    // else a call says. Typed at a shell there is none, and the answer names
+    // nothing.
+    var inner = ctx;
+    if (ctx.env.get("M8_CALL_ID")) |id| inner.call_id = id;
+    return execute(inner, ctx.args, .framed);
 }
 
 /// Run an already-built command line.
@@ -115,19 +54,15 @@ pub fn execute(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
 
 /// What becomes of what the command said.
 ///
-/// m8 owns this, and it is the whole of the difference between launching a
-/// tool and launching a shield. A wrapper is transparent because nothing here
-/// frames it; a tool becomes a 🧾 because this does. Neither has to say so in
-/// its own definition, and a runner says nothing about it at all.
+/// Framing is what `m8 call` is for, and a definition asks for it by naming
+/// `call`. A tool's own command is run without it: it answers in m8, by
+/// whatever means its definition chose, and is read rather than quoted.
 pub const Answer = enum {
-    /// Quoted into a 🧾, with a verdict under it. What a tool that speaks
-    /// text gets.
+    /// Quoted into a 🧾, with a verdict under it. What `m8 call` does.
     framed,
-    /// Passed through as it stands, for a 🧰 that declared it answers in m8.
-    /// The caller reads the records and settles the verdict.
+    /// Passed through exactly as it stands. The caller reads the records; it
+    /// neither needs nor receives framing from here.
     document,
-    /// Straight to whatever the caller was writing to, descriptor and all.
-    raw,
 };
 
 fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
@@ -139,17 +74,17 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
     for (ctx.extra_env) |v| try m.put(v.key, v.value);
     const environ = try ctx.arena.create(std.process.Environ.Map);
     environ.* = m;
-    const full = argv;
 
-    if (how == .raw) {
-        var child = try std.process.spawn(ctx.io, .{ .argv = full, .environ_map = environ });
-        return status(try child.wait(ctx.io));
+    const full = try argline.line(ctx.arena, environ, ctx.err, argv);
+    if (full.len == 0) {
+        try ctx.err.writeAll("m8 call: everything expanded away\n");
+        return Error.NothingToRun;
     }
 
     var child = try std.process.spawn(ctx.io, .{
         .argv = full,
         .environ_map = environ,
-        .stdin = .ignore,
+        .stdin = .inherit,
         .stdout = .pipe,
         .stderr = .pipe,
     });
@@ -191,6 +126,7 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
 
     const code = status(try child.wait(ctx.io));
     const wrote = try said.finish();
+    if (how == .document) return code;
 
     // The verdict, which is only knowable now. Everything the tool said is
     // already written and already gone.
@@ -334,12 +270,6 @@ fn status(term: std.process.Child.Term) u8 {
     };
 }
 
-fn usage(ctx: Ctx, e: Error) !u8 {
-    try page(ctx, ctx.err);
-    try ctx.err.flush();
-    return e;
-}
-
 fn help(ctx: Ctx) !u8 {
     // Naming nothing to run is somebody finding out what may be run, so it is
     // a page they asked for rather than a mistake.
@@ -351,31 +281,30 @@ fn help(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 call — run a command
+        \\m8 call — run a program
         \\
-        \\  m8 call NAME [ARGS]     an m8 command
-        \\  m8 call -- PROG [ARGS]  a program from the environment
+        \\  m8 call PROG [ARGS]
         \\
-        \\  --raw   hand stdout through instead of writing a receipt
+        \\The program's stdout becomes a 🧾 receipt, followed by 🟢 or 🚫 for
+        \\how it ended. Stdin remains the descriptor call itself was given.
         \\
-        \\What a command may not do is a 🛡 rather than a flag here. A shield
-        \\is the process a command runs inside, so it is arranged around this
+        \\A whole argument naming a call variable becomes whole argv elements:
+        \\
+        \\  {{M8_ARG_COMMAND}}       --command VALUE
+        \\  {{M8_ARG_COMMAND|-c}}    -c VALUE
+        \\  {{M8_ARG_COMMAND|}}      VALUE
+        \\  {{M8_ARG_DEEP?--deep}}   --deep, only when exactly true
+        \\  {{M8_ARGS}}              the whole call as JSON, one argument
+        \\
+        \\An unset variable leaves nothing behind. An empty one remains an empty
+        \\argument. A placeholder is a whole word, so its value cannot become
+        \\syntax in the command being run.
+        \\
+        \\What a program may not do is a 🛡 rather than a flag here. A shield
+        \\is the process a program runs inside, so it is arranged around this
         \\rather than asked about within it. See `m8 shield`.
         \\
-        \\
     );
-    // What `call` accepts, asked rather than restated, so this cannot come to
-    // advertise something it would refuse. Read off the tree, because saying
-    // what may be reached is not a reason to hold every command that may be.
-    const cmd = @import("../command.zig");
-    try w.writeAll("\ncommands:\n\n");
-    for (cmd.byPath(&.{"call"}).?.children) |n|
-        try w.print("  {s: <15} {s}\n", .{ n.spec.name, n.spec.summary });
-    for (cmd.tree) |n| {
-        if (cmd.callableNode(n.spec.name) == null) continue;
-        try w.print("  {s: <15} {s}\n", .{ n.spec.name, n.spec.summary });
-    }
-    try w.writeAll("\nm8 call NAME --help is that one's page.\n");
 }
 
 // ---------------------------------------------------------------- tests

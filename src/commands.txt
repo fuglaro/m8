@@ -17,9 +17,8 @@ ref
 save
 top
 call
-call args
-call ask
-call munge
+ask
+munge
 shield
 shield secure
 shield ask

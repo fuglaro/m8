@@ -557,10 +557,9 @@ fn failure(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 call munge scan — search files for a pattern, answered in pages
+        \\m8 munge scan — search files for a pattern, answered in pages
         \\
-        \\An inbuilt tool, so it is reached through `call` and never typed as a
-        \\command of its own. What the call said arrives as M8_ARG_*.
+        \\What a tool call said arrives as M8_ARG_*.
         \\
         \\  regex   a pattern, matched within one line at a time
         \\  glob    which files, with ** and * and ? and {a,b}

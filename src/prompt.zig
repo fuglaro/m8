@@ -4,7 +4,9 @@
 //!
 //! is what this does, and it is kept exactly that: the same assembly, the
 //! same run, the same tag. The one difference is that it is one process, so
-//! the reply is shown as it arrives rather than once there is a turn to keep.
+//! the reply is shown as it arrives and tagged as it goes — a turn for every
+//! model call and every tool call, each naming the one before — rather than
+//! once there is a whole run to keep.
 //!
 //! `@` is not a command, but it sits where one would. Its arguments are prose,
 //! so nothing after it has to be told from m8's own flags — which is what the
@@ -71,13 +73,38 @@ pub fn run(ctx: Ctx, args: []const []const u8) !u8 {
 
     var inner = ctx;
     inner.in = assembled.document;
-    const turn = try converse.run(inner, .{});
-    const kept = try address.tag(arena, io, dirs, a, turn);
+    var keeping: Keeping = .{ .arena = arena, .io = io, .dirs = dirs, .a = a };
+    const turn = try converse.run(inner, .{ .keep = keeping.keeper() });
+    // A run that added nothing was handed nothing to keep, and what was said
+    // to it is still a turn.
+    const kept = keeping.last orelse try address.tag(arena, io, dirs, a, turn);
 
     try ctx.out.writeByte('\n');
     try doc.write(ctx.out, ctx.mode, .{ .sigil = .agent, .value = kept });
     return 0;
 }
+
+/// Tags a run a piece at a time, so the address moves with every model call
+/// and every tool call rather than once at the end. Each piece is a turn
+/// naming the one before it, which is all a chat ever was.
+const Keeping = struct {
+    arena: std.mem.Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    a: address.Address,
+    last: ?[]const u8 = null,
+
+    fn keeper(self: *Keeping) converse.Keeper {
+        return .{ .ctx = self, .keep = keep };
+    }
+
+    fn keep(ctx: *anyopaque, piece: []const doc.Record) anyerror![]const u8 {
+        const self: *Keeping = @ptrCast(@alignCast(ctx));
+        const name = try address.tag(self.arena, self.io, self.dirs, self.a, piece);
+        self.last = name;
+        return name;
+    }
+};
 
 /// Acknowledge a terminal submission in the language already used for the
 /// reply. The terminal driver may echo VEOF as `^D` followed by two backspaces;

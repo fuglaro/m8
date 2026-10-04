@@ -80,8 +80,8 @@ Review everything again on the mission statement in the README.md
 * mate - `m8 +{mob}AGENT -- "prompt"`
   * a peer, continued
 * Long form:
-  * `m8 call minion -m MOB -a AGENT [--as CHAT] -- PROMPT`
-  * `m8 call mate -m MOB -c CHAT [--as CHAT] -- PROMPT`
+  * `m8 minion -m MOB -a AGENT [--as CHAT] -- PROMPT`
+  * `m8 mate -m MOB -c CHAT [--as CHAT] -- PROMPT`
 * Named chats makeable from the command line.
 * A chat spawner usable as a tool.
 
@@ -232,7 +232,6 @@ Review everything again on the mission statement in the README.md
   * Test with Blender. Test with web service.
 * MAYBE: Wrapper scripts in a config folder.
   * For commands a template cannot say.
-* Every inbuilt tool runnable under `m8 call args`.
 * MAYBE: Plugins - look in `m8-st8` folders first? Tool freezing?
   * README - "Features do not arrive here through a plugin api."
 * MAYBE: Native functions.
@@ -289,7 +288,7 @@ Review everything again on the mission statement in the README.md
   * Why maybe - README promises no daemon.
   * mob-scoped, through process handles
   * not tmux
-  * `m8 call watch`
+  * `m8 watch`
 * One polished end-to-end demo.
   * a file edit, a tool call, a fork, a provider response
   * ending in a readable transcript

@@ -268,7 +268,7 @@ optimisation.
 * `zig build` is the single binary. A launcher reaching
   a command calls it.
 * `zig build split` is a program per command — `m8-cat` and
-  `m8-call-munge` — plus a launcher. Munge's read, write and scan
+  `m8-munge` — plus a launcher. Munge's read, write and scan
   operations stay in that one tool rather than becoming programs of
   their own. Prompt mode is launcher syntax; commands are spawned.
 
@@ -440,8 +440,8 @@ m8 @mathy/+/tduyxbutjb "Tell me more."
   a parent to go back to.
 * It is a pipeline written once. `m8 @mathy hi` is
   `echo hi | m8 cat @mathy | m8 send | m8 tag @mathy`,
-  except that the reply is shown as it arrives. See
-  Composing.
+  except that the reply is shown as it arrives and
+  tagged as it goes. See Composing and Turns and chats.
 * What an address reads as is appended as the 🧠 it
   settles on — the turn a chat has got to, never the
   chat — so a saved turn names its parent instead of
@@ -472,7 +472,7 @@ has one too:
 m8 --help                  every command, and what m8 reads
 m8 send --help             one command
 m8 providers url --help    something under one
-m8 call munge --help       one tool and all its operations
+m8 munge --help            one tool and all its operations
 ```
 
 A leading `--help` is m8's rather than any command's, so no
@@ -700,14 +700,20 @@ arrived is the one that is read.
 ### Calling
 
 ```bash
-m8 call NAME [ARGS]     a m8 command
-m8 call -- PROG [ARGS]  a program from the environment
+m8 call PROG [ARGS]     a program from the environment
 ```
 
-`call` is what a 🧰 expands into. What a command may not
-do is not a flag here: a 🛡 is the process a command
-runs inside, so it is arranged around `call` rather
-than asked about within it.
+`call` runs a program and writes its answer as m8.
+
+* It is how an ordinary program becomes a tool: a 🧰
+  names it, or does the same job itself.
+* A whole word naming a call variable becomes whole
+  arguments. See Commands That Want Flags.
+* Stdin is whatever `call` was given, so a program can
+  read a pipe or reach the terminal.
+* What a command may not do is not a flag here: a 🛡 is
+  the process a command runs inside, so it is arranged
+  around `call` rather than asked about within it.
 
 ```bash
 m8 shield secure "private airgap" -- bash -c "ls"
@@ -715,8 +721,8 @@ m8 shield secure "private airgap" -- bash -c "ls"
 
 Output is m8: what the program writes becomes a 🧾
 receipt, written as it arrives rather than gathered
-up, and then 🟢 or 🚫 for how it ended. `--raw` hands
-stdout straight through instead.
+up, and then 🟢 or 🚫 for how it ended. Both name the
+call in `M8_CALL_ID`, when there is one.
 
 Because the receipt streams, a tool may write more
 than there is memory to hold and m8 will not hold it.
@@ -726,13 +732,11 @@ why — and marks it `...` when there was more.
 
 `m8 shield` is what a 🛡 expands into. See Shields.
 
-`call` also reaches m8's own filters and its inbuilt
-tools, which is what `m8 call ask` is: a tool that puts
-a question to the person and appends their answer to the
-document, so the next command in the pipe sees it. An
-inbuilt tool is never typed as a command of its own.
+`m8 ask` puts a question to the person and appends their
+answer to the document, so the next command in the pipe sees
+it.
 
-`munge` provides the file tools as `m8 call munge read`,
+`munge` provides the file tools as `m8 munge read`,
 `write` and `scan`. A page is about 100 lines, every answer
 says which pages it gave and how to ask for the next, and
 nothing is ever asserted against a page. Precision lives in
@@ -775,14 +779,17 @@ Agent definition:
 ▄ 🧰Tool Name
 │ │ Tool Description
 │ 🛡️Shield Name
-│ `m8` `call` `args` `cmd` `{{M8_ARG_PROPERTYNAME|--flag}}`
+│ `m8` `call` `cmd` `{{M8_ARG_PROPERTYNAME|--flag}}`
 │ * PropertyName string
 │   Property Description
 │ * Other? integer
 │   Optional, so ? on the name
 
-▄ 🧰Tool Name,m8
-│ │ Answers in m8 rather than text.
+▄ 🏃bash
+│ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
+
+▄ 🧰Tool Name
+│ │ A fenced block runs through the 🏃 it names.
 │ ```bash
 │ echo "$M8_ARG_PROPERTYNAME"
 │ ```
@@ -1175,7 +1182,20 @@ it was written as, one written as a fenced block is the
 script it was written as, and m8 hands either to its
 command unchanged.
 
+A tool's command answers in m8, and how is the
+definition's business.
+
+* `m8 call` turns an ordinary program's output into a 🧾
+  and a verdict.
+* A command that writes m8 itself is named directly.
+* m8 keeps no note of which is which. It reads what came
+  back, and an answer with no verdict for its call is a
+  🚫.
+
 ```m8
+▄ 🏃bash
+│ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
+
 ▄ 🧰search
 │ │ Look for something.
 │ ```bash
@@ -1205,12 +1225,12 @@ refused before a command is built at all.
 A shell reads its environment. `curl` and `git` do not,
 and turning variables back into flags for them is a
 command's own business rather than the framework's.
-`m8 call args` is the one m8 ships for it.
+`m8 call` is the one m8 ships for it.
 
 ```m8
 ▄ 🧰bash
 │ │ Run a bash command.
-│ `m8` `call` `args` `bash` `-euo` `pipefail` `{{M8_ARG_COMMAND|-c}}`
+│ `m8` `call` `bash` `-euo` `pipefail` `{{M8_ARG_COMMAND|-c}}`
 │ * command string
 │   The bash command to run.
 ```
@@ -1243,7 +1263,7 @@ blockless header, and a final bare header offers the tool:
 ```m8
 ▄ 🧰read
 │ │ Read a file or directory.
-│ `m8` `call` `munge` `read`
+│ `m8` `call` `m8` `munge` `read`
 │ * path string
 
 ▄ 🧰read PAGE_LINES 100
@@ -1273,12 +1293,12 @@ This keeps a definition readable when it has several defaults.
   one that failed.
 * Only a word opening `{{M8_ARG` is looked at, so the
   braces a templating language meant for itself survive
-  — `m8 call args awk '{{print $1}}' f` runs the awk
+  — `m8 call awk '{{print $1}}' f` runs the awk
   program it was handed.
 
 None of this is privileged. An argv is passed on as it
 was written, so a toolbox naming some other expander
-works the same way, and deleting `args` leaves the
+works the same way, and deleting `call` leaves the
 framework whole.
 
 ## Shields
@@ -1321,18 +1341,29 @@ them stack.
 
 ```m8
 ▄ 🏃bash
-│ `bash` `-c` `{{CODE}}` `bash`
+│ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
 
-▄ 🛡️secure
-│ ```bash
-│ exec {{M8}} shield secure "${M8_ARG_SECURES}" -- "$@"
+▄ 🏃bash raw
+│ `bash` `-e` `-c` `{{CODE}}` `bash`
+
+▄ 🛡️passthrough
+│ ```bash raw
+│ exec "$@"
 │ ```
 ```
 
 A 🏃 is what makes a block runnable: an argv with
-`{{CODE}}` in it. It must be defined before a block
-names it, so a document reads in one pass, and defining
-one twice is an error rather than a question.
+`{{CODE}}` in it.
+
+* It must be defined before a block names it, so a
+  document reads in one pass.
+* Defining one twice is an error rather than a question.
+* Its name is the whole of a fence's info string, so
+  ` ```bash raw ` names `bash raw` while a renderer still
+  highlights bash.
+* m8 ships none. What `bash` means is the agent's own:
+  above, a tool's block answers through `m8 call`, and a
+  shield's stays a transparent wrapper.
 
 Every wrapper is handed the command it wraps as
 arguments, and two spellings say "the m8 that is
@@ -1507,7 +1538,7 @@ One that builds its own:
 
 ▄ 🧰toolmaker
 │ │ Write a new tool and return its definition.
-│ `m8` `call` `args` `make-tool` `{{M8_ARG_SPEC|}}`
+│ `make-tool`
 │ * spec string
 │   What the tool should do
 
@@ -1516,7 +1547,8 @@ One that builds its own:
 
 No 🛡 at all, so `toolmaker` may hand back 🧰 records
 — a definition, and the blockless one that offers it —
-and they are honoured. The two live happily in one
+and they are honoured. `make-tool` writes m8 itself,
+verdict included, reading `M8_ARG_SPEC`. The two live happily in one
 config, and neither can become the other.
 
 ### Thinking it through
@@ -1631,6 +1663,18 @@ and they are git's objects and refs.
 ▄ 🤖
 │ Additionally, ...
 ```
+
+`m8 @` tags a run as it goes rather than once it is
+over, so a run is a chain of turns and the chat moves
+with each.
+
+* A model call is a turn: what it said, under the turn
+  it continues.
+* A tool call is a turn: the 📲 and its answer.
+* A run that dies keeps everything up to where it died,
+  and the chat reads as that.
+* A 📲 is kept with its answer and never ahead of it, so
+  nothing half run is owed to whoever carries on.
 
 A turn goes in the `+/` of the chat it advances. One
 that advances no chat — a side question, or a turn

@@ -61,7 +61,7 @@ pub const Command = union(enum) {
     none,
     /// Backtick spans on one line, one argv element each, handed on as
     /// they were written. A command wanting flags rather than variables
-    /// says so itself — `m8 call args` is the one m8 ships.
+    /// says so itself — `m8 call` is the one m8 ships.
     argv: []const []const u8,
     /// A fenced block, run through the 🏃 its language names. The script m8
     /// hands over is the script that was written.
@@ -70,14 +70,6 @@ pub const Command = union(enum) {
 
 pub const Tool = struct {
     name: []const u8,
-    /// What this tool answers in, from the second field of its value. Empty is
-    /// text, which becomes a 🧾. `m8` means it answers in the language, and
-    /// what it says is read as records rather than quoted inside one.
-    ///
-    /// Declared rather than sniffed, so a tool that innocently prints a line
-    /// looking like a header is never mistaken for one that speaks. A 🛡 can
-    /// still take away what it said; nothing can add to it.
-    speaks: []const u8 = "",
     description: []const u8 = "",
     /// How it runs. Two spellings, and neither is handed what the call
     /// said — that arrives in the environment either way, which is the one
@@ -157,18 +149,12 @@ fn property(arena: Allocator, rest: []const u8) !Property {
     return .{ .name = name, .type = kind, .required = !optional, .extras = extras.items };
 }
 
-/// Parse the content of a 🧰 whose value is `NAME` or `NAME,FORMAT`.
+/// Parse the content of a 🧰 whose value is `NAME` or `NAME VAR value...`.
 pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const u8) !Tool {
-    // `NAME`, `NAME,FORMAT`, and either of those followed by `VAR value...`.
-    // The comma binds first and says what it answers in; whatever spaces are
-    // left carry a variable and what to append to it, the shape a 🛡 has.
-    const at = std.mem.indexOfScalar(u8, header, ',');
-    var rest = std.mem.tokenizeAny(u8, if (at) |i| header[i + 1 ..] else header, " \t");
-    const name = if (at) |i|
-        std.mem.trim(u8, header[0..i], " \t")
-    else
-        rest.next() orelse "";
-    const speaks = if (at == null) "" else rest.next() orelse "";
+    // The spaces after the name carry a variable and what to append to it,
+    // the shape a 🛡 has.
+    var rest = std.mem.tokenizeAny(u8, header, " \t");
+    const name = rest.next() orelse "";
 
     const raw_env_var = rest.next() orelse "";
     const env_var = if (raw_env_var.len == 0)
@@ -244,7 +230,6 @@ pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const 
 
     return .{
         .name = name,
-        .speaks = speaks,
         .env_var = env_var,
         .env_values = env_values.items,
         .env_vars = if (env_var.len > 0) &.{.{ .key = env_var, .value = try std.mem.join(arena, " ", env_values.items) }} else &.{},
@@ -562,7 +547,6 @@ fn readExtras(arena: Allocator, v: std.json.Value, own: []const []const u8) Read
     return out.items;
 }
 
-
 fn str(v: ?std.json.Value) ?[]const u8 {
     const got = v orelse return null;
     return if (got == .string) got.string else null;
@@ -596,7 +580,7 @@ pub fn render(arena: Allocator, mode: Mode, t: Tool) ![]const u8 {
             }
             try w.writeByte('\n');
         },
-        .block => |b| try markdown.writeFence(w, "", b.lang, b.code),
+        .block => |b| try markdown.writeFence(w, "", b.runner, b.code),
     }
     for (t.properties) |p| {
         try w.print("* {s}{s} {s}", .{ p.name, if (p.required) "" else "?", p.type });
@@ -739,7 +723,7 @@ test "a toolbox reads its template, properties and description" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const t = try parse(a.allocator(), .md, "shell",
-        \\`m8` `call` `args` `bash` `{{M8_ARG_CMD|-c}}`
+        \\`m8` `call` `bash` `{{M8_ARG_CMD|-c}}`
         \\:shield:jail
         \\* cmd string
         \\  The command to run
@@ -750,7 +734,7 @@ test "a toolbox reads its template, properties and description" {
     );
     try testing.expectEqualStrings("shell", t.name);
     try testing.expectEqualStrings("m8", t.command.argv[0]);
-    try testing.expectEqualStrings("{{M8_ARG_CMD|-c}}", t.command.argv[4]);
+    try testing.expectEqualStrings("{{M8_ARG_CMD|-c}}", t.command.argv[3]);
     try testing.expectEqualStrings("Run a command.\nCarefully.", t.description);
     try testing.expectEqual(@as(usize, 1), t.shields.len);
     try testing.expectEqualStrings("jail", t.shields[0].name);
@@ -896,7 +880,7 @@ test "a tool survives being rendered and read back, in either spelling" {
     const arena = a.allocator();
 
     const src =
-        \\`m8` `call` `args` `bash` `{{M8_ARG_CMD|-c}}`
+        \\`m8` `call` `bash` `{{M8_ARG_CMD|-c}}`
         \\:shield:jail
         \\* cmd string
         \\  What to run.
@@ -989,8 +973,7 @@ test "two properties that would be one variable are refused where they are writt
     defer a.deinit();
     const arena = a.allocator();
 
-    try testing.expectError(Error.ClashingProperty, parse(arena, .md, "t",
-        "* myArg string\n* MYARG string\n"));
+    try testing.expectError(Error.ClashingProperty, parse(arena, .md, "t", "* myArg string\n* MYARG string\n"));
 
     // Different variables, so nothing to refuse.
     _ = try parse(arena, .md, "t", "* myArg string\n* my_arg string\n");
@@ -1029,43 +1012,16 @@ test "a call is handed its arguments named, and all of them as JSON" {
     try testing.expect(find(env, "M8_ARG_SKIPPED") == null);
 }
 
-test "a 🧰 says what it answers in, and says nothing by saying nothing" {
+test "a 🧰 may add a variable of its own, after its name" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
 
-    const quiet = try parse(arena, .md, "make", "`sh`");
-    try testing.expectEqualStrings("make", quiet.name);
-    try testing.expectEqualStrings("", quiet.speaks);
-
-    const speaks = try parse(arena, .md, "make,m8", "`sh`");
-    try testing.expectEqualStrings("make", speaks.name);
-    try testing.expectEqualStrings("m8", speaks.speaks);
-
-    // Spaces around the field are the writer's, not the value's.
-    const spaced = try parse(arena, .md, "make , m8 ", "`sh`");
-    try testing.expectEqualStrings("make", spaced.name);
-    try testing.expectEqualStrings("m8", spaced.speaks);
-}
-
-test "a 🧰 may add a variable of its own, after whatever it answers in" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-
-    const both = try parse(arena, .md, "make,m8 SECURES airgap no-writes", "`sh`");
+    const both = try parse(arena, .md, "make SECURES airgap no-writes", "`sh`");
     try testing.expectEqualStrings("make", both.name);
-    try testing.expectEqualStrings("m8", both.speaks);
     try testing.expectEqualStrings("M8_ARG_SECURES", both.env_var);
     try testing.expectEqual(@as(usize, 2), both.env_values.len);
     try testing.expectEqualStrings("no-writes", both.env_values[1]);
-
-    // Without the comma there is nothing it answers in, and the spaces still
-    // carry a variable.
-    const plain = try parse(arena, .md, "make LEVEL loud", "`sh`");
-    try testing.expectEqualStrings("make", plain.name);
-    try testing.expectEqualStrings("", plain.speaks);
-    try testing.expectEqualStrings("M8_ARG_LEVEL", plain.env_var);
 
     const bare = try parse(arena, .md, "make", "`sh`");
     try testing.expectEqualStrings("make", bare.name);

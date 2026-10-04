@@ -1,6 +1,3 @@
-#### :runner:bash
-> `bash` `-e` `-c` `{{CODE}}` `bash`
-
 #### :shield:deny
 > `false`
 
@@ -8,14 +5,10 @@
 > `m8` `shield` `ask` `--`
 
 #### :shield:secure
-> ```bash
-> exec {{M8}} shield secure "${SECURES}" -- "$@"
-> ```
+> `bash` `-e` `-c` `exec {{M8}} shield secure "${M8_ARG_SECURES}" -- "$@"` `bash`
 
 #### :shield:check
-> ```bash
-> exec {{M8}} shield check "${CHECKS}" -- "$@"
-> ```
+> `bash` `-e` `-c` `exec {{M8}} shield check "${M8_ARG_CHECKS}" -- "$@"` `bash`
 
 #### :shield:contain-reads
 > :shield:secure SECURES contain-reads

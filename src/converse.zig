@@ -31,6 +31,43 @@ pub const Options = struct {
     /// out is the whole turn. What `send` does under a pipe; a terminal is
     /// only ever shown the reply.
     echo_given: bool = false,
+    /// Keep the run as it goes rather than once it is over. What a provider
+    /// or a tool has finished saying happened, whatever becomes of the next
+    /// one, so a run that dies keeps everything up to where it died.
+    keep: ?Keeper = null,
+};
+
+/// Somewhere a run is kept, a piece at a time.
+///
+/// A piece is a turn: the 🧠 it continues, and what one model call or one
+/// tool call added. The first opens with the ledger as it arrived, and each
+/// one after with the name the last was kept under — so the pieces are a
+/// chain, and expanding the last gives back the whole run.
+pub const Keeper = struct {
+    ctx: *anyopaque,
+    /// Keep these records as a turn, and say what it is called.
+    keep: *const fn (ctx: *anyopaque, piece: []const doc.Record) anyerror![]const u8,
+};
+
+/// How much of a run has been handed to its keeper, and what the next piece
+/// continues.
+const Progress = struct {
+    keeper: ?Keeper,
+    lead: []const doc.Record,
+    kept: usize = 0,
+
+    fn keep(self: *Progress, arena: Allocator, turn: []const doc.Record) !void {
+        const k = self.keeper orelse return;
+        if (turn.len == self.kept) return;
+        var piece: std.ArrayList(doc.Record) = .empty;
+        try piece.appendSlice(arena, self.lead);
+        try piece.appendSlice(arena, turn[self.kept..]);
+        const name = try k.keep(k.ctx, piece.items);
+        const lead = try arena.alloc(doc.Record, 1);
+        lead[0] = .{ .sigil = .agent, .value = name };
+        self.lead = lead;
+        self.kept = turn.len;
+    }
 };
 
 /// Run whatever `ctx.in` holds, writing the reply as it arrives, and hand
@@ -92,6 +129,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
 
     // Everything this run adds, in the order it happened.
     var turn: std.ArrayList(doc.Record) = .empty;
+    var progress: Progress = .{ .keeper = opts.keep, .lead = settled };
     // Records normally get a blank line, so writing one has to know what came
     // before it. Some records belong together and are shown touching.
     var shown: Shown = .{};
@@ -114,6 +152,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
             try turn.append(arena, record);
         }
         try out.flush();
+        try progress.keep(arena, turn.items);
     }
 
     // No cap. A model that keeps calling tools is doing what it was given
@@ -157,6 +196,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
             try keep(arena, &records, r);
             try turn.append(arena, r);
         }
+        try progress.keep(arena, turn.items);
         if (answered.calls.len == 0) break;
         const calls = answered.calls;
 
@@ -183,6 +223,10 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
                 try turn.append(arena, record);
             }
             try out.flush();
+            // A call is kept with its answer and never ahead of it: a 📲
+            // with nothing under it is owed, and one kept before its tool had
+            // finished would be run a second time by whoever picked it up.
+            try progress.keep(arena, turn.items);
         }
     }
 
@@ -298,10 +342,9 @@ fn answer(
     var tty_storage: api.TtyFiles = undefined;
 
     const call = @import("command/call.zig");
-    // m8 owns the framing, and this is the only place it is decided. A shield
-    // is launched without it, which is what makes a wrapper transparent; a
-    // tool gets it unless it declared that it answers in m8 itself.
-    const speaks_m8 = std.mem.eql(u8, tool.speaks, "m8");
+    // A tool command answers in m8. It may use `m8 call` to turn an ordinary
+    // program into that answer, or implement the protocol itself; the choice
+    // belongs to its definition rather than to the harness running it.
     const status = call.execute(.{
         .arena = arena,
         .io = io,
@@ -314,17 +357,18 @@ fn answer(
         .out = &captured.writer,
         .err = &err_sink.writer,
         .tty = api.openTty(io, &tty_storage),
-    }, wrapped, if (speaks_m8) .document else .framed) catch |e|
+    }, wrapped, .document) catch |e|
         return failure(arena, c.id, "{s}", .{@errorName(e)});
 
-    // Framed, `call` already wrote a 🧾 or a 🚫; speaking, what came back is
-    // the tool's own records. Either way it is read back rather than guessed.
     var diag: doc.Diagnostic = .{};
-    const said = doc.parse(arena, captured.written(), &diag) catch
-        return failure(arena, c.id, "the tool wrote nothing readable", .{});
-    if (said.len == 0 and !speaks_m8) return failure(arena, c.id, "the tool wrote nothing", .{});
-
-    const records = if (speaks_m8) try settle(arena, said, c.id, status) else said;
+    const records = doc.parse(arena, captured.written(), &diag) catch
+        return failure(arena, c.id, "the tool did not answer in m8", .{});
+    if (records.len == 0) return if (status == 0)
+        failure(arena, c.id, "the tool wrote nothing", .{})
+    else
+        failure(arena, c.id, "the tool exited without an m8 failure", .{});
+    if (!hasVerdict(records, c.id))
+        return failure(arena, c.id, "the tool did not answer its call with a verdict", .{});
 
     // What a tool is allowed to have said. The reply side is closed always;
     // the definition side is closed by a 🛡 rather than from here, which is
@@ -554,44 +598,74 @@ const LiveReply = struct {
     }
 };
 
-/// What a speaking tool said, with the two things only m8 can know filled in.
-///
-/// A tool that answers in the language names its own records, but it does not
-/// know which call it is answering unless it read `M8_CALL_ID`, and it cannot
-/// know how it ended until after it has stopped saying so. Both are added when
-/// they are missing and never when they are there — a tool that said how it
-/// went is believed, because it knew something m8 would only be guessing at.
-fn settle(
-    arena: Allocator,
-    said: []const doc.Record,
-    id: []const u8,
-    status: u8,
-) ![]const doc.Record {
-    var out: std.ArrayList(doc.Record) = .empty;
-    var verdicted = false;
-    for (said) |r| {
-        var one = r;
-        switch (r.sigil) {
-            .result, .ok, .failed => {
-                if (one.value.len == 0) one.value = id;
-                if (r.sigil != .result) verdicted = true;
-            },
-            .call => if (ledger.callId(one.value).len == 0) {
-                one.value = try std.fmt.allocPrint(arena, "{s},{s}", .{ ledger.callName(one.value), id });
-            },
-            else => {},
+/// A tool answers the call it was handed. A verdict for another call is still
+/// a valid record, but it does not settle this one.
+fn hasVerdict(records: []const doc.Record, id: []const u8) bool {
+    for (records) |r| switch (r.sigil) {
+        .ok, .failed => if (std.mem.eql(u8, r.value, id)) return true,
+        else => {},
+    };
+    return false;
+}
+
+test "a run is kept a piece at a time, each naming the one before" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const Kept = struct {
+        arena: Allocator,
+        pieces: std.ArrayList([]const doc.Record) = .empty,
+
+        fn keep(ctx: *anyopaque, piece: []const doc.Record) anyerror![]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            try self.pieces.append(self.arena, piece);
+            return std.fmt.allocPrint(self.arena, "+/t{d}", .{self.pieces.items.len});
         }
-        try out.append(arena, one);
-    }
-    if (!verdicted) try out.append(arena, if (status == 0)
-        .{ .sigil = .ok, .value = id }
-    else
-        .{ .sigil = .failed, .value = id, .content = try std.fmt.allocPrint(
-            arena,
-            "Failed with exit code {d}",
-            .{status},
-        ) });
-    return out.items;
+    };
+    var kept: Kept = .{ .arena = arena };
+
+    const given = [_]doc.Record{
+        .{ .sigil = .agent, .value = "mathy" },
+        .{ .sigil = .user, .content = "hi" },
+    };
+    var progress: Progress = .{ .keeper = .{ .ctx = &kept, .keep = Kept.keep }, .lead = &given };
+    var turn: std.ArrayList(doc.Record) = .empty;
+
+    // Nothing added is nothing to keep.
+    try progress.keep(arena, turn.items);
+    try std.testing.expectEqual(@as(usize, 0), kept.pieces.items.len);
+
+    try turn.append(arena, .{ .sigil = .bot, .content = "looking" });
+    try progress.keep(arena, turn.items);
+    try turn.append(arena, .{ .sigil = .call, .value = "read,c1" });
+    try turn.append(arena, .{ .sigil = .ok, .value = "c1" });
+    try progress.keep(arena, turn.items);
+    try progress.keep(arena, turn.items);
+
+    // The first piece opens with the ledger as it arrived, and the second
+    // with the turn the first became and only what was added since.
+    const pieces = kept.pieces.items;
+    try std.testing.expectEqual(@as(usize, 2), pieces.len);
+    try std.testing.expectEqual(@as(usize, 3), pieces[0].len);
+    try std.testing.expectEqualStrings("mathy", pieces[0][0].value);
+    try std.testing.expectEqual(sigil.Sigil.bot, pieces[0][2].sigil);
+    try std.testing.expectEqual(@as(usize, 3), pieces[1].len);
+    try std.testing.expectEqualStrings("+/t1", pieces[1][0].value);
+    try std.testing.expectEqual(sigil.Sigil.call, pieces[1][1].sigil);
+    try std.testing.expectEqual(sigil.Sigil.ok, pieces[1][2].sigil);
+}
+
+test "only a verdict naming the call settles it" {
+    const said = [_]doc.Record{
+        .{ .sigil = .result, .value = "c1", .content = "hi" },
+        .{ .sigil = .ok, .value = "c1" },
+    };
+    try std.testing.expect(hasVerdict(&said, "c1"));
+    try std.testing.expect(!hasVerdict(&said, "c2"));
+    // A 🧾 alone is a tool that spoke and never said how it went.
+    try std.testing.expect(!hasVerdict(said[0..1], "c1"));
+    try std.testing.expect(hasVerdict(&.{.{ .sigil = .failed, .value = "c1", .content = "no" }}, "c1"));
 }
 
 test "live reply separates changes of sigil" {

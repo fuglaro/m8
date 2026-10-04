@@ -11,7 +11,7 @@
 > > Read the contents of a text file.
 > > Read the whole file, or use pages to read a range at a time
 > > or a number of pages starting at a string match anchor.
-> `m8` `call` `munge` `read`
+> `m8` `call` `m8` `munge` `read`
 > * path string
 >   Path of the file to read (relative, absolute, or ~).
 > * pages? string
@@ -24,7 +24,7 @@
 
 #### :toolbox:list
 > > List the contents of a directory.
-> `m8` `call` `munge` `read`
+> `m8` `call` `m8` `munge` `read`
 > * path string
 >   Path of the directory to inspect (relative, absolute, or ~).
 >   Use "." for the project root.
@@ -38,7 +38,7 @@
 > > Attempt exact matches to avoid falling below match tolerance.
 > > Must only match once if using multiple lines to replace.
 > > Pages may be used to scope matches.
-> `m8` `call` `munge` `write`
+> `m8` `call` `m8` `munge` `write`
 > * path string
 >   Path of the file to edit or create (relative, absolute, or ~).
 > * old_string? string
@@ -56,7 +56,7 @@
 > > Grep search inside files matching a glob.
 > > Glob descent skips hidden path components unless named explicitly.
 > > Omitting regex will just glob files.
-> `m8` `call` `munge` `scan`
+> `m8` `call` `m8` `munge` `scan`
 > * regex? string
 >   Regex to search with using a Perl-style pattern (no
 >   backrefs, lookaround, or multi-line matching).
@@ -71,9 +71,12 @@
 
 #### :toolbox:bash
 > > Run a bash command.
-> `m8` `call` `args` `bash` `-euo` `pipefail` `{{M8_ARG_COMMAND|-c}}`
+> `m8` `call` `bash` `-euo` `pipefail` `{{M8_ARG_COMMAND|-c}}`
 > * command string
 >   The bash command to run.
+
+#### :runner:bash
+> `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
 
 #### :toolbox:webfetch
 > > Download a web page for viewing.

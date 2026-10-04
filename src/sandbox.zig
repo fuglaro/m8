@@ -340,13 +340,12 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []
 
     var child = try std.process.spawn(io, .{
         .argv = &.{
-            "sandbox-exec",                                            "-f",
-            path,                                                      "-D",
-            try std.fmt.allocPrint(arena, "CWD={s}", .{dir}),          "-D",
+            "sandbox-exec",                                                                        "-f",
+            path,                                                                                  "-D",
+            try std.fmt.allocPrint(arena, "CWD={s}", .{dir}),                                      "-D",
             try std.fmt.allocPrint(arena, "PARENTWD={s}", .{std.fs.path.dirname(dir) orelse "/"}), "-D",
-            try std.fmt.allocPrint(arena, "TMP={s}", .{dir}),
-            "/bin/sh",                                                 "-c",
-            script,
+            try std.fmt.allocPrint(arena, "TMP={s}", .{dir}),                                      "/bin/sh",
+            "-c",                                                                                  script,
         },
         .cwd = .{ .path = dir },
         .stdout = .ignore,
@@ -383,13 +382,10 @@ test "a config directory cannot be staged elsewhere and renamed in" {
     // Staging outside the target name is fine; landing it is not. A rename
     // carries a whole subtree with no per-entry check, so the destination
     // path is the only thing standing in the way.
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
-        "mkdir -p staging && echo x > staging/evil.md"));
-    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
-        "mv staging .m8-st8"));
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p staging && echo x > staging/evil.md"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mv staging .m8-st8"));
     // And the same for core, with a restriction that never mentions it.
-    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"},
-        "mkdir -p .m8-st8 2>/dev/null; mv staging .m8-st8/core"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"}, "mkdir -p .m8-st8 2>/dev/null; mv staging .m8-st8/core"));
 }
 
 test "a config directory cannot be reached through a symlink" {
@@ -402,12 +398,9 @@ test "a config directory cannot be reached through a symlink" {
     defer testing.allocator.free(dir);
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
 
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
-        "mkdir -p elsewhere"));
-    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"},
-        "ln -s elsewhere .m8-st8"));
-    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"},
-        "mkdir -p .m8-st8 2>/dev/null; ln -s elsewhere .m8-st8/core"));
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p elsewhere"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "ln -s elsewhere .m8-st8"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"}, "mkdir -p .m8-st8 2>/dev/null; ln -s elsewhere .m8-st8/core"));
 }
 
 test "a restriction leaves ordinary work alone" {
@@ -420,8 +413,7 @@ test "a restriction leaves ordinary work alone" {
     defer testing.allocator.free(dir);
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
 
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{ "private", "contain-writes", "no-loop", "airgap" },
-        "mkdir -p sub && echo hi > sub/notes.txt && cat sub/notes.txt"));
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{ "private", "contain-writes", "no-loop", "airgap" }, "mkdir -p sub && echo hi > sub/notes.txt && cat sub/notes.txt"));
 }
 
 test "the table is atoms, so a level is a composition and not an entry" {

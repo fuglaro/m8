@@ -87,9 +87,7 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
         \\🛡 hands over what was appended to its variable:
         \\
         \\  ▄ 🛡️secure
-        \\  │ ```bash
-        \\  │ exec m8 shield secure "${SECURES}" -- "$@"
-        \\  │ ```
+        \\  │ `bash` `-e` `-c` `exec {{M8}} shield secure "${M8_ARG_SECURES}" -- "$@"` `bash`
         \\  ▄ 🛡️secure SECURES airgap
         \\
         \\A restriction it does not recognise is refused rather than ignored.

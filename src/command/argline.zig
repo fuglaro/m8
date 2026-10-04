@@ -1,35 +1,12 @@
-//! `args` — build a command line out of the environment, and run it.
+//! Building a command line from the call environment.
 //!
-//! A call reaches its tool in the environment, so a command that wants flags
-//! rather than variables needs something to turn one into the other. That is
-//! the whole of this: a placeholder naming a variable becomes whole argv
-//! elements, and every other word is passed through untouched.
-//!
-//! An example rather than a mechanism. m8 hands a 🧰's argv to its command as
-//! it was written, so nothing here is privileged — delete it, write another,
-//! and a toolbox that named that one instead goes on working the same way.
-//!
-//! A value is a whole element and is never spliced into a larger one, so what
-//! a call said cannot become syntax in whatever runs.
+//! A placeholder naming a variable becomes whole argv elements, and every
+//! other word passes through untouched. A value is never spliced into a larger
+//! one, so what a call said cannot become syntax in whatever runs.
 
 const std = @import("std");
-const api = @import("api.zig");
-const launch = @import("../launch.zig");
-const Ctx = api.Ctx;
-
-pub const command: api.Command = .{
-    .name = "args",
-    .summary = "expand M8_ARG placeholders into a command line, and run it",
-    // The command it builds owns stdin, the same reason `call` takes nothing.
-    .takes = .nothing,
-    .run = run,
-    .help = page,
-};
 
 pub const Error = error{
-    /// Nothing to run, either because nothing was said or because what was
-    /// said expanded away.
-    NothingToRun,
     /// A placeholder was opened and not closed.
     UnclosedPlaceholder,
     /// `?` with no flag after it, which could never emit anything.
@@ -70,7 +47,7 @@ fn expand(
 ) !void {
     if (!std.mem.startsWith(u8, word, prefix)) return out.append(arena, word);
     if (!std.mem.endsWith(u8, word, "}}") or word.len <= prefix.len) {
-        try err.print("m8 call args: unclosed placeholder '{s}'\n", .{word});
+        try err.print("m8 call: unclosed placeholder '{s}'\n", .{word});
         return Error.UnclosedPlaceholder;
     }
 
@@ -94,7 +71,7 @@ fn expand(
     // A definition that could never emit anything is wrong however the call
     // went, so it is caught before the value is looked at.
     if (form == .boolean and flag.len == 0) {
-        try err.print("m8 call args: '{s}' asks for a flag and names none\n", .{word});
+        try err.print("m8 call: '{s}' asks for a flag and names none\n", .{word});
         return Error.FlaglessQuestion;
     }
 
@@ -103,7 +80,7 @@ fn expand(
         if (std.mem.eql(u8, value, "false")) return;
         if (!std.mem.eql(u8, value, "true")) {
             try err.print(
-                "m8 call args: {s} is '{s}', and '{s}' takes true or false\n",
+                "m8 call: {s} is '{s}', and '{s}' takes true or false\n",
                 .{ name, value, word },
             );
             return Error.NotABoolean;
@@ -125,63 +102,6 @@ pub fn line(
     var argv: std.ArrayList([]const u8) = .empty;
     for (template) |word| try expand(arena, env, err, &argv, word);
     return argv.items;
-}
-
-fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len == 0) {
-        try ctx.err.writeAll("m8 call args: nothing to run\n");
-        return Error.NothingToRun;
-    }
-
-    const argv = try line(ctx.arena, ctx.env, ctx.err, ctx.args);
-    if (argv.len == 0) {
-        try ctx.err.writeAll("m8 call args: everything expanded away\n");
-        return Error.NothingToRun;
-    }
-
-    // What it builds talks to whoever m8 was talking to. Anything held here
-    // is on its way to the same descriptors, and would land out of order.
-    try ctx.out.flush();
-    try ctx.err.flush();
-    var child = try std.process.spawn(ctx.io, .{ .argv = argv });
-    return launch.status(try child.wait(ctx.io));
-}
-
-fn page(ctx: Ctx, out: *std.Io.Writer) !void {
-    _ = ctx;
-    try out.writeAll(
-        \\m8 call args — expand M8_ARG placeholders into a command line
-        \\
-        \\  m8 call args CMD [ARGS]
-        \\
-        \\A call reaches its tool in the environment. This is what turns that
-        \\back into flags for a command that wants them, and it has no options
-        \\of its own, so the first word is always the command.
-        \\
-        \\A placeholder is a whole word and expands to whole arguments, which
-        \\is why nothing a model said can become syntax:
-        \\
-        \\  {{M8_ARG_COMMAND}}       --command VALUE
-        \\  {{M8_ARG_COMMAND|-c}}    -c VALUE
-        \\  {{M8_ARG_COMMAND|}}      VALUE
-        \\  {{M8_ARG_DEEP?--deep}}   --deep, when the value is exactly true
-        \\  {{M8_ARGS}}              the whole call as JSON, one argument
-        \\
-        \\The flag a bare placeholder carries is the argument's own name, and
-        \\M8_ARGS is the call rather than an argument, so it stands alone.
-        \\
-        \\An unset variable leaves nothing behind. An empty one is a value a
-        \\command was given, and is passed as an empty argument. Only `?`
-        \\reads a value: true emits the flag, false emits nothing, and
-        \\anything else is an error naming what arrived.
-        \\
-        \\Only a word opening with {{M8_ARG is looked at, so the braces a
-        \\templating language meant for itself survive:
-        \\
-        \\  m8 call args awk '{{print $1}}' file
-        \\
-        \\
-    );
 }
 
 // ---------------------------------------------------------------- tests

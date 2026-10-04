@@ -40,8 +40,8 @@ pub const subdir = "models/Z-Machine";
 /// What a story file may be called. Blorb containers hold one inside them and
 /// are unwrapped before anything else looks.
 pub const extensions = [_][]const u8{
-    ".z1", ".z2",     ".z3",  ".z4",    ".z5",
-    ".z6", ".z7",     ".z8",  ".dat",   ".zblorb",
+    ".z1",  ".z2",    ".z3", ".z4",  ".z5",
+    ".z6",  ".z7",    ".z8", ".dat", ".zblorb",
     ".blb", ".blorb",
 };
 

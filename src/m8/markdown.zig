@@ -105,7 +105,12 @@ pub fn writeSpan(w: *std.Io.Writer, s: []const u8) !void {
     for (0..ticks) |_| try w.writeByte('`');
 }
 
-pub const Fence = struct { lang: []const u8, code: []const u8 };
+pub const Fence = struct {
+    /// The whole info string. Its first word remains the language hint Markdown
+    /// renderers use; all of it names the runner m8 uses.
+    runner: []const u8,
+    code: []const u8,
+};
 
 /// True when `line` opens a fence: three or more backticks, and an info string
 /// with none in it.
@@ -132,8 +137,7 @@ pub fn readFence(
 ) Allocator.Error!Fence {
     const at = indentOf(opening);
     const ticks = run(opening, at);
-    var info = std.mem.tokenizeAny(u8, opening[at + ticks ..], " \t");
-    const lang = info.next() orelse "";
+    const runner = std.mem.trim(u8, opening[at + ticks ..], " \t");
 
     var code: std.ArrayList(u8) = .empty;
     var first = true;
@@ -145,7 +149,7 @@ pub fn readFence(
         first = false;
         try code.appendSlice(arena, body[@min(at, bat)..]);
     }
-    return .{ .lang = lang, .code = code.items };
+    return .{ .runner = runner, .code = code.items };
 }
 
 /// `code` as a fenced block, indented by `pad`, with a run long enough to hold
@@ -208,8 +212,8 @@ test "what is written comes back, backticks and edges included" {
     const arena = a.allocator();
 
     for ([_][]const u8{
-        "a",           "`",         "a`b",        "`a`",      " a ",
-        "``",          "a ` ` b",   " `",         "` ",       "  ",
+        "a",              "`",       "a`b", "`a`", " a ",
+        "``",             "a ` ` b", " `",  "` ",  "  ",
         "x . ; rm -rf ~",
     }) |want| {
         var buf: std.Io.Writer.Allocating = .init(arena);
@@ -233,7 +237,13 @@ test "a fence holds any shorter run, and gives back the indent it was given" {
     const src = "  ````bash\n  some ``` inside\n   deeper\n  ````";
     var lines = std.mem.splitScalar(u8, src, '\n');
     const f = try readFence(arena, lines.next().?, &lines);
-    try testing.expectEqualStrings("bash", f.lang);
+    try testing.expectEqualStrings("bash", f.runner);
+    // More than one word remains the runner name. Markdown renderers still use
+    // its first word as the highlighting language.
+    var named = std.mem.splitScalar(u8, "```bash raw\nx\n```", '\n');
+    const raw = try readFence(arena, named.next().?, &named);
+    try testing.expectEqualStrings("bash raw", raw.runner);
+
     // The opening's indent comes off, at most: the deeper line keeps one.
     try testing.expectEqualStrings("some ``` inside\n deeper", f.code);
 

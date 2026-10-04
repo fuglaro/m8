@@ -286,7 +286,6 @@ fn writeFile(
     name: []const u8,
     records: []const doc.Record,
 ) !void {
-
     const path = try std.fs.path.join(arena, &.{ dirs[0], try config.nameFile(arena, name) });
 
     // A file is markdown. The rendered spelling is only ever for a terminal.

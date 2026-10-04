@@ -477,7 +477,6 @@ const Emitter = struct {
         else
             .{ .split = .{ .a = after, .b = body } };
     }
-
 };
 
 /// A pattern, ready to run. The AST lives on the arena and is finished with

@@ -31,7 +31,7 @@ test "every command has a page, and it says which command it is" {
     var env: std.process.Environ.Map = .init(arena);
     var thrown: std.Io.Writer.Allocating = .init(arena);
 
-    for (cmd.all ++ cmd.native) |c| {
+    for (cmd.all) |c| {
         var page_out: std.Io.Writer.Allocating = .init(arena);
         try write(.{
             .arena = arena,

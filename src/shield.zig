@@ -246,7 +246,7 @@ pub fn through(
     f: Fence,
 ) (Error || Allocator.Error)![]const []const u8 {
     const runner = for (runners) |r| {
-        if (std.mem.eql(u8, r.name, f.lang)) break r;
+        if (std.mem.eql(u8, r.name, f.runner)) break r;
     } else return Error.UnknownRunner;
     return fill(arena, runner.argv, f.code);
 }
@@ -402,6 +402,13 @@ test "a code block runs through the runner its language names" {
     try testing.expectEqualStrings("bash", argv[5]);
 
     try testing.expectError(Error.UnknownRunner, parseBody(arena, .md, "```python\nx\n```", &runners));
+    // The whole info string is the name, so a word after the language picks
+    // another runner rather than being dropped.
+    try testing.expectError(Error.UnknownRunner, parseBody(arena, .md, "```bash raw\nx\n```", &runners));
+    const both = [_]Runner{ runners[0], .{ .name = "bash raw", .argv = &.{ "bash", "-c", code_mark, "bash" } } };
+    const raw = try parseBody(arena, .md, "```bash raw\nexec \"$@\"\n```", &both);
+    try testing.expectEqualStrings("bash", raw[0].command[0]);
+    try testing.expectEqualStrings("exec \"$@\"", raw[0].command[2]);
     try testing.expectError(Error.EmptyShield, parseBody(arena, .md, "nothing runnable here", &runners));
 }
 

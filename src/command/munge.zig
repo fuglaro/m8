@@ -53,7 +53,7 @@ fn run(ctx: Ctx) !u8 {
 
     const which = ctx.args[0];
     const sub = find(which) orelse {
-        try ctx.err.print("m8 call munge: no tool named '{s}'\n", .{which});
+        try ctx.err.print("m8 munge: no tool named '{s}'\n", .{which});
         try help(ctx, ctx.err);
         try ctx.err.flush();
         return 1;
@@ -70,18 +70,17 @@ fn run(ctx: Ctx) !u8 {
 
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
-        \\m8 call munge — files, addressed in pages
+        \\m8 munge — files, addressed in pages
         \\
-        \\  m8 call munge --help        this page, including every operation
-        \\  m8 call munge TOOL [ARGS]   one of the operations below
+        \\  m8 munge --help        this page, including every operation
+        \\  m8 munge TOOL [ARGS]   one of the operations below
         \\
     );
     try w.writeAll("\ntools:\n\n");
     for (operations) |s| try w.print("  {s: <8} {s}\n", .{ s.name, s.summary });
     try w.writeAll(
         \\
-        \\Inbuilt tools, so they are reached through `call` and never typed as
-        \\commands of their own. What a call said arrives as M8_ARG_*.
+        \\Each operation reads what a tool call said from M8_ARG_*.
         \\
         \\A page is about 100 lines, or 10000 characters where lines are long,
         \\and it is what every answer here is addressed in. Nothing is ever
@@ -111,13 +110,12 @@ test "the tools are reached under munge and nowhere else" {
     try testing.expect(find("scan") != null);
     try testing.expect(find("nosuch") == null);
 
-    // Scoped: `munge` is one name to `call`, and no tool of it is loose
-    // beside it.
-    try testing.expect(cmd.findCallable("munge") != null);
-    try testing.expect(cmd.findCallable("read") == null);
+    // The operations are scoped under one top-level command, not loose beside
+    // it and not separate split programs.
+    try testing.expect(cmd.find("munge") != null);
     try testing.expect(cmd.find("read") == null);
-    try testing.expect(cmd.byPath(&.{ "call", "munge", "read" }) == null);
-    try testing.expectEqual(@as(usize, 0), cmd.byPath(&.{ "call", "munge" }).?.children.len);
+    try testing.expect(cmd.byPath(&.{ "munge", "read" }) == null);
+    try testing.expectEqual(@as(usize, 0), cmd.byPath(&.{"munge"}).?.children.len);
 }
 
 test "every tool under munge has a name, a summary and a page" {
