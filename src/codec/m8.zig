@@ -38,10 +38,9 @@ fn decode(arena: Allocator, bytes: []const u8) ![]const doc.Record {
 
 /// Read a reply as it is written.
 ///
-/// The whole document is kept so the structure can be read from it at the
-/// end, and 🤖 content is pushed on as each line lands. Two passes over the
-/// same bytes, which is the price of streaming a format that is only whole
-/// once it ends.
+/// Each record is said as its lines land. The whole document is kept as
+/// well, so the calls can be read from it at the end: two passes over the
+/// same bytes, which is the price of a call being whole only once it ends.
 fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
     var all: std.ArrayList(u8) = .empty;
     var mode: ?doc.Mode = null;
@@ -97,13 +96,6 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
     }
     if (open) try sink.end();
 
-    // Second pass, over the same bytes, for the structure a line at a time
-    // could not give: the records as records, in the order they were written.
-    // Nothing is filtered out here. A reply may only hold what `policy.zig`
-    // says a model can produce, and letting an unexpected sigil through to be
-    // refused there is the point — dropping it quietly is how a 💭 came to be
-    // silently lost on the way to the ledger.
-    var recs: std.ArrayList(doc.Record) = .empty;
     var calls: std.ArrayList(api.Call) = .empty;
     var diag: doc.Diagnostic = .{};
     const m = doc.detect(all.items) orelse .md;
@@ -113,19 +105,17 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
             .name = ledger.callName(rec.value),
             .arguments = try toolbox.parseArgs(arena, m, rec.content orelse ""),
         });
-        try recs.append(arena, rec);
     }
-    return .{ .records = recs.items, .calls = calls.items };
+    return .{ .calls = calls.items };
 }
 
-/// Whether a record can be shown before it is whole.
+/// Whether a record is said as it arrives.
 ///
-/// 💭 and 🤖 are prose and read the same half-written. A 📲 is not: its
-/// arguments mean nothing until the last brace, so it is gathered and shown
-/// by whoever is about to run it. The ledger gets every record either way and
-/// in the written order — only the live display is selective.
+/// Everything is but a 📲, whose arguments mean nothing until the last brace.
+/// An unexpected sigil is let through so that `policy.zig` refuses it, where
+/// dropping it here would lose it quietly.
 fn shows(s: sigil.Sigil) bool {
-    return s == .bot or s == .thought;
+    return s != .call;
 }
 
 // ---------------------------------------------------------------- tests
@@ -137,12 +127,16 @@ const testing = std.testing;
 const Collect = struct {
     arena: Allocator,
     seen: std.ArrayList(u8) = .empty,
+    /// The same stream, as the records it makes.
+    got: api.Gather = .{ .arena = undefined },
 
     fn sink(self: *Collect) api.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
     }
-    fn openFn(ctx: *anyopaque, s: sigil.Sigil, _: []const u8) anyerror!void {
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
+        self.got.arena = self.arena;
+        self.got.open(s, value);
         if (self.seen.items.len > 0) try self.seen.append(self.arena, '\n');
         try self.seen.appendSlice(self.arena, @tagName(s));
         try self.seen.append(self.arena, ':');
@@ -150,8 +144,12 @@ const Collect = struct {
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
         try self.seen.appendSlice(self.arena, bytes);
+        try self.got.write(bytes);
     }
-    fn closeFn(_: *anyopaque) anyerror!void {}
+    fn closeFn(ctx: *anyopaque) anyerror!void {
+        const self: *Collect = @ptrCast(@alignCast(ctx));
+        _ = try self.got.close();
+    }
 };
 
 test "a reply in the language streams as it is written" {
@@ -175,11 +173,10 @@ test "a reply in the language streams as it is written" {
     const reply = try parse(arena, &r, collect.sink());
 
     // Every record comes back, in the order it was written.
-    try testing.expectEqual(@as(usize, 3), reply.records.len);
-    try testing.expectEqual(sigil.Sigil.thought, reply.records[0].sigil);
-    try testing.expectEqual(sigil.Sigil.bot, reply.records[1].sigil);
-    try testing.expectEqual(sigil.Sigil.call, reply.records[2].sigil);
-    try testing.expectEqualStrings("one\ntwo", reply.records[1].content.?);
+    try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
+    try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[0].sigil);
+    try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[1].sigil);
+    try testing.expectEqualStrings("one\ntwo", collect.got.records.items[1].content.?);
 
     // 💭 and 🤖 reached the reader as they arrived, each as its own record;
     // the call did not, because a call cannot be shown until it is whole.

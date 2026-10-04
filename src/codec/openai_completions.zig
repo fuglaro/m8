@@ -388,9 +388,7 @@ fn finishOf(v: std.json.Value) ?[]const u8 {
 const Run = struct {
     arena: Allocator,
     sink: api.Sink,
-    records: std.ArrayList(doc.Record) = .empty,
     open: ?sigil.Sigil = null,
-    buf: std.ArrayList(u8) = .empty,
 
     fn to(self: *Run, s: sigil.Sigil, fragment: []const u8) !void {
         if (fragment.len == 0) return;
@@ -399,32 +397,19 @@ const Run = struct {
             try self.sink.begin(s, "");
             self.open = s;
         }
-        try self.buf.appendSlice(self.arena, fragment);
         try self.sink.text(fragment);
     }
 
     fn stop(self: *Run) !void {
-        const s = self.open orelse return;
+        if (self.open == null) return;
         try self.sink.end();
-        try self.records.append(self.arena, .{
-            .sigil = s,
-            .content = try self.arena.dupe(u8, self.buf.items),
-        });
-        self.buf.clearRetainingCapacity();
         self.open = null;
     }
 
-    /// The records, with the calls written on the end as 📲 — which is where
-    /// this api puts them, since it gathers a turn's calls after its text
-    /// rather than in among it — and how it stopped after those.
+    /// The calls, and how the reply stopped said last.
     fn reply(self: *Run, calls: []const api.Call, reason: []const u8) !api.Reply {
-        for (calls) |c| try self.records.append(self.arena, .{
-            .sigil = .call,
-            .value = try std.fmt.allocPrint(self.arena, "{s},{s}", .{ c.name, c.id }),
-            .content = try toolbox.renderArgs(self.arena, .md, c.arguments),
-        });
-        try api.stopped(self.arena, self.sink, &self.records, stops, reason);
-        return .{ .records = self.records.items, .calls = calls };
+        try api.stopped(self.arena, self.sink, stops, reason);
+        return .{ .calls = calls };
     }
 };
 
@@ -816,16 +801,26 @@ fn readerOver(bytes: []const u8) std.Io.Reader {
 const Collect = struct {
     arena: Allocator,
     seen: std.ArrayList(u8) = .empty,
+    /// The same stream, as the records it makes.
+    got: api.Gather = .{ .arena = undefined },
 
     fn sink(self: *Collect) api.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
     }
-    fn openFn(_: *anyopaque, _: sigil.Sigil, _: []const u8) anyerror!void {}
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
+        const self: *Collect = @ptrCast(@alignCast(ctx));
+        self.got.arena = self.arena;
+        self.got.open(s, value);
+    }
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
         try self.seen.appendSlice(self.arena, bytes);
+        try self.got.write(bytes);
     }
-    fn closeFn(_: *anyopaque) anyerror!void {}
+    fn closeFn(ctx: *anyopaque) anyerror!void {
+        const self: *Collect = @ptrCast(@alignCast(ctx));
+        _ = try self.got.close();
+    }
 };
 
 test "a streamed response and a whole one read the same" {
@@ -851,7 +846,7 @@ test "a streamed response and a whole one read the same" {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
         const reply = try parse(arena, &r, collect.sink());
-        try testing.expectEqualStrings("Hello world", try reply.said(arena));
+        try testing.expectEqualStrings("Hello world", try collect.got.said(arena));
         // Streamed on the way past either way, so the reader sees the same.
         try testing.expectEqualStrings("Hello world", collect.seen.items);
         try testing.expectEqual(@as(usize, 0), reply.calls.len);
@@ -911,14 +906,14 @@ test "a reply cut off says so last, in this api's own word" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
-        try testing.expectEqual(@as(usize, 2), reply.records.len);
-        const last = reply.records[1];
+        _ = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
+        const last = collect.got.records.items[1];
         try testing.expectEqual(sigil.Sigil.bot, last.sigil);
         try testing.expectEqualStrings("(cut off at length)", last.value);
         try testing.expect(last.content == null);
         // What was said is still exactly what was said.
-        try testing.expectEqualStrings("Moon", try reply.said(arena));
+        try testing.expectEqualStrings("Moon", try collect.got.said(arena));
     }
 
     // Finishing and asking for tools are what the ledger already shows.
@@ -928,7 +923,8 @@ test "a reply cut off says so last, in this api's own word" {
         , .{why});
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        try testing.expectEqual(@as(usize, 1), (try parse(arena, &r, collect.sink())).records.len);
+        _ = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
     }
 }
 
@@ -953,10 +949,10 @@ test "a refusal is what the model said, and says it declined" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
-        try testing.expectEqual(@as(usize, 2), reply.records.len);
-        try testing.expectEqualStrings("I can't help with that.", reply.records[0].content.?);
-        try testing.expectEqualStrings("(declined with refusal)", reply.records[1].value);
+        _ = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
+        try testing.expectEqualStrings("I can't help with that.", collect.got.records.items[0].content.?);
+        try testing.expectEqualStrings("(declined with refusal)", collect.got.records.items[1].value);
     }
 }
 
@@ -989,6 +985,6 @@ test "a response that says nothing is nothing, not a failure" {
     var empty = readerOver("");
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &empty, collect.sink());
-    try testing.expectEqualStrings("", try reply.said(arena));
+    try testing.expectEqualStrings("", try collect.got.said(arena));
     try testing.expectEqual(@as(usize, 0), reply.calls.len);
 }

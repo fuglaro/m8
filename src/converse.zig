@@ -45,6 +45,8 @@ pub const Options = struct {
 /// chain, and expanding the last gives back the whole run.
 pub const Keeper = struct {
     ctx: *anyopaque,
+    /// The folder its turns go in, which is where their snips go too.
+    home: []const u8,
     /// Keep these records as a turn, and say what it is called.
     keep: *const fn (ctx: *anyopaque, piece: []const doc.Record) anyerror![]const u8,
 };
@@ -126,14 +128,6 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
 
     // Lineage names what it continues, never a pointer to it: pointers move.
     const settled = try session.settleAll(arena, io, dirs, given);
-    var parent: []const u8 = "";
-    for (settled) |r| {
-        if (r.sigil == .agent) {
-            parent = r.value;
-            break;
-        }
-    }
-    const snip_folder = try session.besideParent(arena, parent);
 
     // Everything this run adds, in the order it happened.
     var turn: std.ArrayList(doc.Record) = .empty;
@@ -170,7 +164,9 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
         var reply: LiveReply = .{
             .arena = arena,
             .io = io,
-            .snip_folder = snip_folder,
+            .dirs = dirs,
+            .snips = if (opts.keep) |k| k.home else null,
+            .said = .{ .arena = arena },
             .out = out,
             .mode = mode,
             .live = live,
@@ -197,22 +193,11 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
         try reply.finish();
         try out.flush();
 
-        // Every record the model produced, in the order it produced them, so
-        // a reply that thought before answering keeps its 💭 and stays
-        // replayable. A 📲 is skipped here and appended below instead: a call
-        // and the answer to it belong together in the ledger, and the loop
-        // that runs the tool is what knows where that is.
-        var snip_at: usize = 0;
-        for (answered.records) |raw| {
-            var r = raw;
-            if (r.sigil == .thought and std.mem.eql(u8, r.value, session.snip)) {
-                r.value = reply.snip_names.items[snip_at];
-                snip_at += 1;
-            }
-            if (r.sigil == .call) continue;
-            try keep(arena, &records, r);
-            try turn.append(arena, r);
-        }
+        // A 📲 is appended below instead: a call and the answer to it belong
+        // together, and the loop that runs the tool is what knows where that
+        // is.
+        try records.appendSlice(arena, reply.said.records.items);
+        try turn.appendSlice(arena, reply.kept.items);
         try progress.keep(arena, turn.items);
         if (answered.calls.len == 0) break;
         const calls = answered.calls;
@@ -229,7 +214,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
             // sign anything is happening while a tool takes its time.
             try show(arena, out, mode, &shown, asked);
             try out.flush();
-            try keep(arena, &records, asked);
+            try records.append(arena, asked);
             try turn.append(arena, asked);
 
             // The answer comes from the tool, not the model, and was already
@@ -434,9 +419,9 @@ fn agentCheck(
 
     // Its reply is never streamed and never reaches the receipt; it exists to
     // decide, not to be read.
-    var quiet: Quiet = .{};
-    const reply = try once(ctx, def, records.items, quiet.sink());
-    const said = std.mem.trim(u8, try reply.said(ctx.arena), " \t\r\n");
+    var got: codec.Gather = .{ .arena = ctx.arena };
+    _ = try once(ctx, def, records.items, got.sink());
+    const said = std.mem.trim(u8, try got.said(ctx.arena), " \t\r\n");
     if (std.ascii.eqlIgnoreCase(said, "allow")) return null;
     return if (said.len > 0) said else "the checker said nothing";
 }
@@ -468,17 +453,6 @@ fn once(
     );
 }
 
-/// A sink that keeps nothing. What it is handed has already been gathered by
-/// the parser, which is what the reply carries back.
-const Quiet = struct {
-    fn sink(self: *Quiet) codec.Sink {
-        return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
-    }
-    fn openFn(_: *anyopaque, _: sigil.Sigil, _: []const u8) anyerror!void {}
-    fn writeFn(_: *anyopaque, _: []const u8) anyerror!void {}
-    fn closeFn(_: *anyopaque) anyerror!void {}
-};
-
 /// The one record that says a call could not be run. A slice, because that is
 /// what answering a call is now, and one that never got as far as the tool has
 /// nothing to put above it.
@@ -495,17 +469,6 @@ fn failure(
         .content = try std.fmt.allocPrint(arena, fmt, args),
     };
     return one;
-}
-
-/// Append a record that came from the model.
-///
-/// The reply side is closed by construction — a model's text becomes 🤖
-/// content, which is quoted verbatim and so can never introduce a record. This
-/// is the one seam where model output does become records, and checking here
-/// keeps that a rule rather than a happy accident of the current data path.
-fn keep(arena: Allocator, records: *std.ArrayList(doc.Record), r: doc.Record) !void {
-    if (!policy.fromModel(r.sigil)) return error.ModelSaidTooMuch;
-    try records.append(arena, r);
 }
 
 /// What was last put on the display, so the next record knows whether a
@@ -528,6 +491,7 @@ const Shown = struct {
         const l = last orelse return false;
         return switch (s) {
             .thought, .bot => l == s,
+            .agent => l == .thought,
             .result, .ok, .failed => l == .call or l == .result,
             else => false,
         };
@@ -551,7 +515,9 @@ fn show(
 const LiveReply = struct {
     arena: Allocator,
     io: std.Io,
-    snip_folder: []const u8 = "",
+    dirs: []const []const u8 = &.{},
+    /// Where a `💭snip` is kept as it arrives, or null to hand it on whole.
+    snips: ?[]const u8 = null,
     out: *std.Io.Writer,
     mode: doc.Mode,
     live: bool,
@@ -560,9 +526,10 @@ const LiveReply = struct {
     /// and an empty 🤖 above the call would be a record of nothing.
     body: ?doc.ContentWriter = null,
     pending: ?sigil.Sigil = null,
-    value: []const u8 = "",
-    snipped: bool = false,
-    snip_names: std.ArrayList([]const u8) = .empty,
+    /// What the model said, for the ledger still running.
+    said: codec.Gather,
+    /// The same, as the turn keeps it: a snip is named rather than held.
+    kept: std.ArrayList(doc.Record) = .empty,
 
     fn sink(self: *LiveReply) codec.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
@@ -572,26 +539,30 @@ const LiveReply = struct {
     /// of nothing, and a codec is entitled to open one and find the model had
     /// no more to say — so the header waits for a byte, or a value, to justify
     /// it.
+    ///
+    /// The reply side is closed by construction — a model's text becomes 🤖
+    /// content, which is quoted verbatim and so can never introduce a record.
+    /// This is the one seam where model output does become records, and
+    /// checking here keeps that a rule rather than a happy accident of the
+    /// current data path.
     fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
+        if (!policy.fromModel(s)) return error.ModelSaidTooMuch;
         self.pending = s;
-        self.snipped = s == .thought and std.mem.eql(u8, value, session.snip);
-        self.value = if (self.snipped) blk: {
-            const name = if (self.snip_folder.len > 0)
-                try session.snipPath(self.arena, self.io, self.snip_folder)
-            else
-                try session.newSnip(self.arena, self.io);
-            try self.snip_names.append(self.arena, name);
-            break :blk name;
-        } else value;
+        self.said.open(s, value);
+    }
+
+    fn snipped(self: *const LiveReply) bool {
+        return self.pending == .thought and std.mem.eql(u8, self.said.value, session.snip);
     }
 
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
         if (bytes.len == 0) return;
-        // Kept aside is kept out of sight: a terminal shows the header alone,
-        // and the turn still holds all of it.
-        if (self.mode == .m8 and self.snipped) return;
+        try self.said.write(bytes);
+        // Kept aside is kept out of sight: bound for its snip when the run is
+        // kept, and otherwise hidden from a terminal alone.
+        if (self.snipped() and (self.snips != null or self.mode == .m8)) return;
         if (self.body == null) {
             const s = self.pending orelse .bot;
             try self.shown.begin(self.out, s);
@@ -599,7 +570,7 @@ const LiveReply = struct {
                 self.out,
                 self.mode,
                 s,
-                self.value,
+                self.said.value,
             );
         }
         try self.body.?.write(bytes);
@@ -608,23 +579,29 @@ const LiveReply = struct {
 
     fn closeFn(ctx: *anyopaque) anyerror!void {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
-        if (self.body) |*b| {
-            try b.finish();
-        } else if (self.value.len > 0) {
-            // Said on the header alone — how a reply stopped short.
-            const s = self.pending orelse .bot;
-            try self.shown.begin(self.out, s);
-            try doc.write(self.out, self.mode, .{ .sigil = s, .value = self.value });
-            if (self.live) try self.out.flush();
+        if (try self.said.close()) |r| {
+            const k: doc.Record = if (self.snips != null and session.isSnip(r)) .{
+                .sigil = .agent,
+                .value = try session.keepSnip(self.arena, self.io, self.dirs, self.snips.?, r.content.?),
+            } else r;
+            try self.kept.append(self.arena, k);
+            if (self.body) |*b| {
+                try b.finish();
+            } else if (k.value.len > 0) {
+                // Said on the header alone — how a reply stopped short, or
+                // where a snip went.
+                try self.shown.begin(self.out, k.sigil);
+                try doc.write(self.out, self.mode, .{ .sigil = k.sigil, .value = k.value });
+                if (self.live) try self.out.flush();
+            }
         }
         self.body = null;
         self.pending = null;
-        self.value = "";
     }
 
+    /// A codec that stopped without closing its record still said it.
     fn finish(self: *LiveReply) !void {
-        if (self.body) |*b| try b.finish();
-        self.body = null;
+        if (self.pending != null) try closeFn(self);
     }
 };
 
@@ -659,7 +636,7 @@ test "a run is kept a piece at a time, each naming the one before" {
         .{ .sigil = .agent, .value = "mathy" },
         .{ .sigil = .user, .content = "hi" },
     };
-    var progress: Progress = .{ .keeper = .{ .ctx = &kept, .keep = Kept.keep }, .lead = &given };
+    var progress: Progress = .{ .keeper = .{ .ctx = &kept, .home = "", .keep = Kept.keep }, .lead = &given };
     var turn: std.ArrayList(doc.Record) = .empty;
 
     // Nothing added is nothing to keep.
@@ -708,6 +685,7 @@ test "live reply separates changes of sigil" {
     var reply: LiveReply = .{
         .arena = arena,
         .io = undefined,
+        .said = .{ .arena = arena },
         .out = &out.writer,
         .mode = .md,
         .live = false,

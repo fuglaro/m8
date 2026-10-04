@@ -336,17 +336,17 @@ fn signatureOn(line: []const u8) ?[]const u8 {
 fn signature(
     arena: Allocator,
     out: *std.ArrayList(doc.Record),
-    sink: ?api.Sink,
     id: []const u8,
     enc: []const u8,
 ) !void {
     if (id.len == 0 and enc.len == 0) return;
-    // The spelling every file is written in; a reader is handed whichever one
-    // they are being written.
-    const kept = try std.fmt.allocPrint(arena, "{s}{s},{s}", .{ sigil.Sigil.signature.text(.md), id, enc });
-    const value = api.snip;
-    if (sink) |s| try s.record(.thought, value, kept);
-    try out.append(arena, .{ .sigil = .thought, .value = value, .content = kept });
+    try out.append(arena, .{ .sigil = .thought, .value = api.snip, .content = try sealed(arena, id, enc) });
+}
+
+/// A 🔏 as content, in the spelling every file is written in; a reader is
+/// handed whichever one they are being written.
+fn sealed(arena: Allocator, id: []const u8, enc: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}{s},{s}", .{ sigil.Sigil.signature.text(.md), id, enc });
 }
 
 fn callId(value: []const u8) []const u8 {
@@ -502,12 +502,12 @@ fn incompleteOf(response: std.json.Value) []const u8 {
 const Building = struct {
     arena: Allocator,
     sink: api.Sink,
-    records: std.ArrayList(doc.Record) = .empty,
     calls: std.ArrayList(api.Call) = .empty,
 
     kind: Kind = .none,
     shown: bool = false,
-    text: std.ArrayList(u8) = .empty,
+    /// Whether the part being read has said anything yet.
+    said: bool = false,
     args: std.ArrayList(u8) = .empty,
     id: []const u8 = "",
     name: []const u8 = "",
@@ -529,7 +529,7 @@ const Building = struct {
         b.shown = false;
         b.part = 0;
         b.parts = 0;
-        b.text = .empty;
+        b.said = false;
         b.args = .empty;
         b.id = "";
         b.name = "";
@@ -568,14 +568,14 @@ const Building = struct {
                     else
                         continue;
                     if (std.mem.eql(u8, key, "refusal")) b.refused = true;
-                    if (b.text.items.len > 0) continue; // already streamed
+                    if (b.said) continue; // already streamed
                     try b.say(.bot, str(part.object.get(key)) orelse "");
                 }
             },
             .reasoning => {
                 if (str(item.object.get("encrypted_content"))) |enc| b.encrypted = enc;
                 if (str(item.object.get("id"))) |got| b.id = got;
-                if (b.text.items.len > 0 or b.parts > 0) return; // already streamed
+                if (b.said or b.parts > 0) return; // already streamed
                 const summary = item.object.get("summary") orelse return;
                 if (summary != .array) return;
                 for (summary.array.items, 0..) |part, i| {
@@ -596,28 +596,18 @@ const Building = struct {
     /// Close the summary part being read as a 💭 of its own, and read the
     /// next. A part that said nothing leaves nothing behind.
     fn nextPart(b: *Building, index: i64) !void {
-        if (b.text.items.len > 0) {
-            try b.records.append(b.arena, .{ .sigil = .thought, .content = b.text.items });
-            b.parts += 1;
-        }
+        if (b.said) b.parts += 1;
         if (b.shown) try b.sink.end();
         b.shown = false;
-        b.text = .empty;
+        b.said = false;
         b.part = index;
     }
 
-    /// Into the record and out to whoever is reading, at once.
+    /// Out to whoever is reading. A record opens on its first byte, so one
+    /// the model left empty never reaches the pipe at all.
     fn say(b: *Building, s: sigil.Sigil, fragment: []const u8) !void {
         if (fragment.len == 0) return;
-        try b.text.appendSlice(b.arena, fragment);
-        try b.show(s, fragment);
-    }
-
-    /// Out to the reader alone, for the part of a record that is built rather
-    /// than streamed. A record opens on its first byte, so one the model left
-    /// empty never reaches the pipe at all.
-    fn show(b: *Building, s: sigil.Sigil, fragment: []const u8) !void {
-        if (fragment.len == 0) return;
+        b.said = true;
         if (!b.shown) {
             try b.sink.begin(s, "");
             b.shown = true;
@@ -627,24 +617,16 @@ const Building = struct {
 
     fn stop(b: *Building) !void {
         switch (b.kind) {
-            .none => {},
-            .message => try b.records.append(b.arena, .{
-                .sigil = .bot,
-                .content = b.text.items,
-            }),
+            .none, .message => {},
             .reasoning => {
                 // The last part closes, and the 🔏 — known only now the item
                 // has ended — follows as a record of its own.
                 try b.nextPart(b.part + 1);
-                try signature(b.arena, &b.records, b.sink, b.id, b.encrypted);
+                if (b.id.len > 0 or b.encrypted.len > 0)
+                    try b.sink.record(.thought, api.snip, try sealed(b.arena, b.id, b.encrypted));
             },
             .function_call => {
                 const raw = if (b.args.items.len == 0) "{}" else b.args.items;
-                try b.records.append(b.arena, .{
-                    .sigil = .call,
-                    .value = try std.fmt.allocPrint(b.arena, "{s},{s}", .{ b.name, b.call_id }),
-                    .content = try toolbox.renderArgs(b.arena, .md, raw),
-                });
                 try b.calls.append(b.arena, .{
                     .id = b.call_id,
                     .name = b.name,
@@ -663,8 +645,8 @@ const Building = struct {
     fn finish(b: *Building) !api.Reply {
         if (b.kind != .none) try b.stop();
         const reason = if (b.refused and b.reason.len == 0) "refusal" else b.reason;
-        try api.stopped(b.arena, b.sink, &b.records, stops, reason);
-        return .{ .records = b.records.items, .calls = b.calls.items };
+        try api.stopped(b.arena, b.sink, stops, reason);
+        return .{ .calls = b.calls.items };
     }
 };
 
@@ -748,7 +730,6 @@ fn readItem(arena: Allocator, out: *std.ArrayList(doc.Record), item: std.json.Va
         try signature(
             arena,
             out,
-            null,
             str(item.object.get("id")) orelse "",
             str(item.object.get("encrypted_content")) orelse "",
         );
@@ -961,12 +942,16 @@ test "a tool is flat here, where chat completions nests the same schema" {
 const Collect = struct {
     arena: Allocator,
     seen: std.ArrayList(u8) = .empty,
+    /// The same stream, as the records it makes.
+    got: api.Gather = .{ .arena = undefined },
 
     fn sink(self: *Collect) api.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
     }
-    fn openFn(ctx: *anyopaque, s: sigil.Sigil, _: []const u8) anyerror!void {
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
+        self.got.arena = self.arena;
+        self.got.open(s, value);
         if (self.seen.items.len > 0) try self.seen.append(self.arena, '\n');
         try self.seen.appendSlice(self.arena, @tagName(s));
         try self.seen.append(self.arena, ':');
@@ -974,8 +959,12 @@ const Collect = struct {
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
         try self.seen.appendSlice(self.arena, bytes);
+        try self.got.write(bytes);
     }
-    fn closeFn(_: *anyopaque) anyerror!void {}
+    fn closeFn(ctx: *anyopaque) anyerror!void {
+        const self: *Collect = @ptrCast(@alignCast(ctx));
+        _ = try self.got.close();
+    }
 };
 
 test "a streamed reply reads as the items it was made of" {
@@ -1022,18 +1011,16 @@ test "a streamed reply reads as the items it was made of" {
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
 
-    try testing.expectEqual(@as(usize, 4), reply.records.len);
-    try testing.expectEqual(sigil.Sigil.thought, reply.records[0].sigil);
-    try testing.expectEqualStrings("weighing it", reply.records[0].content.?);
+    try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
+    try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[0].sigil);
+    try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
     // The id and the encrypted content follow the thought they sign, in a 💭
     // asking to be kept aside: this api wants both back before it will
     // believe it, and nobody needs to read them.
-    try testing.expectEqualStrings(api.snip, reply.records[1].value);
-    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", reply.records[1].content.?);
-    try testing.expectEqual(sigil.Sigil.bot, reply.records[2].sigil);
-    try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
-    try testing.expectEqual(sigil.Sigil.call, reply.records[3].sigil);
-    try testing.expectEqualStrings("say,call_1", reply.records[3].value);
+    try testing.expectEqualStrings(api.snip, collect.got.records.items[1].value);
+    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", collect.got.records.items[1].content.?);
+    try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
+    try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
 
     // Streamed as it arrived, and the 🔏 when the item that carried it ended.
     // The 📲 did not: a call cannot be shown until it is whole.
@@ -1079,14 +1066,14 @@ test "each summary part is a 💭, and they go back as one item" {
     for ([_][]const u8{ body, at_once }) |got| {
         var r: std.Io.Reader = .fixed(got);
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
-        try testing.expectEqual(@as(usize, 3), reply.records.len);
-        try testing.expectEqualStrings("**Verifying**", reply.records[0].content.?);
-        try testing.expectEqualStrings("**Refining**", reply.records[1].content.?);
-        try testing.expectEqualStrings(api.snip, reply.records[2].value);
+        _ = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
+        try testing.expectEqualStrings("**Verifying**", collect.got.records.items[0].content.?);
+        try testing.expectEqualStrings("**Refining**", collect.got.records.items[1].content.?);
+        try testing.expectEqualStrings(api.snip, collect.got.records.items[2].value);
 
         // Encoded, the parts are one item's summary again, signed once.
-        const request = try encode(arena, reply.records, .{ .model = "gpt-5.5" });
+        const request = try encode(arena, collect.got.records.items, .{ .model = "gpt-5.5" });
         try testing.expect(std.mem.indexOf(u8, request,
             \\"summary":[{"type":"summary_text","text":"**Verifying**"},{"type":"summary_text","text":"**Refining**"}],"encrypted_content":"ENC"
         ) != null);
@@ -1109,11 +1096,10 @@ test "a whole reply reads the same as a streamed one" {
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
 
-    try testing.expectEqual(@as(usize, 4), reply.records.len);
-    try testing.expectEqualStrings("weighing it", reply.records[0].content.?);
-    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", reply.records[1].content.?);
-    try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
-    try testing.expectEqualStrings("say,call_1", reply.records[3].value);
+    try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
+    try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
@@ -1209,10 +1195,10 @@ test "an incomplete response says why last, in this api's own word" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
-    try testing.expectEqual(@as(usize, 2), reply.records.len);
-    try testing.expectEqualStrings("Moon", reply.records[0].content.?);
-    try testing.expectEqualStrings("(cut off at max_output_tokens)", reply.records[1].value);
+    _ = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
+    try testing.expectEqualStrings("Moon", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings("(cut off at max_output_tokens)", collect.got.records.items[1].value);
 }
 
 test "a refusal is what the model said, and says it declined" {
@@ -1241,10 +1227,10 @@ test "a refusal is what the model said, and says it declined" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r: std.Io.Reader = .fixed(body);
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
-        try testing.expectEqual(@as(usize, 2), reply.records.len);
-        try testing.expectEqualStrings("I can't help with that.", reply.records[0].content.?);
-        try testing.expectEqualStrings("(declined with refusal)", reply.records[1].value);
+        _ = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
+        try testing.expectEqualStrings("I can't help with that.", collect.got.records.items[0].content.?);
+        try testing.expectEqualStrings("(declined with refusal)", collect.got.records.items[1].value);
     }
 }
 
@@ -1272,11 +1258,11 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     // Cut off rather than failed: what was said still happened, so it is a
     // reply and not an error — and it says it was cut off, even with no
     // reason given.
-    const reply = try parse(arena, &r, collect.sink());
-    try testing.expectEqual(@as(usize, 3), reply.records.len);
-    try testing.expectEqualStrings("working it through", reply.records[0].content.?);
-    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENC", reply.records[1].content.?);
-    try testing.expectEqual(sigil.Sigil.bot, reply.records[2].sigil);
-    try testing.expectEqualStrings("(stopped at incomplete)", reply.records[2].value);
-    try testing.expect(reply.records[2].content == null);
+    _ = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
+    try testing.expectEqualStrings("working it through", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENC", collect.got.records.items[1].content.?);
+    try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
+    try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[2].value);
+    try testing.expect(collect.got.records.items[2].content == null);
 }

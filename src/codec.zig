@@ -68,9 +68,7 @@ pub const Target = struct {
 /// content, which is also what lets a thought be shown while it is still
 /// being thought.
 ///
-/// A sink is free to keep nothing. What the ledger gets is the reply, not
-/// this: showing and recording are different jobs and only one of them has to
-/// hold the whole thing.
+/// A sink that wants the records keeps them as they close, as `Gather` does.
 pub const Sink = struct {
     ctx: *anyopaque,
     open: *const fn (ctx: *anyopaque, sigil: Sigil, value: []const u8) anyerror!void,
@@ -108,28 +106,71 @@ pub const Call = struct {
     arguments: []const u8,
 };
 
-/// What a response turned out to hold: the records it adds to a ledger, in
-/// the order the model produced them.
+/// What a response held that was not said: the calls it made.
 ///
-/// Handed back as well as streamed, because the ledger needs the whole of
-/// them and a sink is entitled to keep nothing. The calls are carried beside
-/// the records rather than read back out of them: a tool is run from
-/// arguments that are still JSON, and the records hold them rendered.
+/// Everything said went to the sink, in the order the model produced it. A
+/// call is carried here instead because a tool is run from arguments that are
+/// still JSON, and those mean nothing until the last brace.
 pub const Reply = struct {
-    records: []const doc.Record = &.{},
     calls: []const Call = &.{},
+};
+
+/// A sink that keeps the reply as records, for whoever wants it whole.
+pub const Gather = struct {
+    arena: Allocator,
+    records: std.ArrayList(doc.Record) = .empty,
+    pending: Sigil = .bot,
+    value: []const u8 = "",
+    text: std.ArrayList(u8) = .empty,
+
+    pub fn sink(self: *Gather) Sink {
+        return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
+    }
+
+    pub fn open(self: *Gather, s: Sigil, value: []const u8) void {
+        self.pending = s;
+        self.value = value;
+    }
+
+    pub fn write(self: *Gather, bytes: []const u8) !void {
+        try self.text.appendSlice(self.arena, bytes);
+    }
+
+    /// The record just closed, or null for one that said nothing: a codec is
+    /// entitled to open a record and find the model had no more to say.
+    pub fn close(self: *Gather) !?doc.Record {
+        const r: doc.Record = .{
+            .sigil = self.pending,
+            .value = self.value,
+            .content = if (self.text.items.len > 0) self.text.items else null,
+        };
+        self.* = .{ .arena = self.arena, .records = self.records };
+        if (r.content == null and r.value.len == 0) return null;
+        try self.records.append(self.arena, r);
+        return r;
+    }
 
     /// The 🤖 content, joined — what was said, with no account of how it came
     /// to be said. For a caller deciding on the answer rather than recording
-    /// it; a ledger wants `records`, which keeps the 💭 as well.
-    pub fn said(r: Reply, arena: Allocator) ![]const u8 {
+    /// it.
+    pub fn said(self: *const Gather, arena: Allocator) ![]const u8 {
         var out: std.ArrayList(u8) = .empty;
-        for (r.records) |rec| {
+        for (self.records.items) |rec| {
             if (rec.sigil != .bot or rec.content == null) continue;
             if (out.items.len > 0) try out.append(arena, '\n');
             try out.appendSlice(arena, rec.content orelse "");
         }
         return out.items;
+    }
+
+    fn openFn(ctx: *anyopaque, s: Sigil, value: []const u8) anyerror!void {
+        @as(*Gather, @ptrCast(@alignCast(ctx))).open(s, value);
+    }
+    fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
+        try @as(*Gather, @ptrCast(@alignCast(ctx))).write(bytes);
+    }
+    fn closeFn(ctx: *anyopaque) anyerror!void {
+        _ = try @as(*Gather, @ptrCast(@alignCast(ctx))).close();
     }
 };
 
@@ -147,19 +188,17 @@ pub const Stops = std.StaticStringMap([]const u8);
 /// anything wanting to act on it can match without m8 knowing what any of
 /// them mean. A reason a codec has not heard of still reads as stopping.
 ///
-/// Last in the reply, and out to the reader as well as into the records,
-/// because it is said of everything above it.
+/// Last in the reply, because it is said of everything above it.
 pub fn stopped(
     arena: Allocator,
     sink: Sink,
-    records: *std.ArrayList(doc.Record),
     stops: Stops,
     reason: []const u8,
 ) !void {
     if (reason.len == 0) return;
     const how = stops.get(reason) orelse "stopped at";
     if (how.len == 0) return;
-    try stoppedAs(arena, sink, records, how, reason);
+    try stoppedAs(arena, sink, how, reason);
 }
 
 /// The same, with the words chosen by the codec — for a reason that carries
@@ -167,13 +206,10 @@ pub fn stopped(
 pub fn stoppedAs(
     arena: Allocator,
     sink: Sink,
-    records: *std.ArrayList(doc.Record),
     how: []const u8,
     reason: []const u8,
 ) !void {
-    const value = try std.fmt.allocPrint(arena, "({s} {s})", .{ how, reason });
-    try sink.record(.bot, value, "");
-    try records.append(arena, .{ .sigil = .bot, .value = value });
+    try sink.record(.bot, try std.fmt.allocPrint(arena, "({s} {s})", .{ how, reason }), "");
 }
 
 /// The records an api can be told, which is all of them but a 🤖 with nothing

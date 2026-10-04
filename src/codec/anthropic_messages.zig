@@ -440,18 +440,18 @@ fn signatureOn(line: []const u8) ?[]const u8 {
 fn thinking(
     arena: Allocator,
     out: *std.ArrayList(doc.Record),
-    sink: ?api.Sink,
     text: []const u8,
     signature: []const u8,
 ) !void {
     if (text.len > 0) try out.append(arena, .{ .sigil = .thought, .content = text });
     if (signature.len == 0) return;
-    // The spelling every file is written in; a reader is handed whichever one
-    // they are being written.
-    const kept = try std.fmt.allocPrint(arena, "{s}{s}", .{ sigil.Sigil.signature.text(.md), signature });
-    const value = api.snip;
-    if (sink) |s| try s.record(.thought, value, kept);
-    try out.append(arena, .{ .sigil = .thought, .value = value, .content = kept });
+    try out.append(arena, .{ .sigil = .thought, .value = api.snip, .content = try sealed(arena, signature) });
+}
+
+/// A 🔏 as content, in the spelling every file is written in; a reader is
+/// handed whichever one they are being written.
+fn sealed(arena: Allocator, signature: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}{s}", .{ sigil.Sigil.signature.text(.md), signature });
 }
 
 fn callId(value: []const u8) []const u8 {
@@ -605,12 +605,10 @@ fn categoryOf(holder: std.json.Value) []const u8 {
 const Building = struct {
     arena: Allocator,
     sink: api.Sink,
-    records: std.ArrayList(doc.Record) = .empty,
     calls: std.ArrayList(api.Call) = .empty,
 
     kind: Kind = .none,
     shown: bool = false,
-    text: std.ArrayList(u8) = .empty,
     signature: std.ArrayList(u8) = .empty,
     id: []const u8 = "",
     name: []const u8 = "",
@@ -624,7 +622,6 @@ const Building = struct {
     fn start(b: *Building, block: std.json.Value) !void {
         b.kind = .none;
         b.shown = false;
-        b.text = .empty;
         b.signature = .empty;
         b.args = .empty;
         b.id = "";
@@ -667,17 +664,9 @@ const Building = struct {
         return b.say(if (b.kind == .thinking) .thought else .bot, fragment);
     }
 
-    /// Into the record and out to whoever is reading, at once.
+    /// Out to whoever is reading. A record opens on its first byte, so one
+    /// the model left empty never reaches the pipe at all.
     fn say(b: *Building, s: sigil.Sigil, fragment: []const u8) !void {
-        if (fragment.len == 0) return;
-        try b.text.appendSlice(b.arena, fragment);
-        try b.show(s, fragment);
-    }
-
-    /// Out to the reader alone, for the part of a record that is built rather
-    /// than streamed. A record opens on its first byte, so one the model left
-    /// empty never reaches the pipe at all.
-    fn show(b: *Building, s: sigil.Sigil, fragment: []const u8) !void {
         if (fragment.len == 0) return;
         if (!b.shown) {
             try b.sink.begin(s, "");
@@ -688,26 +677,18 @@ const Building = struct {
 
     fn stop(b: *Building) !void {
         switch (b.kind) {
-            .none => {},
-            .text => try b.records.append(b.arena, .{
-                .sigil = .bot,
-                .content = b.text.items,
-            }),
+            .none, .text => {},
             .thinking => {
                 // The text has already streamed; its 💭 closes before the
                 // 🔏 is written as a record of its own, known only now the
                 // block has ended.
                 if (b.shown) try b.sink.end();
                 b.shown = false;
-                try thinking(b.arena, &b.records, b.sink, b.text.items, b.signature.items);
+                if (b.signature.items.len > 0)
+                    try b.sink.record(.thought, api.snip, try sealed(b.arena, b.signature.items));
             },
             .tool_use => {
                 const raw = if (b.args.items.len == 0) "{}" else b.args.items;
-                try b.records.append(b.arena, .{
-                    .sigil = .call,
-                    .value = try std.fmt.allocPrint(b.arena, "{s},{s}", .{ b.name, b.id }),
-                    .content = try toolbox.renderArgs(b.arena, .md, raw),
-                });
                 try b.calls.append(b.arena, .{
                     .id = b.id,
                     .name = b.name,
@@ -728,11 +709,11 @@ const Building = struct {
         if (b.category.len > 0 and std.mem.eql(u8, b.reason, "refusal")) {
             // Which policy, in its own word, ahead of the reason's.
             const how = try std.fmt.allocPrint(b.arena, "declined by {s}", .{b.category});
-            try api.stoppedAs(b.arena, b.sink, &b.records, how, b.reason);
+            try api.stoppedAs(b.arena, b.sink, how, b.reason);
         } else {
-            try api.stopped(b.arena, b.sink, &b.records, stops, b.reason);
+            try api.stopped(b.arena, b.sink, stops, b.reason);
         }
-        return .{ .records = b.records.items, .calls = b.calls.items };
+        return .{ .calls = b.calls.items };
     }
 };
 
@@ -829,7 +810,6 @@ fn readBlock(
         try thinking(
             arena,
             out,
-            null,
             str(block.object.get("thinking")) orelse "",
             str(block.object.get("signature")) orelse "",
         );
@@ -1064,12 +1044,16 @@ test "a thought goes out only when it is signed" {
 const Collect = struct {
     arena: Allocator,
     seen: std.ArrayList(u8) = .empty,
+    /// The same stream, as the records it makes.
+    got: api.Gather = .{ .arena = undefined },
 
     fn sink(self: *Collect) api.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
     }
-    fn openFn(ctx: *anyopaque, s: sigil.Sigil, _: []const u8) anyerror!void {
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
+        self.got.arena = self.arena;
+        self.got.open(s, value);
         if (self.seen.items.len > 0) try self.seen.append(self.arena, '\n');
         try self.seen.appendSlice(self.arena, @tagName(s));
         try self.seen.append(self.arena, ':');
@@ -1077,8 +1061,12 @@ const Collect = struct {
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
         try self.seen.appendSlice(self.arena, bytes);
+        try self.got.write(bytes);
     }
-    fn closeFn(_: *anyopaque) anyerror!void {}
+    fn closeFn(ctx: *anyopaque) anyerror!void {
+        const self: *Collect = @ptrCast(@alignCast(ctx));
+        _ = try self.got.close();
+    }
 };
 
 test "a streamed reply reads as the blocks it was made of" {
@@ -1128,18 +1116,16 @@ test "a streamed reply reads as the blocks it was made of" {
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
 
-    try testing.expectEqual(@as(usize, 4), reply.records.len);
-    try testing.expectEqual(sigil.Sigil.thought, reply.records[0].sigil);
-    try testing.expectEqualStrings("weighing it", reply.records[0].content.?);
+    try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
+    try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[0].sigil);
+    try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
     // The signature follows the thought it signs, in a 💭 asking to be kept
     // aside, so the reply can be sent back and believed without being read.
-    try testing.expectEqual(sigil.Sigil.thought, reply.records[1].sigil);
-    try testing.expectEqualStrings(api.snip, reply.records[1].value);
-    try testing.expectEqualStrings(":lock_with_ink_pen:abc123", reply.records[1].content.?);
-    try testing.expectEqual(sigil.Sigil.bot, reply.records[2].sigil);
-    try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
-    try testing.expectEqual(sigil.Sigil.call, reply.records[3].sigil);
-    try testing.expectEqualStrings("say,toolu_1", reply.records[3].value);
+    try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[1].sigil);
+    try testing.expectEqualStrings(api.snip, collect.got.records.items[1].value);
+    try testing.expectEqualStrings(":lock_with_ink_pen:abc123", collect.got.records.items[1].content.?);
+    try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
+    try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
 
     // 💭 and 🤖 reached the reader as they arrived, and the 🔏 when the block
     // that carried it ended. The 📲 did not: a call cannot be shown until it
@@ -1173,11 +1159,10 @@ test "a whole reply reads the same as a streamed one" {
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
 
-    try testing.expectEqual(@as(usize, 4), reply.records.len);
-    try testing.expectEqualStrings("weighing it", reply.records[0].content.?);
-    try testing.expectEqualStrings(":lock_with_ink_pen:abc123", reply.records[1].content.?);
-    try testing.expectEqualStrings("Let me look.", reply.records[2].content.?);
-    try testing.expectEqualStrings("say,toolu_1", reply.records[3].value);
+    try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
+    try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:abc123", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
@@ -1219,10 +1204,10 @@ test "a message cut off says so last, in this api's own word" {
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
     const reply = try parse(arena, &r, collect.sink());
-    try testing.expectEqual(@as(usize, 3), reply.records.len);
+    try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
     try testing.expectEqual(@as(usize, 1), reply.calls.len);
-    try testing.expectEqualStrings("(cut off at max_tokens)", reply.records[2].value);
-    try testing.expect(reply.records[2].content == null);
+    try testing.expectEqualStrings("(cut off at max_tokens)", collect.got.records.items[1].value);
+    try testing.expect(collect.got.records.items[1].content == null);
 
     // Whole, each reason in its own words; one never heard of still reads as
     // stopping, and finishing says nothing.
@@ -1240,12 +1225,12 @@ test "a message cut off says so last, in this api's own word" {
         , .{c[0]});
         var wr: std.Io.Reader = .fixed(whole_body);
         var wc: Collect = .{ .arena = arena };
-        const got = try parse(arena, &wr, wc.sink());
+        _ = try parse(arena, &wr, wc.sink());
         if (c[1]) |want| {
-            try testing.expectEqual(@as(usize, 1), got.records.len);
-            try testing.expectEqualStrings(want, got.records[0].value);
+            try testing.expectEqual(@as(usize, 1), wc.got.records.items.len);
+            try testing.expectEqualStrings(want, wc.got.records.items[0].value);
         } else {
-            try testing.expectEqual(@as(usize, 0), got.records.len);
+            try testing.expectEqual(@as(usize, 0), wc.got.records.items.len);
         }
     }
 }
@@ -1269,9 +1254,9 @@ test "a refusal names its policy, ahead of the reason's own word" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r: std.Io.Reader = .fixed(body);
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
-        try testing.expectEqual(@as(usize, 1), reply.records.len);
-        try testing.expectEqualStrings("(declined by bio refusal)", reply.records[0].value);
+        _ = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
+        try testing.expectEqualStrings("(declined by bio refusal)", collect.got.records.items[0].value);
     }
 }
 

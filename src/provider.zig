@@ -384,16 +384,25 @@ test "a command is found the way a shell would find it" {
 const Collect = struct {
     arena: Allocator,
     seen: std.ArrayList(u8) = .empty,
+    got: codec.Gather = .{ .arena = undefined },
 
     fn sink(self: *Collect) codec.Sink {
         return .{ .ctx = self, .open = openFn, .write = writeFn, .close = closeFn };
     }
-    fn openFn(_: *anyopaque, _: sigil.Sigil, _: []const u8) anyerror!void {}
+    fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
+        const self: *Collect = @ptrCast(@alignCast(ctx));
+        self.got.arena = self.arena;
+        self.got.open(s, value);
+    }
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *Collect = @ptrCast(@alignCast(ctx));
         try self.seen.appendSlice(self.arena, bytes);
+        try self.got.write(bytes);
     }
-    fn closeFn(_: *anyopaque) anyerror!void {}
+    fn closeFn(ctx: *anyopaque) anyerror!void {
+        const self: *Collect = @ptrCast(@alignCast(ctx));
+        _ = try self.got.close();
+    }
 };
 
 test "a provider is a command: what it writes is the answer" {
@@ -418,8 +427,8 @@ test "a provider is a command: what it writes is the answer" {
         collect.sink(),
         &thrown.writer,
     );
-    try testing.expectEqualStrings("said it", try reply.said(arena));
-    // Streamed as well as returned, which is what a terminal watches.
+    try testing.expectEqualStrings("said it", try collect.got.said(arena));
+    // Streamed as bytes too, which is what a terminal watches.
     try testing.expectEqualStrings("said it", collect.seen.items);
     try testing.expectEqual(@as(usize, 0), reply.calls.len);
 }
@@ -482,7 +491,7 @@ test "everything the entry said reaches the command, and nothing else does" {
 
     var thrown: std.Io.Writer.Allocating = .init(arena);
     var collect: Collect = .{ .arena = arena };
-    const reply = try run(
+    _ = try run(
         arena,
         io,
         &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> %s\n' \"$M8_PROVIDER_URL\"" },
@@ -492,5 +501,5 @@ test "everything the entry said reaches the command, and nothing else does" {
         collect.sink(),
         &thrown.writer,
     );
-    try testing.expectEqualStrings("http://x/v1/chat/completions", try reply.said(arena));
+    try testing.expectEqualStrings("http://x/v1/chat/completions", try collect.got.said(arena));
 }

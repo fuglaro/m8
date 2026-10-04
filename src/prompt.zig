@@ -73,7 +73,13 @@ pub fn run(ctx: Ctx, args: []const []const u8) !u8 {
 
     var inner = ctx;
     inner.in = assembled.document;
-    var keeping: Keeping = .{ .arena = arena, .io = io, .dirs = dirs, .a = a };
+    var keeping: Keeping = .{
+        .arena = arena,
+        .io = io,
+        .dirs = dirs,
+        .a = a,
+        .home = try address.home(arena, io, dirs, a, lead[0].value),
+    };
     const turn = try converse.run(inner, .{ .keep = keeping.keeper() });
     // A run that added nothing was handed nothing to keep, and what was said
     // to it is still a turn.
@@ -92,10 +98,13 @@ const Keeping = struct {
     io: std.Io,
     dirs: []const []const u8,
     a: address.Address,
+    /// Where every piece of this run is kept: each continues the one before
+    /// it, so the folder the first goes in is the folder they all do.
+    home: []const u8,
     last: ?[]const u8 = null,
 
     fn keeper(self: *Keeping) converse.Keeper {
-        return .{ .ctx = self, .keep = keep };
+        return .{ .ctx = self, .home = self.home, .keep = keep };
     }
 
     fn keep(ctx: *anyopaque, piece: []const doc.Record) anyerror![]const u8 {

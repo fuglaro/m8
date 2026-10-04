@@ -39,22 +39,31 @@ pub const snip = "snip";
 /// one never does, so the two can never be taken for each other.
 pub const snip_prefix = "snip-";
 
-/// A fresh short reference for a snip, allocated before its content arrives.
+/// A fresh short reference for a snip.
 pub fn newSnip(arena: Allocator, io: std.Io) ![]const u8 {
     return std.fmt.allocPrint(arena, "{s}{s}", .{ snip_prefix, &newId(io) });
 }
 
-pub fn snipPath(arena: Allocator, io: std.Io, folder: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, try newSnip(arena, io) });
+/// Keep `content` as a new snip in `folder`, and say what it is called.
+///
+/// The snip holds the `💭snip` a codec wrote, so the 🧠 naming it reads back
+/// as exactly that, and keeping what was read keeps it aside again.
+pub fn keepSnip(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    folder: []const u8,
+    content: []const u8,
+) ![]const u8 {
+    if (dirs.len == 0) return Error.NoConfigDir;
+    const name = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, try newSnip(arena, io) });
+    try writeFile(arena, io, dirs, name, &.{.{ .sigil = .thought, .value = snip, .content = content }});
+    return name;
 }
 
-/// The snip a persisted 💭 names, or null for none.
-pub fn snipOf(r: doc.Record) ?[]const u8 {
-    if (r.sigil != .thought) return null;
-    if (std.mem.startsWith(u8, r.value, snip_prefix)) return r.value;
-    const at = std.mem.lastIndexOf(u8, r.value, "/+/") orelse return null;
-    const name = r.value[at + 3 ..];
-    return if (std.mem.startsWith(u8, name, snip_prefix)) name else null;
+/// Whether a record asks for what it holds to be kept aside.
+pub fn isSnip(r: doc.Record) bool {
+    return r.sigil == .thought and r.content != null and std.mem.eql(u8, r.value, snip);
 }
 
 /// The main chat. A pointer with no chat folder around it, so on disk it sits
@@ -228,9 +237,9 @@ fn newId(io: std.Io) [id_len]u8 {
 
 /// Write `records` as the file called `name`, in the nearest config directory.
 ///
-/// A turn's `💭snip` is kept first: what it holds goes to the snip it names,
-/// beside the turn, and the turn keeps only the path. Which thoughts
-/// ask is the codec's decision; that they are kept is this.
+/// A turn's `💭snip` is kept first: what it holds goes to a snip beside the
+/// turn, and the turn keeps only the 🧠 naming it. Which thoughts ask is the
+/// codec's decision; that they are kept is this.
 pub fn write(
     arena: Allocator,
     io: std.Io,
@@ -243,8 +252,8 @@ pub fn write(
     return writeFile(arena, io, dirs, name, kept);
 }
 
-/// The records with every `💭snip` written to its snip, and left holding the
-/// persisted path.
+/// The records with every `💭snip` written to a snip, and the 🧠 naming it
+/// left in its place.
 fn keepAside(
     arena: Allocator,
     io: std.Io,
@@ -254,22 +263,10 @@ fn keepAside(
 ) ![]const doc.Record {
     const folder = std.fs.path.dirname(turn) orelse history;
     var out: std.ArrayList(doc.Record) = .empty;
-    for (records) |r| {
-        const content = r.content orelse {
-            try out.append(arena, r);
-            continue;
-        };
-        const name = if (r.sigil == .thought and std.mem.eql(u8, r.value, snip))
-            try newSnip(arena, io)
-        else
-            snipOf(r) orelse {
-                try out.append(arena, r);
-                continue;
-            };
-        const path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, name });
-        try writeFile(arena, io, dirs, path, &.{.{ .sigil = .thought, .content = content }});
-        try out.append(arena, .{ .sigil = .thought, .value = path });
-    }
+    for (records) |r| try out.append(arena, if (isSnip(r))
+        .{ .sigil = .agent, .value = try keepSnip(arena, io, dirs, folder, r.content.?) }
+    else
+        r);
     return out.items;
 }
 
