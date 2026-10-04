@@ -34,7 +34,6 @@ pub const command: api.Command = .{
     .summary = "change a file, or append to one",
     .takes = .nothing,
     .run = run,
-    .help = help,
 };
 
 const max_file = 16 * 1024 * 1024;
@@ -49,7 +48,6 @@ const default_tolerance = 25;
 
 const options = [_]opts.Option{
     .{ .name = "old" },
-    .{ .name = "new" },
     .{ .name = "pages" },
     .{ .name = "tolerance", .kind = .number },
     .{ .name = "dry-run", .kind = .flag },
@@ -58,11 +56,11 @@ const options = [_]opts.Option{
 };
 
 fn run(ctx: Ctx) !u8 {
-    const given = (try opts.parse(ctx, "write", &options, 1)) orelse return 1;
+    const given = (try opts.parse(ctx, "write", &options, 2)) orelse return 1;
     if (given.words.len == 0) return failure(ctx, "no path given", .{});
     const path = given.words[0];
     const old_string = given.text("old") orelse "";
-    const new_string = given.text("new") orelse "";
+    const new_string = if (given.words.len > 1) given.words[1] else "";
     const allowed = given.number("tolerance") orelse default_tolerance;
     const dry_run = given.flag("dry-run");
 
@@ -870,43 +868,6 @@ fn failure(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
     try ctx.err.print("FAILED: " ++ fmt ++ "\n", args);
     try ctx.err.flush();
     return 1;
-}
-
-fn help(ctx: Ctx, w: *std.Io.Writer) !void {
-    _ = ctx;
-    try w.writeAll(
-        \\m8 munge write — change a file, or append to one
-        \\
-        \\  m8 munge write [OPTIONS] [--] PATH
-        \\
-        \\  PATH              the file to change or create
-        \\  --old TEXT        what to replace; omitted or empty, this appends
-        \\  --new TEXT        what to put there; omitted or empty, this removes
-        \\  --pages RANGE     a range the matches must start in
-        \\  --tolerance N     percentage of anchored block lines allowed to
-        \\                    differ                           (default 25)
-        \\  --dry-run         show the proposed diff without writing
-        \\  --page-lines N    page line target                 (default 100)
-        \\  --page-bytes N    page byte target                 (default 10000)
-        \\
-        \\The page settings are `read`'s, and they belong here for the same
-        \\reason: `pages` is counted off pages of that size, and a line number
-        \\pasted on the front of a line is believed within one page of where
-        \\the line actually sits.
-        \\
-        \\A replacement that matches twice is refused whenever either side of
-        \\it spans lines, because choosing between two blocks is not this
-        \\tool's to do — name a page instead.
-        \\
-        \\Matching forgives, in order: nothing, indentation, all whitespace, an
-        \\argument the model over-encoded, a line number pasted on the front,
-        \\and the configured percentage of a block once its ends hold (25% by
-        \\default). An end has to carry
-        \\eight characters to be worth anchoring on. Whatever was forgiven is
-        \\named in the receipt. An over-encoded --old is taken to mean an
-        \\over-encoded --new, and both are put back.
-        \\
-    );
 }
 
 // ---------------------------------------------------------------- tests

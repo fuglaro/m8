@@ -20,89 +20,135 @@
 
 const std = @import("std");
 const api = @import("api.zig");
+const opts = @import("munge/opts.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "munge",
     .summary = "read, search and change files, addressed in pages",
-    // Every tool under here is spawned with nothing on stdin.
+    // Every command under here is spawned with nothing on stdin.
     .takes = .nothing,
     .run = run,
     .help = help,
 };
 
-const operations = [_]api.Command{
-    @import("munge/read.zig").command,
-    @import("munge/write.zig").command,
-    @import("munge/scan.zig").command,
-};
-
-pub fn find(name: []const u8) ?api.Command {
-    for (operations) |s| if (std.mem.eql(u8, s.name, name)) return s;
+fn find(name: []const u8) ?*const fn (Ctx) anyerror!u8 {
+    if (std.mem.eql(u8, name, "read")) return @import("munge/read.zig").command.run;
+    if (std.mem.eql(u8, name, "write")) return @import("munge/write.zig").command.run;
+    if (std.mem.eql(u8, name, "scan")) return @import("munge/scan.zig").command.run;
     return null;
 }
 
+const global_options = [_]opts.Option{
+    .{ .name = "pages" },
+    .{ .name = "page-lines", .kind = .number },
+    .{ .name = "page-bytes", .kind = .number },
+};
+
 fn run(ctx: Ctx) !u8 {
-    // Naming neither is somebody finding out what is here, which is a page
-    // they asked for rather than a mistake.
-    if (ctx.args.len == 0) {
+    // Global options belong before the operation, as they do in a traditional
+    // command ("munge --page-lines 50 read file").  Stop at the operation so
+    // its options remain its own business.
+    var command_at: usize = 0;
+    while (command_at < ctx.args.len and
+        !std.mem.eql(u8, ctx.args[command_at], "--") and
+        std.mem.startsWith(u8, ctx.args[command_at], "--"))
+    {
+        // All munge-level options currently take a separate value.
+        command_at = @min(ctx.args.len, command_at + 2);
+    }
+
+    var global_ctx = ctx;
+    global_ctx.args = ctx.args[0..command_at];
+    _ = (try opts.parse(global_ctx, "munge", &global_options, 0)) orelse return 1;
+    if (command_at == ctx.args.len) {
         try help(ctx, ctx.out);
         try ctx.out.flush();
         return 0;
     }
 
-    const which = ctx.args[0];
+    const which = ctx.args[command_at];
     const sub = find(which) orelse {
-        try ctx.err.print("m8 munge: no tool named '{s}'\n", .{which});
+        try ctx.err.print("m8 munge: no command named '{s}'\n", .{which});
         try help(ctx, ctx.err);
         try ctx.err.flush();
         return 1;
     };
 
-    var inner = ctx;
-    inner.args = ctx.args[1..];
+    // There is one help boundary for this command, including when a user
+    // spells the operation before --help.
+    if (command_at + 1 < ctx.args.len and std.mem.eql(u8, ctx.args[command_at + 1], "--help")) {
+        try help(ctx, ctx.out);
+        try ctx.out.flush();
+        return 0;
+    }
 
-    // The one help page belongs to `munge` and documents all three
-    // operations, so an operation has no `--help` of its own to answer.
-    return sub.run(inner);
+    // Pass the already validated global values to the operation in its normal
+    // option spelling.  The operation parsers retain these two entries as an
+    // implementation detail; users see them only at the munge level.
+    var forwarded: std.ArrayList([]const u8) = .empty;
+    try forwarded.appendSlice(ctx.arena, ctx.args[0..command_at]);
+    try forwarded.appendSlice(ctx.arena, ctx.args[command_at + 1 ..]);
+
+    var inner = ctx;
+    inner.args = forwarded.items;
+    return sub(inner);
 }
 
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
     try w.writeAll(
-        \\m8 munge — files, addressed in pages
+        \\m8 munge - read, search and change files in pages
         \\
-        \\  m8 munge --help        this page, including every operation
-        \\  m8 munge TOOL [ARGS]   one of the operations below
+        \\Usage: m8 munge [OPTIONS] COMMAND [COMMAND-OPTIONS] ARGS
+        \\
+        \\Options:
+        \\  --page-lines N      page line target (default 100)
+        \\  --page-bytes N      page byte target (default 10000)
+        \\  --pages RANGE       select pages (for example 11-20 or 2@anchor)
+        \\
+        \\Commands:
         \\
     );
-    try w.writeAll("\ntools:\n\n");
-    for (operations) |s| try w.print("  {s: <8} {s}\n", .{ s.name, s.summary });
+    try w.writeAll(
+        \\  read     read a file or list a directory
+        \\  write    change a file, or append to one
+        \\  scan     search files for a pattern, answered in pages
+    );
     try w.writeAll(
         \\
-        \\Each takes options as `--name VALUE` or `--name=VALUE`, and `--` ends
-        \\them, so a path or a glob may begin with a dash.
+        \\Each command has its own options
         \\
-        \\A page is about 100 lines, or 10000 characters where lines are long,
-        \\and it is what every answer here is addressed in. Nothing is ever
-        \\asserted against a page: it says which part of a file is being talked
-        \\about, and the strings read out of it carry the precision.
+        \\read:
+        \\  read PATH           read a file or list a directory
+        \\  --byte-cap N        maximum answer size
+        \\
+        \\write:
+        \\  write PATH TEXT     replace or append file content
+        \\  --old TEXT          text to match (if replacing) with fallback forgiveness on
+        \\                      indentation, whitespace, over-encoded \, a line-num prefix,
+        \\                      block-content tolerance between 8-char+ outer anchor lines;
+        \\                      only single line edits may match many.
+        \\  --tolerance N       % of anchored block lines allowed to differ (default 25)
+        \\  --dry-run           view diff without making changes
+        \\
+        \\scan:
+        \\  scan                search files
+        \\  --glob GLOB         file path matching
+        \\  --regex PATTERN     grep per-line on perl-style regex no backrefs no lookaround
+        \\  --byte-cap N        maximum answer size
+        \\
+        \\Answers are addressed in pages; page sizes are shared so a read,
+        \\scan and write refer to the same coordinates.
         \\
     );
-
-    // These operations are implementation details of one tool, not commands
-    // or split programs. Their pages are collected here so the tool has one
-    // help boundary.
-    for (operations) |s| {
-        try w.writeAll("\n――――――――――――――――――――――――――――――――――――――――――――――――\n\n");
-        try @import("help.zig").write(ctx, s, w);
-    }
 }
 
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
 
-test "the tools are reached under munge and nowhere else" {
+test "the commands are reached under munge and nowhere else" {
     const cmd = @import("../command.zig");
 
     try testing.expect(find("read") != null);
@@ -116,13 +162,4 @@ test "the tools are reached under munge and nowhere else" {
     try testing.expect(cmd.find("read") == null);
     try testing.expect(cmd.byPath(&.{ "munge", "read" }) == null);
     try testing.expectEqual(@as(usize, 0), cmd.byPath(&.{"munge"}).?.children.len);
-}
-
-test "every tool under munge has a name, a summary and a page" {
-    for (operations) |s| {
-        try testing.expect(s.name.len > 0);
-        try testing.expect(s.summary.len > 0);
-        try testing.expect(s.help != null);
-        try testing.expect(s.takes == .nothing);
-    }
 }

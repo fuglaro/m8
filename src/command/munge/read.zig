@@ -27,7 +27,6 @@ pub const command: api.Command = .{
     // A tool is spawned with nothing on stdin. There is no document here.
     .takes = .nothing,
     .run = run,
-    .help = help,
 };
 
 /// A page ends on whichever of these comes first. Lines keep a page roughly
@@ -563,32 +562,6 @@ fn refuse(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
     try ctx.err.print("Denied - " ++ fmt ++ "\n", args);
     try ctx.err.flush();
     return 1;
-}
-
-fn help(ctx: Ctx, w: *std.Io.Writer) !void {
-    _ = ctx;
-    try w.writeAll(
-        \\m8 munge read — a file in pages, or a directory's content
-        \\
-        \\  m8 munge read [OPTIONS] [--] PATH
-        \\
-        \\  PATH              the file or directory to read
-        \\  --pages RANGE     "11-20", or "2@anchor" for pages at a match
-        \\  --page-lines N    page line target                 (default 100)
-        \\  --page-bytes N    page byte target                 (default 10000)
-        \\  --byte-cap N      answer byte target, whole pages  (default 20000)
-        \\
-        \\A file page is about 100 lines, or 10000 characters when lines are
-        \\long. Directory pages use the same settings to group sorted entries
-        \\and their metadata into pages.
-        \\Both tools are this command: a directory answers with its content, a
-        \\file with its pages, whichever name was called.
-        \\
-        \\Answers end with where they landed and examples for using `pages` to
-        \\continue or refocus when more remains. A range is read as generously as it
-        \\can be — "10 to 12", "p11-20" and "21+" all name something.
-        \\
-    );
 }
 
 // ---------------------------------------------------------------- tests

@@ -1,10 +1,9 @@
 //! The command line a munge operation takes, read the way one usually is.
 //!
-//!   --name VALUE    --name=VALUE    --flag    --    WORD
+//!   --name VALUE    --flag    WORD
 //!
 //! A value is whatever follows its option, dash or not, so a replacement may
-//! say anything. Everything after `--` is a word, so a path or a glob may
-//! begin with a dash too.
+//! say anything.
 
 const std = @import("std");
 const api = @import("../api.zig");
@@ -50,31 +49,24 @@ pub fn parse(ctx: Ctx, op: []const u8, options: []const Option, max_words: usize
     var words: std.ArrayList([]const u8) = .empty;
 
     var i: usize = 0;
-    var literal = false;
     while (i < ctx.args.len) : (i += 1) {
         const word = ctx.args[i];
-        if (literal or !std.mem.startsWith(u8, word, "--")) {
+        if (!std.mem.startsWith(u8, word, "--")) {
             try words.append(ctx.arena, word);
             continue;
         }
-        if (word.len == 2) {
-            literal = true;
-            continue;
-        }
 
-        const cut = std.mem.indexOfScalar(u8, word, '=');
-        const name = word[2 .. cut orelse word.len];
+        const name = word[2..];
         const at = for (options, 0..) |o, n| {
             if (std.mem.eql(u8, o.name, name)) break n;
         } else return wrong(ctx, op, "no option '--{s}'", .{name});
 
         if (options[at].kind == .flag) {
-            if (cut != null) return wrong(ctx, op, "'--{s}' takes no value", .{name});
             values[at] = "";
             continue;
         }
 
-        const value = if (cut) |c| word[c + 1 ..] else blk: {
+        const value = blk: {
             i += 1;
             if (i == ctx.args.len) return wrong(ctx, op, "'--{s}' needs a value", .{name});
             break :blk ctx.args[i];
@@ -124,13 +116,13 @@ fn read(arena: std.mem.Allocator, err: *std.Io.Writer, args: []const []const u8,
     }, "read", &sample, max_words);
 }
 
-test "options are read in either spelling, and words are what is left" {
+test "options take a separate value, and words are what is left" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
     var err: std.Io.Writer.Allocating = .init(arena);
 
-    const got = (try read(arena, &err.writer, &.{ "--pages", "2-3", "a.md", "--byte-cap=50", "--dry-run" }, 1)).?;
+    const got = (try read(arena, &err.writer, &.{ "--pages", "2-3", "a.md", "--byte-cap", "50", "--dry-run" }, 1)).?;
     try testing.expectEqualStrings("2-3", got.text("pages").?);
     try testing.expectEqual(@as(usize, 50), got.number("byte-cap").?);
     try testing.expect(got.flag("dry-run"));
@@ -143,16 +135,14 @@ test "options are read in either spelling, and words are what is left" {
     try testing.expect(!bare.flag("dry-run"));
 }
 
-test "a value may say anything, and -- ends the options" {
+test "option values may look like options" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
     var err: std.Io.Writer.Allocating = .init(arena);
 
-    // What follows an option is its value, however much it looks like one.
-    const dashed = (try read(arena, &err.writer, &.{ "--pages", "--byte-cap", "--", "--pages" }, 1)).?;
+    const dashed = (try read(arena, &err.writer, &.{ "--pages", "--byte-cap" }, 0)).?;
     try testing.expectEqualStrings("--byte-cap", dashed.text("pages").?);
-    try testing.expectEqualStrings("--pages", dashed.words[0]);
 
     // Empty is a value that was given, not one that was left out.
     const empty = (try read(arena, &err.writer, &.{ "--pages", "" }, 1)).?;

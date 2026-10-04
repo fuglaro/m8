@@ -11,7 +11,7 @@
 > > Read the contents of a text file.
 > > Read the whole file, or use pages to read a range at a time
 > > or a number of pages starting at a string match anchor.
-> `m8` `call` `m8` `munge` `read` `{{pages}}` `--` `{{path|}}`
+> `m8` `call` `m8` `munge` `{{pages}}` `read` `{{path|}}`
 > * path string
 >   Path of the file to read (relative, absolute, or ~).
 > * pages? string
@@ -32,7 +32,7 @@
 > > Attempt exact matches to avoid falling below match tolerance.
 > > Must only match once if using multiple lines to replace.
 > > Pages may be used to scope matches.
-> `m8` `call` `m8` `munge` `write` `{{old_string|--old}}` `{{new_string|--new}}` `{{pages}}` `--` `{{path|}}`
+> `m8` `call` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `{{path|}}` `{{new_string|}}`
 > * path string
 >   Path of the file to edit or create (relative, absolute, or ~).
 > * old_string? string
@@ -48,7 +48,7 @@
 > > Grep search inside files matching a glob.
 > > Glob descent skips hidden path components unless named explicitly.
 > > Omitting regex will just glob files.
-> `m8` `call` `m8` `munge` `scan` `{{regex}}` `{{pages}}` `--` `{{glob|}}`
+> `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `{{glob}}`
 > * regex? string
 >   Regex to search with using a Perl-style pattern (no
 >   backrefs, lookaround, or multi-line matching).

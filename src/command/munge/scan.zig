@@ -34,12 +34,12 @@ pub const command: api.Command = .{
     .summary = "search files for a pattern, answered in pages",
     .takes = .nothing,
     .run = run,
-    .help = help,
 };
 
 const default_byte_cap = 20000;
 
 const options = [_]opts.Option{
+    .{ .name = "glob" },
     .{ .name = "regex" },
     .{ .name = "pages" },
     .{ .name = "page-lines", .kind = .number },
@@ -56,9 +56,9 @@ fn run(ctx: Ctx) !u8 {
     // glob is a search of everything, a glob with no pattern is a question
     // about which files exist, and both together are the search that was
     // asked for. An empty one is one that was not given.
-    const given = (try opts.parse(ctx, "scan", &options, 1)) orelse return 1;
+    const given = (try opts.parse(ctx, "scan", &options, 0)) orelse return 1;
     const pattern = nonEmpty(given.text("regex"));
-    const glob = nonEmpty(if (given.words.len > 0) given.words[0] else null) orelse everything;
+    const glob = nonEmpty(given.text("glob")) orelse everything;
     const cap = given.number("byte-cap") orelse default_byte_cap;
     const page_config = read.pageConfig(given);
 
@@ -553,37 +553,6 @@ fn failure(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
     try ctx.err.print("[FAILED: " ++ fmt ++ "]\n", args);
     try ctx.err.flush();
     return 1;
-}
-
-fn help(ctx: Ctx, w: *std.Io.Writer) !void {
-    _ = ctx;
-    try w.writeAll(
-        \\m8 munge scan — search files for a pattern, answered in pages
-        \\
-        \\  m8 munge scan [OPTIONS] [--] [GLOB]
-        \\
-        \\  GLOB              which files, with ** and * and ? and {a,b}
-        \\  --regex PATTERN   matched within one line at a time
-        \\  --pages RANGE     results page range, e.g. "2-4"
-        \\  --page-lines N    page line target                   (default 100)
-        \\  --page-bytes N    page byte target                   (default 10000)
-        \\  --byte-cap N      answer byte target, whole results  (default 20000)
-        \\
-        \\Neither is required. Without a glob a pattern searches everything below
-        \\here; without a pattern a glob asks the other question — which files it
-        \\names — and answers with the same lines, without the matches under them.
-        \\
-        \\The pattern has literals, ., [a-z], [[:alpha:]], the \d \w \s family,
-        \\^ $ \b \B, alternation, groups, * + ? {n} {n,} {n,m}, lazy repeats and
-        \\(?i). No backreferences, no lookaround, and no matching across lines.
-        \\A construct it does not have is named rather than guessed at.
-        \\
-        \\Each match group names its file, source-file page, and line. Results
-        \\pages contain whole source-page groups; a group that resumes a file
-        \\repeats its context and names the page it follows. Results page
-        \\numbers are distinct from source-file page numbers.
-        \\
-    );
 }
 
 // ---------------------------------------------------------------- tests
