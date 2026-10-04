@@ -290,11 +290,12 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\A whole argument naming a call variable becomes whole argv elements:
         \\
-        \\  {{M8_ARG_COMMAND}}       --command VALUE
-        \\  {{M8_ARG_COMMAND|-c}}    -c VALUE
-        \\  {{M8_ARG_COMMAND|}}      VALUE
-        \\  {{M8_ARG_DEEP?--deep}}   --deep, only when exactly true
-        \\  {{M8_ARGS}}              the whole call as JSON, one argument
+        \\  {{command}}       --command VALUE
+        \\  {{command|-c}}    -c VALUE
+        \\  {{command|}}      VALUE
+        \\  {{deep?--deep}}   --deep, only when exactly true
+        \\  {{}}              -- followed by the whole call as JSON
+        \\  {{|}}             the whole call as JSON, without a flag
         \\
         \\An unset variable leaves nothing behind. An empty one remains an empty
         \\argument. A placeholder is a whole word, so its value cannot become

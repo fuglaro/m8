@@ -5,37 +5,37 @@
 > `m8` `shield` `ask` `--`
 
 #### :shield:secure
-> `bash` `-e` `-c` `exec {{M8}} shield secure "${M8_ARG_SECURES}" -- "$@"` `bash`
+> `bash` `-e` `-c` `exec {{M8}} shield secure "${__secures__}" -- "$@"` `bash`
 
 #### :shield:check
-> `bash` `-e` `-c` `exec {{M8}} shield check "${M8_ARG_CHECKS}" -- "$@"` `bash`
+> `bash` `-e` `-c` `exec {{M8}} shield check "${__checks__}" -- "$@"` `bash`
 
 #### :shield:contain-reads
-> :shield:secure SECURES contain-reads
+> :shield:secure secures contain-reads
 
 #### :shield:private
-> :shield:secure SECURES private
+> :shield:secure secures private
 
 #### :shield:contain-writes
-> :shield:secure SECURES contain-writes
+> :shield:secure secures contain-writes
 
 #### :shield:no-writes
-> :shield:secure SECURES no-writes
+> :shield:secure secures no-writes
 
 #### :shield:airgap
-> :shield:secure SECURES airgap
+> :shield:secure secures airgap
 
 #### :shield:no-loop
-> :shield:secure SECURES no-loop
+> :shield:secure secures no-loop
 
 #### :shield:no-edit-git
-> :shield:secure SECURES no-edit-git
+> :shield:secure secures no-edit-git
 
 #### :shield:no-edit-m8-st8
-> :shield:secure SECURES no-edit-m8-st8
+> :shield:secure secures no-edit-m8-st8
 
 #### :shield:contain-env
-> :shield:secure SECURES contain-env
+> :shield:secure secures contain-env
 
 #### :shield:filter-toolbox
 > `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} filter out toolbox`

@@ -62,9 +62,8 @@ fn run(ctx: Ctx) !u8 {
     var inner = ctx;
     inner.args = ctx.args[1..];
 
-    // A child has no process-level options of its own. In particular,
-    // `--help` here is data (a path, pattern, or replacement); the one help
-    // page belongs to `munge` and documents all three operations.
+    // The one help page belongs to `munge` and documents all three
+    // operations, so an operation has no `--help` of its own to answer.
     return sub.run(inner);
 }
 
@@ -80,7 +79,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     for (operations) |s| try w.print("  {s: <8} {s}\n", .{ s.name, s.summary });
     try w.writeAll(
         \\
-        \\Each operation reads what a tool call said from M8_ARG_*.
+        \\Each takes options as `--name VALUE` or `--name=VALUE`, and `--` ends
+        \\them, so a path or a glob may begin with a dash.
         \\
         \\A page is about 100 lines, or 10000 characters where lines are long,
         \\and it is what every answer here is addressed in. Nothing is ever
@@ -91,7 +91,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
 
     // These operations are implementation details of one tool, not commands
     // or split programs. Their pages are collected here so the tool has one
-    // help boundary and their first argument remains entirely data.
+    // help boundary.
     for (operations) |s| {
         try w.writeAll("\n――――――――――――――――――――――――――――――――――――――――――――――――\n\n");
         try @import("help.zig").write(ctx, s, w);

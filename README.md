@@ -737,7 +737,19 @@ answer to the document, so the next command in the pipe sees
 it.
 
 `munge` provides the file tools as `m8 munge read`,
-`write` and `scan`. A page is about 100 lines, every answer
+`write` and `scan`.
+
+```bash
+m8 munge read [--pages RANGE] PATH
+m8 munge write [--old TEXT] [--new TEXT] [--pages RANGE] PATH
+m8 munge scan [--regex PATTERN] [--pages RANGE] [GLOB]
+```
+
+It is an ordinary command line: options, a word, and `--`
+to end the options. A 🧰 reaches it through `m8 call`,
+which is what turns a call's values into those flags.
+
+A page is about 100 lines, every answer
 says which pages it gave and how to ask for the next, and
 nothing is ever asserted against a page. Precision lives in
 the strings read out of one, so a page number that has
@@ -757,15 +769,15 @@ of the file around it.
 `scan` answers in the same terms, over the files a glob
 names, with its own small regex engine — no captures, no
 matching across lines, and linear time by construction
-rather than by a timeout. `M8_ARG_PAGE_LINES` and
-`M8_ARG_PAGE_BYTES` set the source-file page shape.
+rather than by a timeout. `--page-lines` and
+`--page-bytes` set the source-file page shape.
 
 Scan has a second, distinct page coordinate: each result page
 contains the complete matches from one source-file page. Adjacent
 source pages are not merged, and a result group is never cut to fit
-`M8_ARG_BYTE_CAP`; an oversized group is returned whole. Use
-`M8_ARG_PAGES` to select result pages, not the source pages
-printed inside them. `BYTE_CAP` is applied between result
+`--byte-cap`; an oversized group is returned whole. Use
+`--pages` to select result pages, not the source pages
+printed inside them. The cap is applied between result
 pages, the first selected page is always retained, and the continuation
 trailer is not counted.
 
@@ -779,7 +791,7 @@ Agent definition:
 ▄ 🧰Tool Name
 │ │ Tool Description
 │ 🛡️Shield Name
-│ `m8` `call` `cmd` `{{M8_ARG_PROPERTYNAME|--flag}}`
+│ `m8` `call` `cmd` `{{propertyname|--flag}}`
 │ * PropertyName string
 │   Property Description
 │ * Other? integer
@@ -791,7 +803,7 @@ Agent definition:
 ▄ 🧰Tool Name
 │ │ A fenced block runs through the 🏃 it names.
 │ ```bash
-│ echo "$M8_ARG_PROPERTYNAME"
+│ echo "$__propertyname__"
 │ ```
 │ * PropertyName celsius|fahrenheit
 │   An enum is its values, which may hold a space
@@ -1199,7 +1211,7 @@ definition's business.
 ▄ 🧰search
 │ │ Look for something.
 │ ```bash
-│ grep -r "$M8_ARG_PATTERN" .
+│ grep -r "$__pattern__" .
 │ ```
 │ * pattern string
 │   what to look for
@@ -1207,13 +1219,15 @@ definition's business.
 
 What a tool is handed:
 
-* `M8_ARG_<NAME>` per scalar, the name uppercased, when
-  it is already a portable identifier.
-* `M8_ARGS`, always, carrying the whole call as JSON.
-  Anything nested, dotted or arrayed has no env spelling
-  of its own and lives here rather than in a mangled
-  variable that might collide.
+* `__<NAME>__` per scalar, preserving the argument's
+  original capitalization, when it is a portable identifier.
+* `____`, always, carrying the whole call as JSON.
+  Anything nested, dotted or arrayed has no scalar env
+  spelling and lives here instead.
 * `M8_CALL_ID`, which call this is.
+
+An inherited `__<NAME>__` environment variable is available
+as a fallback when the call does not supply that argument.
 
 An argument that was not supplied is unset rather than
 empty, which is the whole of what optional means to
@@ -1230,25 +1244,26 @@ command's own business rather than the framework's.
 ```m8
 ▄ 🧰bash
 │ │ Run a bash command.
-│ `m8` `call` `bash` `-euo` `pipefail` `{{M8_ARG_COMMAND|-c}}`
+│ `m8` `call` `bash` `-euo` `pipefail` `{{command|-c}}`
 │ * command string
 │   The bash command to run.
 ```
 
-Given `M8_ARG_COMMAND=echo hi`:
+Given `__command__=echo hi`:
 
 ```
-{{M8_ARG_COMMAND}}       --command "echo hi"
-{{M8_ARG_COMMAND|-c}}    -c "echo hi"
-{{M8_ARG_COMMAND|}}      "echo hi"
-{{M8_ARG_DEEP?--deep}}   --deep, when the value is exactly true
-{{M8_ARGS}}              the whole call as JSON, one argument
+{{command}}       --command "echo hi"
+{{command|-c}}    -c "echo hi"
+{{command|}}      "echo hi"
+{{deep?--deep}}   --deep, when the value is exactly true
+{{}}              -- followed by the whole call as JSON
+{{|}}             the whole call as JSON, without a flag
 ```
 
 The flag a bare placeholder carries is the argument's
-own name, which is what the variable was made from in
-the first place. `M8_ARGS` is the call rather than an
-argument, and stands alone.
+own name, preserving its spelling. An empty name is the
+whole call: `{{}}` gives it the `--` flag, while `{{|}}`
+injects it directly.
 
 A placeholder is a whole argument and is never spliced
 into a larger one, so a value cannot become syntax in
@@ -1263,20 +1278,19 @@ blockless header, and a final bare header offers the tool:
 ```m8
 ▄ 🧰read
 │ │ Read a file or directory.
-│ `m8` `call` `m8` `munge` `read`
+│ `m8` `call` `m8` `munge` `read` `{{page_lines|--page-lines}}` `--` `{{path|}}`
 │ * path string
 
-▄ 🧰read PAGE_LINES 100
-▄ 🧰read PAGE_BYTES 10000
-▄ 🧰read BYTE_CAP 20000
+▄ 🧰read page_lines 100
 ▄ 🧰read
 ```
 
-Definition variables and call parameters share the `M8_ARG_*`
-namespace. If both provide the same name, their values are joined
-with a space, with definition values first and call values last.
-Shields use the same convention, so a shield's definition values
-also reach the tool under `M8_ARG_*` and participate in that merge.
+Definition variables and call parameters share the `__name__`
+environment convention. Definitions are written with logical names,
+for example `read PAGE_LINES 100` or `sandbox byte_cap 20000`.
+If both provide the same name, their values are joined with a space,
+with definition values first and call values last. Shields use the
+same convention, so their definition values participate in that merge.
 
 The three toolbox header forms are intentionally separate: content
 defines, a variable header configures, and a bare header offers.
@@ -1291,10 +1305,10 @@ This keeps a definition readable when it has several defaults.
   what arrived, because a call that looked like it
   succeeded while ignoring what was asked is worse than
   one that failed.
-* Only a word opening `{{M8_ARG` is looked at, so the
-  braces a templating language meant for itself survive
-  — `m8 call awk '{{print $1}}' f` runs the awk
-  program it was handed.
+* Only a whole argv word shaped as `{{name}}` is looked at,
+  so values are never spliced into larger words. Other brace
+  expressions survive — `m8 call awk '{{print $1}}' f` runs
+  the awk program it was handed.
 
 None of this is privileged. An argv is passed on as it
 was written, so a toolbox naming some other expander
@@ -1548,7 +1562,7 @@ One that builds its own:
 No 🛡 at all, so `toolmaker` may hand back 🧰 records
 — a definition, and the blockless one that offers it —
 and they are honoured. `make-tool` writes m8 itself,
-verdict included, reading `M8_ARG_SPEC`. The two live happily in one
+verdict included, reading `__spec__`. The two live happily in one
 config, and neither can become the other.
 
 ### Thinking it through

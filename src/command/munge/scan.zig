@@ -23,6 +23,7 @@
 const std = @import("std");
 const api = @import("../api.zig");
 const read = @import("read.zig");
+const opts = @import("opts.zig");
 const regex = @import("regex.zig");
 const Ctx = api.Ctx;
 const Dir = std.Io.Dir;
@@ -37,24 +38,29 @@ pub const command: api.Command = .{
 };
 
 const default_byte_cap = 20000;
+
+const options = [_]opts.Option{
+    .{ .name = "regex" },
+    .{ .name = "pages" },
+    .{ .name = "page-lines", .kind = .number },
+    .{ .name = "page-bytes", .kind = .number },
+    .{ .name = "byte-cap", .kind = .number },
+};
 /// Where a search looks when it was not told where: the whole tree below here,
 /// minus the dotted directories `**` never steps into.
 const everything = "**";
 const max_file = 16 * 1024 * 1024;
 
 fn run(ctx: Ctx) !u8 {
-    // Two args, and neither has to be given. A pattern with no glob is a
-    // search of everything, a glob with no pattern is a question about which
-    // files exist, and both together are the search that was asked for.
-    const pattern = arg(ctx, "M8_ARG_REGEX") orelse
-        (if (ctx.args.len > 0) ctx.args[0] else null);
-    const glob = arg(ctx, "M8_ARG_GLOB") orelse
-        (if (ctx.args.len > 1) ctx.args[1] else null) orelse everything;
-    const cap = number(ctx, "M8_ARG_BYTE_CAP") orelse default_byte_cap;
-    const page_config = read.PageConfig{
-        .lines = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_LINES") orelse 100),
-        .bytes = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_BYTES") orelse 10000),
-    };
+    // A pattern and a glob, and neither has to be given. A pattern with no
+    // glob is a search of everything, a glob with no pattern is a question
+    // about which files exist, and both together are the search that was
+    // asked for. An empty one is one that was not given.
+    const given = (try opts.parse(ctx, "scan", &options, 1)) orelse return 1;
+    const pattern = nonEmpty(given.text("regex"));
+    const glob = nonEmpty(if (given.words.len > 0) given.words[0] else null) orelse everything;
+    const cap = given.number("byte-cap") orelse default_byte_cap;
+    const page_config = read.pageConfig(given);
 
     var vm: ?regex.Vm = null;
     if (pattern) |p| {
@@ -90,7 +96,7 @@ fn run(ctx: Ctx) !u8 {
 
     // A results page is a run of result groups. `pages` here is intentionally
     // unrelated to the source page numbers printed inside each result.
-    const asked = ctx.env.get("M8_ARG_PAGES");
+    const asked = given.text("pages");
     const markers = try ctx.arena.alloc(read.Page, results.items.len);
     for (markers, 0..) |*m, i| m.* = .{ .at = i, .end = i, .first_line = i + 1, .last_line = i + 1 };
     const selection = if (asked) |spec| read.select(spec, markers, "") else read.Ask.whole;
@@ -538,14 +544,9 @@ fn size(arena: Allocator, n: u64) ![]const u8 {
 }
 
 /// What was given, where an empty value is the same as nothing given.
-fn arg(ctx: Ctx, key: []const u8) ?[]const u8 {
-    const raw = ctx.env.get(key) orelse return null;
-    return if (raw.len == 0) null else raw;
-}
-
-fn number(ctx: Ctx, key: []const u8) ?usize {
-    const raw = ctx.env.get(key) orelse return null;
-    return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \t"), 10) catch null;
+fn nonEmpty(raw: ?[]const u8) ?[]const u8 {
+    const text = raw orelse return null;
+    return if (text.len == 0) null else text;
 }
 
 fn failure(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
@@ -559,10 +560,14 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 munge scan — search files for a pattern, answered in pages
         \\
-        \\What a tool call said arrives as M8_ARG_*.
+        \\  m8 munge scan [OPTIONS] [--] [GLOB]
         \\
-        \\  regex   a pattern, matched within one line at a time
-        \\  glob    which files, with ** and * and ? and {a,b}
+        \\  GLOB              which files, with ** and * and ? and {a,b}
+        \\  --regex PATTERN   matched within one line at a time
+        \\  --pages RANGE     results page range, e.g. "2-4"
+        \\  --page-lines N    page line target                   (default 100)
+        \\  --page-bytes N    page byte target                   (default 10000)
+        \\  --byte-cap N      answer byte target, whole results  (default 20000)
         \\
         \\Neither is required. Without a glob a pattern searches everything below
         \\here; without a pattern a glob asks the other question — which files it
@@ -577,11 +582,6 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\pages contain whole source-page groups; a group that resumes a file
         \\repeats its context and names the page it follows. Results page
         \\numbers are distinct from source-file page numbers.
-        \\
-        \\  PAGE_LINES  logical page line target       (default 100)
-        \\  PAGE_BYTES  logical page byte target       (default 10000)
-        \\  BYTE_CAP    answer byte target, whole results (default 20000)
-        \\  PAGES       results page range, e.g. "2-4"
         \\
     );
 }

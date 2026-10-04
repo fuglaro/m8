@@ -25,6 +25,7 @@ const sigil = @import("m8/sigil.zig");
 const config = @import("config.zig");
 const markdown = @import("m8/markdown.zig");
 const Mode = sigil.Mode;
+const argname = @import("command/argname.zig");
 
 pub const Error = error{
     /// An activation named a shield nothing defines.
@@ -163,13 +164,7 @@ pub fn project(
 }
 
 fn envName(arena: Allocator, name: []const u8) (error{BadEnvironmentName} || Allocator.Error)![]const u8 {
-    if (std.mem.startsWith(u8, name, "M8_ARG_")) return arena.dupe(u8, name[0..]);
-    if (name.len == 0 or (!std.ascii.isAlphabetic(name[0]) and name[0] != '_')) return error.BadEnvironmentName;
-    for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return error.BadEnvironmentName;
-    const out = try arena.alloc(u8, "M8_ARG_".len + name.len);
-    @memcpy(out[0.."M8_ARG_".len], "M8_ARG_");
-    for (name, 0..) |c, i| out["M8_ARG_".len + i] = std.ascii.toUpper(c);
-    return out;
+    return (try argname.envName(arena, name)) orelse error.BadEnvironmentName;
 }
 
 /// `NAME`, or `NAME VAR value...`. Space separated, so a value holds no space.
@@ -288,7 +283,13 @@ fn one(
 ) (Error || Allocator.Error)!void {
     for (path.items) |seen| if (std.mem.eql(u8, seen, a.name)) return Error.ShieldLoops;
 
-    if (a.env_var.len > 0) try append(arena, vars, try envName(arena, a.env_var), a.values);
+    if (a.env_var.len > 0) {
+        const key = if (std.mem.startsWith(u8, a.env_var, "__") and std.mem.endsWith(u8, a.env_var, "__"))
+            try arena.dupe(u8, a.env_var)
+        else
+            try envName(arena, a.env_var);
+        try append(arena, vars, key, a.values);
+    }
 
     var found = false;
     try path.append(arena, a.name);
@@ -443,11 +444,11 @@ test "shields compose, and what they append to a variable accumulates" {
     const all = [_]Definition{
         .{ .name = "secure", .steps = &.{.{ .command = &.{ "m8", "shield", "secure" } }} },
         .{ .name = "sandbox", .steps = &.{
-            .{ .compose = .{ .name = "secure", .env_var = "SECURES", .values = &.{ "private", "contain-writes" } } },
+            .{ .compose = .{ .name = "secure", .env_var = "secures", .values = &.{ "private", "contain-writes" } } },
         } },
         .{ .name = "jail", .steps = &.{
             .{ .compose = .{ .name = "sandbox" } },
-            .{ .compose = .{ .name = "secure", .env_var = "SECURES", .values = &.{"airgap"} } },
+            .{ .compose = .{ .name = "secure", .env_var = "secures", .values = &.{"airgap"} } },
         } },
     };
 
@@ -456,7 +457,7 @@ test "shields compose, and what they append to a variable accumulates" {
     // repeat of something that only subtracts means nothing.
     try testing.expectEqual(@as(usize, 2), got.wrappers.len);
     try testing.expectEqual(@as(usize, 1), got.env.len);
-    try testing.expectEqualStrings("M8_ARG_SECURES", got.env[0].key);
+    try testing.expectEqualStrings("__secures__", got.env[0].key);
     try testing.expectEqualStrings("private contain-writes airgap", got.env[0].value);
 }
 
@@ -507,9 +508,9 @@ test "a value carries a name, and optionally a variable and what to append" {
     try testing.expectEqualStrings("ask", bare.name);
     try testing.expectEqual(@as(usize, 0), bare.values.len);
 
-    const with = try parseValue(arena, "secure SECURES airgap no-writes");
+    const with = try parseValue(arena, "secure secures airgap no-writes");
     try testing.expectEqualStrings("secure", with.name);
-    try testing.expectEqualStrings("M8_ARG_SECURES", with.env_var);
+    try testing.expectEqualStrings("__secures__", with.env_var);
     try testing.expectEqual(@as(usize, 2), with.values.len);
     try testing.expectEqualStrings("no-writes", with.values[1]);
 }
@@ -520,9 +521,9 @@ test "a variable no shell could spell is refused, not dropped" {
     const arena = a.allocator();
     try testing.expectError(Error.BadEnvironmentName, parseValue(arena, "sandbox byte-cap 20000"));
     try testing.expectError(Error.BadEnvironmentName, parseValue(arena, "sandbox 2fast yes"));
-    // One already a tool's own is the wrapper reaching it, and passes as is.
-    const reach = try parseValue(arena, "sandbox M8_ARG_BYTE_CAP 20000");
-    try testing.expectEqualStrings("M8_ARG_BYTE_CAP", reach.env_var);
+    // A logical name reaches the wrapper in the same spelling as a tool argument.
+    const reach = try parseValue(arena, "sandbox byte_cap 20000");
+    try testing.expectEqualStrings("__byte_cap__", reach.env_var);
 }
 
 test "a wrapper opening with m8 reaches the m8 that is running" {
@@ -558,7 +559,7 @@ test "the shields m8 ships with parse, and jail is the composition it claims" {
 
     const got = try resolve(arena, set.defs, &.{.{ .name = "jail" }});
     var secures: []const u8 = "";
-    for (got.env) |v| if (std.mem.eql(u8, v.key, "M8_ARG_SECURES")) {
+    for (got.env) |v| if (std.mem.eql(u8, v.key, "__secures__")) {
         secures = v.value;
     };
     for ([_][]const u8{

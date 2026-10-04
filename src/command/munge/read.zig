@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const api = @import("../api.zig");
+const opts = @import("opts.zig");
 const Ctx = api.Ctx;
 const Dir = std.Io.Dir;
 const Allocator = std.mem.Allocator;
@@ -36,9 +37,15 @@ pub const default_page_lines = 100;
 const default_page_bytes = 10000;
 
 /// How much a call may be handed at once, over which whole pages are dropped
-/// from the end rather than a page being cut. `M8_ARG_BYTE_CAP` in the environment,
-/// which a 🧰 sets once rather than every call carrying it.
+/// from the end rather than a page being cut.
 const default_byte_cap = 20000;
+
+const options = [_]opts.Option{
+    .{ .name = "pages" },
+    .{ .name = "page-lines", .kind = .number },
+    .{ .name = "page-bytes", .kind = .number },
+    .{ .name = "byte-cap", .kind = .number },
+};
 
 pub const PageConfig = struct {
     lines: usize = default_page_lines,
@@ -49,10 +56,10 @@ pub const PageConfig = struct {
 /// read it from. A page is the coordinate `munge` answers in, so `write` has
 /// to cut a file into the same pages `read` handed back — a scope counted off
 /// pages of a different size names somewhere the model never looked.
-pub fn pageConfig(ctx: Ctx) PageConfig {
+pub fn pageConfig(given: opts.Given) PageConfig {
     return .{
-        .lines = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_LINES") orelse default_page_lines),
-        .bytes = @max(@as(usize, 1), number(ctx, "M8_ARG_PAGE_BYTES") orelse default_page_bytes),
+        .lines = @max(@as(usize, 1), given.number("page-lines") orelse default_page_lines),
+        .bytes = @max(@as(usize, 1), given.number("page-bytes") orelse default_page_bytes),
     };
 }
 
@@ -72,24 +79,24 @@ fn listing_limit(cap: usize) usize {
 }
 
 fn run(ctx: Ctx) !u8 {
-    const path = ctx.env.get("M8_ARG_PATH") orelse
-        (if (ctx.args.len > 0) ctx.args[0] else null) orelse
-        return refuse(ctx, "no path given", .{});
-    const cap = number(ctx, "M8_ARG_BYTE_CAP") orelse default_byte_cap;
-    const config = pageConfig(ctx);
+    const given = (try opts.parse(ctx, "read", &options, 1)) orelse return 1;
+    if (given.words.len == 0) return refuse(ctx, "no path given", .{});
+    const path = given.words[0];
+    const cap = given.number("byte-cap") orelse default_byte_cap;
+    const config = pageConfig(given);
+    const asked = given.text("pages");
 
     // A symlink at the path itself is followed: somebody naming it means the
     // thing it points at.
     const st = Dir.cwd().statFile(ctx.io, path, .{}) catch
         return refuse(ctx, "cannot read {s}", .{path});
 
-    if (st.kind == .directory) return list(ctx, path, cap, config);
+    if (st.kind == .directory) return list(ctx, path, cap, config, asked);
 
     const bytes = Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(max_file)) catch
         return refuse(ctx, "cannot read {s}", .{path});
 
     const pages = try paginateConfig(ctx.arena, bytes, config);
-    const asked = ctx.env.get("M8_ARG_PAGES");
 
     const whole = Span{ .from = 0, .to = pages.len - 1 };
     const want = switch (if (asked) |spec| select(spec, pages, bytes) else Ask.whole) {
@@ -405,7 +412,7 @@ fn pageAdvice(ctx: Ctx, from: usize, to: usize, total: usize) !void {
 /// Every line is something to call `read` with, spelled the way it would have
 /// to be spelled, and a file says how many pages it holds so that a model can
 /// choose a range before it has opened anything.
-fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig) !u8 {
+fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig, asked: ?[]const u8) !u8 {
     var dir = Dir.cwd().openDir(ctx.io, path, .{ .iterate = true }) catch
         return refuse(ctx, "cannot read {s}", .{path});
     defer dir.close(ctx.io);
@@ -431,7 +438,6 @@ fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig) !u8 {
         line_count += 1;
     }
     const count = if (rows.items.len == 0) 1 else page + 1;
-    const asked = ctx.env.get("M8_ARG_PAGES");
     const markers = try ctx.arena.alloc(Page, count);
     for (markers, 0..) |*marker, i| marker.* = .{ .at = i, .end = i, .first_line = i + 1, .last_line = i + 1 };
     const selected = if (asked) |spec| select(spec, markers, "") else Ask.whole;
@@ -553,11 +559,6 @@ fn listingEstimate(full: []const u8, kind: @TypeOf(@as(Dir.Entry, undefined).kin
 
 // ------------------------------------------------------------------ plumbing
 
-fn number(ctx: Ctx, key: []const u8) ?usize {
-    const raw = ctx.env.get(key) orelse return null;
-    return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \t"), 10) catch null;
-}
-
 fn refuse(ctx: Ctx, comptime fmt: []const u8, args: anytype) !u8 {
     try ctx.err.print("Denied - " ++ fmt ++ "\n", args);
     try ctx.err.flush();
@@ -569,11 +570,13 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 munge read — a file in pages, or a directory's content
         \\
-        \\What a tool call said arrives as M8_ARG_*; a path may also be given
-        \\as a word, for trying the command from a shell.
+        \\  m8 munge read [OPTIONS] [--] PATH
         \\
-        \\  path    the file or directory to read
-        \\  pages   a range, "11-20", or "2@anchor" for pages at a match
+        \\  PATH              the file or directory to read
+        \\  --pages RANGE     "11-20", or "2@anchor" for pages at a match
+        \\  --page-lines N    page line target                 (default 100)
+        \\  --page-bytes N    page byte target                 (default 10000)
+        \\  --byte-cap N      answer byte target, whole pages  (default 20000)
         \\
         \\A file page is about 100 lines, or 10000 characters when lines are
         \\long. Directory pages use the same settings to group sorted entries
@@ -584,10 +587,6 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\Answers end with where they landed and examples for using `pages` to
         \\continue or refocus when more remains. A range is read as generously as it
         \\can be — "10 to 12", "p11-20" and "21+" all name something.
-        \\
-        \\  PAGE_LINES  logical page line target       (default 100)
-        \\  PAGE_BYTES  logical page byte target       (default 10000)
-        \\  BYTE_CAP    answer byte target, whole pages (default 20000)
         \\
     );
 }

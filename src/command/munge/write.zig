@@ -24,6 +24,7 @@
 const std = @import("std");
 const api = @import("../api.zig");
 const read = @import("read.zig");
+const opts = @import("opts.zig");
 const Ctx = api.Ctx;
 const Dir = std.Io.Dir;
 const Allocator = std.mem.Allocator;
@@ -43,31 +44,38 @@ const max_file = 16 * 1024 * 1024;
 /// anchor has to carry enough to be worth believing.
 const anchor_chars = 8;
 
-/// Default percentage of a block that may differ once its anchors hold. The
-/// call may override it with M8_ARG_TOLERANCE.
+/// Default percentage of a block that may differ once its anchors hold.
 const default_tolerance = 25;
 
+const options = [_]opts.Option{
+    .{ .name = "old" },
+    .{ .name = "new" },
+    .{ .name = "pages" },
+    .{ .name = "tolerance", .kind = .number },
+    .{ .name = "dry-run", .kind = .flag },
+    .{ .name = "page-lines", .kind = .number },
+    .{ .name = "page-bytes", .kind = .number },
+};
+
 fn run(ctx: Ctx) !u8 {
-    const path = ctx.env.get("M8_ARG_PATH") orelse
-        (if (ctx.args.len > 0) ctx.args[0] else null) orelse
-        return failure(ctx, "no path given", .{});
-    const old_string = ctx.env.get("M8_ARG_OLD_STRING") orelse
-        (if (ctx.args.len > 1) ctx.args[1] else null) orelse "";
-    const new_string = ctx.env.get("M8_ARG_NEW_STRING") orelse
-        (if (ctx.args.len > 2) ctx.args[2] else null) orelse "";
-    const allowed = number(ctx, "M8_ARG_TOLERANCE") orelse default_tolerance;
-    const dry_run = boolean(ctx, "M8_ARG_DRY_RUN");
+    const given = (try opts.parse(ctx, "write", &options, 1)) orelse return 1;
+    if (given.words.len == 0) return failure(ctx, "no path given", .{});
+    const path = given.words[0];
+    const old_string = given.text("old") orelse "";
+    const new_string = given.text("new") orelse "";
+    const allowed = given.number("tolerance") orelse default_tolerance;
+    const dry_run = given.flag("dry-run");
 
     // Pages are what this tool scopes by and answers in, so it cuts the file
     // the way the `read` that handed the model its page did.
-    const config = read.pageConfig(ctx);
+    const config = read.pageConfig(given);
 
     const had = Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(max_file)) catch null;
 
     if (old_string.len == 0) return append(ctx, path, had, new_string, config, dry_run);
 
     const bytes = had orelse return failure(ctx, "there is no {s} to edit", .{path});
-    return replace(ctx, path, bytes, old_string, new_string, allowed, config, dry_run);
+    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), allowed, config, dry_run);
 }
 
 // ------------------------------------------------------------------- adding
@@ -132,6 +140,7 @@ fn replace(
     bytes: []const u8,
     old: []const u8,
     new: []const u8,
+    asked: ?[]const u8,
     tolerance: usize,
     config: read.PageConfig,
     dry_run: bool,
@@ -143,7 +152,7 @@ fn replace(
     // block on, rather than pasting more of the file around it.
     var scope = Range{ .at = 0, .end = bytes.len };
     var scoped: ?read.Span = null;
-    if (ctx.env.get("M8_ARG_PAGES")) |spec| switch (read.select(spec, pages, bytes)) {
+    if (asked) |spec| switch (read.select(spec, pages, bytes)) {
         .span => |s| {
             scope = .{ .at = pages[s.from].at, .end = pages[s.to].end };
             scoped = s;
@@ -854,19 +863,6 @@ fn unescape(arena: Allocator, text: []const u8) !?[]const u8 {
 
 // ----------------------------------------------------------------- plumbing
 
-/// The block mismatch allowance is a percentage of the anchored lines. An
-/// invalid value keeps the safe default, as the other numeric munge arguments
-/// do.
-fn number(ctx: Ctx, key: []const u8) ?usize {
-    const raw = ctx.env.get(key) orelse return null;
-    return std.fmt.parseInt(usize, std.mem.trim(u8, raw, " \\t"), 10) catch null;
-}
-
-fn boolean(ctx: Ctx, key: []const u8) bool {
-    const raw = ctx.env.get(key) orelse return false;
-    return std.mem.eql(u8, std.mem.trim(u8, raw, " \\t"), "true");
-}
-
 /// A failure is the answer, in the shape of an answer. It goes to stderr and
 /// fails, which is what makes it a 🚫 rather than a receipt somebody has to
 /// read twice to notice that nothing happened.
@@ -881,17 +877,17 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 munge write — change a file, or append to one
         \\
-        \\What a tool call said arrives as M8_ARG_*.
+        \\  m8 munge write [OPTIONS] [--] PATH
         \\
-        \\  path        the file to change or create
-        \\  old_string  what to replace; omitted, this appends
-        \\  new_string  what to put there; empty, this removes
-        \\  pages       a range the matches must start in
-        \\  tolerance   percentage of anchored block lines allowed to differ (default 25)
-        \\  dry_run     boolean; show the proposed diff without writing
-        \\
-        \\  PAGE_LINES  logical page line target       (default 100)
-        \\  PAGE_BYTES  logical page byte target       (default 10000)
+        \\  PATH              the file to change or create
+        \\  --old TEXT        what to replace; omitted or empty, this appends
+        \\  --new TEXT        what to put there; omitted or empty, this removes
+        \\  --pages RANGE     a range the matches must start in
+        \\  --tolerance N     percentage of anchored block lines allowed to
+        \\                    differ                           (default 25)
+        \\  --dry-run         show the proposed diff without writing
+        \\  --page-lines N    page line target                 (default 100)
+        \\  --page-bytes N    page byte target                 (default 10000)
         \\
         \\The page settings are `read`'s, and they belong here for the same
         \\reason: `pages` is counted off pages of that size, and a line number
@@ -907,8 +903,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\and the configured percentage of a block once its ends hold (25% by
         \\default). An end has to carry
         \\eight characters to be worth anchoring on. Whatever was forgiven is
-        \\named in the receipt. An over-encoded old_string is taken to mean an
-        \\over-encoded new_string, and both are put back.
+        \\named in the receipt. An over-encoded --old is taken to mean an
+        \\over-encoded --new, and both are put back.
         \\
     );
 }

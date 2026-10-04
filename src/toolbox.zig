@@ -10,7 +10,7 @@
 //! Two ways to say how it runs, and neither of them carries what the call
 //! said: an argv is the words it was written as, a block is the script it was
 //! written as, and both reach their command unchanged. A call arrives in the
-//! environment as `M8_ARG_*`, whichever of the two it is.
+//! environment as `__name__`, whichever of the two it is.
 //!
 //! One level down, the quote that doc.zig stripped is still there — a nested
 //! content line arrives as `> text`.
@@ -24,6 +24,7 @@ const api = @import("command/api.zig");
 const shield = @import("shield.zig");
 const markdown = @import("m8/markdown.zig");
 const model = @import("m8/model.zig");
+const argname = @import("command/argname.zig");
 
 pub const Error = error{
     /// A property line had no type.
@@ -93,11 +94,9 @@ pub const Tool = struct {
 /// Named rather than positional, so a tool in any language reads them the way
 /// that language already reads its environment, and a value carries no
 /// position for a command line to have to keep.
-pub const arg_prefix = "M8_ARG_";
-/// The whole call as JSON, always. Nested, dotted and arrayed arguments have
-/// no env spelling of their own and live here instead — no flattening, and no
-/// separator for a value to collide with.
-pub const args_var = "M8_ARGS";
+/// The whole call as JSON. Scalar arguments use `__name__`; nested, dotted
+/// and arrayed arguments have no scalar spelling and live here instead.
+pub const args_var = argname.all;
 /// Which call this is, so a tool that runs m8 can answer the one it was asked.
 pub const call_var = "M8_CALL_ID";
 
@@ -108,14 +107,7 @@ pub const call_var = "M8_CALL_ID";
 /// would collide with a name somebody meant. Such a property lives in
 /// `args_var` alone, which is honest rather than lossy.
 pub fn envName(arena: Allocator, name: []const u8) Allocator.Error!?[]const u8 {
-    if (name.len == 0) return null;
-    if (!std.ascii.isAlphabetic(name[0]) and name[0] != '_') return null;
-    for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return null;
-
-    const out = try arena.alloc(u8, arg_prefix.len + name.len);
-    @memcpy(out[0..arg_prefix.len], arg_prefix);
-    for (name, 0..) |c, i| out[arg_prefix.len + i] = std.ascii.toUpper(c);
-    return out;
+    return argname.envName(arena, name);
 }
 
 /// `NAME TYPE` or `NAME? TYPE`, from a bullet with its `*` already gone,
@@ -723,7 +715,7 @@ test "a toolbox reads its template, properties and description" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const t = try parse(a.allocator(), .md, "shell",
-        \\`m8` `call` `bash` `{{M8_ARG_CMD|-c}}`
+        \\`m8` `call` `bash` `{{cmd|-c}}`
         \\:shield:jail
         \\* cmd string
         \\  The command to run
@@ -734,7 +726,7 @@ test "a toolbox reads its template, properties and description" {
     );
     try testing.expectEqualStrings("shell", t.name);
     try testing.expectEqualStrings("m8", t.command.argv[0]);
-    try testing.expectEqualStrings("{{M8_ARG_CMD|-c}}", t.command.argv[3]);
+    try testing.expectEqualStrings("{{cmd|-c}}", t.command.argv[3]);
     try testing.expectEqualStrings("Run a command.\nCarefully.", t.description);
     try testing.expectEqual(@as(usize, 1), t.shields.len);
     try testing.expectEqualStrings("jail", t.shields[0].name);
@@ -864,14 +856,13 @@ test "a key written twice goes out once, as m8's own" {
     try testing.expectEqualStrings("* q string,pattern:^a\n  native", try render(arena, .md, .{ .name = "t", .properties = props.items }));
 }
 
-test "no property name is reserved, because the prefix already separates them" {
+test "logical property names become their environment spellings" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    // `M8_ARG_` is what keeps a model's chosen name away from m8's own and
-    // from the machine's, so there is nothing left to forbid by name.
+    // The logical name is preserved, including its capitalization.
     const t = try parse(a.allocator(), .md, "x", "* self string\n* secures string");
     try testing.expectEqual(@as(usize, 2), t.properties.len);
-    try testing.expectEqualStrings("M8_ARG_SELF", (try envName(a.allocator(), t.properties[0].name)).?);
+    try testing.expectEqualStrings("__self__", (try envName(a.allocator(), t.properties[0].name)).?);
 }
 
 test "a tool survives being rendered and read back, in either spelling" {
@@ -880,7 +871,7 @@ test "a tool survives being rendered and read back, in either spelling" {
     const arena = a.allocator();
 
     const src =
-        \\`m8` `call` `bash` `{{M8_ARG_CMD|-c}}`
+        \\`m8` `call` `bash` `{{cmd|-c}}`
         \\:shield:jail
         \\* cmd string
         \\  What to run.
@@ -958,24 +949,24 @@ test "a property has an environment name only when it already is one" {
     defer a.deinit();
     const arena = a.allocator();
 
-    try testing.expectEqualStrings("M8_ARG_PATTERN", (try envName(arena, "pattern")).?);
-    try testing.expectEqualStrings("M8_ARG_IGNORE_CASE", (try envName(arena, "ignore_case")).?);
-    try testing.expectEqualStrings("M8_ARG_MYARG", (try envName(arena, "myArg")).?);
+    try testing.expectEqualStrings("__pattern__", (try envName(arena, "pattern")).?);
+    try testing.expectEqualStrings("__ignore_case__", (try envName(arena, "ignore_case")).?);
+    try testing.expectEqualStrings("__myArg__", (try envName(arena, "myArg")).?);
 
     // No mangling: a name that is not already an identifier has no variable,
     // and is read from the JSON instead.
-    for ([_][]const u8{ "opts.a", "dry-run", "2fast", "", "a b" }) |n|
+    for ([_][]const u8{ "opts.a", "dry-run", "2fast", "a b" }) |n|
         try testing.expect((try envName(arena, n)) == null);
+    try testing.expectEqualStrings("____", (try envName(arena, "")).?);
 }
 
-test "two properties that would be one variable are refused where they are written" {
+test "argument environment names preserve case and spelling" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
 
-    try testing.expectError(Error.ClashingProperty, parse(arena, .md, "t", "* myArg string\n* MYARG string\n"));
-
-    // Different variables, so nothing to refuse.
+    // These are distinct environment variables under the new convention.
+    _ = try parse(arena, .md, "t", "* myArg string\n* MYARG string\n");
     _ = try parse(arena, .md, "t", "* myArg string\n* my_arg string\n");
 }
 
@@ -998,18 +989,18 @@ test "a call is handed its arguments named, and all of them as JSON" {
     }.get;
 
     // The value arrives whole and inert: it is never part of any command.
-    try testing.expectEqualStrings("x . ; rm -rf ~", find(env, "M8_ARG_PATTERN").?);
-    try testing.expectEqualStrings("3", find(env, "M8_ARG_COUNT").?);
-    try testing.expectEqualStrings("true", find(env, "M8_ARG_DEEP").?);
+    try testing.expectEqualStrings("x . ; rm -rf ~", find(env, "__pattern__").?);
+    try testing.expectEqualStrings("3", find(env, "__count__").?);
+    try testing.expectEqualStrings("true", find(env, "__deep__").?);
     try testing.expectEqualStrings("c7", find(env, call_var).?);
     try testing.expectEqualStrings("M8_CALL_ID", call_var);
     try testing.expectEqualStrings(raw, find(env, args_var).?);
 
     // Compound values have no env spelling, and null is an absence rather
     // than an empty string. Both are in the JSON, which is where they read.
-    try testing.expect(find(env, "M8_ARG_TAGS") == null);
-    try testing.expect(find(env, "M8_ARG_OPTS") == null);
-    try testing.expect(find(env, "M8_ARG_SKIPPED") == null);
+    try testing.expect(find(env, "__tags__") == null);
+    try testing.expect(find(env, "__opts__") == null);
+    try testing.expect(find(env, "__skipped__") == null);
 }
 
 test "a 🧰 may add a variable of its own, after its name" {
@@ -1017,9 +1008,9 @@ test "a 🧰 may add a variable of its own, after its name" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const both = try parse(arena, .md, "make SECURES airgap no-writes", "`sh`");
+    const both = try parse(arena, .md, "make secures airgap no-writes", "`sh`");
     try testing.expectEqualStrings("make", both.name);
-    try testing.expectEqualStrings("M8_ARG_SECURES", both.env_var);
+    try testing.expectEqualStrings("__secures__", both.env_var);
     try testing.expectEqual(@as(usize, 2), both.env_values.len);
     try testing.expectEqualStrings("no-writes", both.env_values[1]);
 

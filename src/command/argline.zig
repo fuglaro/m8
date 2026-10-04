@@ -5,6 +5,7 @@
 //! one, so what a call said cannot become syntax in whatever runs.
 
 const std = @import("std");
+const argname = @import("argname.zig");
 
 pub const Error = error{
     /// A placeholder was opened and not closed.
@@ -15,21 +16,15 @@ pub const Error = error{
     NotABoolean,
 };
 
-/// What a placeholder may name. One prefix covers `M8_ARG_<NAME>` and
-/// `M8_ARGS` both, and nothing outside it is looked at — so the braces a
-/// templating language meant for itself pass straight through.
-const prefix = "{{M8_ARG";
-/// The longer one, which is the only spelling with an argument's name in it
-/// to make a flag from. `M8_ARGS` is the call rather than an argument.
-const named = "M8_ARG_";
-
+/// Placeholders are logical argument names. Their process spelling is made
+/// by `argname`; the empty name is the complete call.
 /// How a placeholder says what to do with the value it names.
 const Form = enum {
-    /// `{{M8_ARG_NAME}}` — the flag is the argument's own name.
+    /// `{{name}}` — the flag is the argument's own name.
     own,
-    /// `{{M8_ARG_NAME|-f}}` — this flag, or none when nothing follows.
+    /// `{{name|-f}}` — this flag, or none when nothing follows.
     given,
-    /// `{{M8_ARG_NAME?-f}}` — the flag alone, and only when true.
+    /// `{{name?-f}}` — the flag alone, and only when true.
     boolean,
 };
 
@@ -45,8 +40,10 @@ fn expand(
     out: *std.ArrayList([]const u8),
     word: []const u8,
 ) !void {
-    if (!std.mem.startsWith(u8, word, prefix)) return out.append(arena, word);
-    if (!std.mem.endsWith(u8, word, "}}") or word.len <= prefix.len) {
+    // Expansion is only for a whole argv word. Other brace expressions are
+    // ordinary program text, including templates belonging to another tool.
+    if (!std.mem.startsWith(u8, word, "{{")) return out.append(arena, word);
+    if (!std.mem.endsWith(u8, word, "}}") or word.len < 4) {
         try err.print("m8 call: unclosed placeholder '{s}'\n", .{word});
         return Error.UnclosedPlaceholder;
     }
@@ -61,12 +58,9 @@ fn expand(
         form = if (inner[cut] == '?') .boolean else .given;
     }
 
-    // The flag a bare placeholder carries is the argument's own name, which
-    // is what the variable was made from in the first place.
-    if (form == .own and std.mem.startsWith(u8, name, named) and name.len > named.len) {
-        const lower = try std.ascii.allocLowerString(arena, name[named.len..]);
-        flag = try std.fmt.allocPrint(arena, "--{s}", .{lower});
-    }
+    // The flag a bare placeholder carries is the argument's own name. An
+    // empty name therefore naturally becomes `--`, the all-arguments form.
+    if (form == .own) flag = try std.fmt.allocPrint(arena, "--{s}", .{name});
 
     // A definition that could never emit anything is wrong however the call
     // went, so it is caught before the value is looked at.
@@ -75,7 +69,8 @@ fn expand(
         return Error.FlaglessQuestion;
     }
 
-    const value = env.get(name) orelse return;
+    const key = (try argname.envName(arena, name)) orelse return out.append(arena, word);
+    const value = env.get(key) orelse return;
     if (form == .boolean) {
         if (std.mem.eql(u8, value, "false")) return;
         if (!std.mem.eql(u8, value, "true")) {
@@ -129,27 +124,28 @@ test "a placeholder takes the flag from its name, or from what it is given" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    const vars = &[_][2][]const u8{.{ "M8_ARG_COMMAND", "echo hi" }};
+    const vars = &[_][2][]const u8{.{ "__command__", "echo hi" }};
 
-    try expectArgv(try built(arena, vars, &.{"{{M8_ARG_COMMAND}}"}), &.{ "--command", "echo hi" });
-    try expectArgv(try built(arena, vars, &.{"{{M8_ARG_COMMAND|-c}}"}), &.{ "-c", "echo hi" });
-    try expectArgv(try built(arena, vars, &.{"{{M8_ARG_COMMAND|}}"}), &.{"echo hi"});
+    try expectArgv(try built(arena, vars, &.{"{{command}}"}), &.{ "--command", "echo hi" });
+    try expectArgv(try built(arena, vars, &.{"{{command|-c}}"}), &.{ "-c", "echo hi" });
+    try expectArgv(try built(arena, vars, &.{"{{command|}}"}), &.{"echo hi"});
 
     // A placeholder is a whole element, so it sits among ordinary words
     // without either becoming part of the other.
     try expectArgv(
-        try built(arena, vars, &.{ "bash", "-euo", "pipefail", "{{M8_ARG_COMMAND|-c}}" }),
+        try built(arena, vars, &.{ "bash", "-euo", "pipefail", "{{command|-c}}" }),
         &.{ "bash", "-euo", "pipefail", "-c", "echo hi" },
     );
 }
 
-test "the call itself is not an argument, so it carries no flag" {
+test "the complete call uses the ordinary flag and injection forms" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
     const json = "{\"a\":1}";
-    const vars = &[_][2][]const u8{.{ "M8_ARGS", json }};
-    try expectArgv(try built(arena, vars, &.{"{{M8_ARGS}}"}), &.{json});
+    const vars = &[_][2][]const u8{.{ "____", json }};
+    try expectArgv(try built(arena, vars, &.{"{{}}"}), &.{ "--", json });
+    try expectArgv(try built(arena, vars, &.{"{{|}}"}), &.{json});
 }
 
 test "unset is absent, and empty is a value a command was given" {
@@ -159,11 +155,11 @@ test "unset is absent, and empty is a value a command was given" {
 
     // The whole of what optional means to a command: the flag is not there.
     try expectArgv(
-        try built(arena, &.{}, &.{ "echo", "{{M8_ARG_NOPE}}", "x" }),
+        try built(arena, &.{}, &.{ "echo", "{{nope}}", "x" }),
         &.{ "echo", "x" },
     );
     try expectArgv(
-        try built(arena, &.{.{ "M8_ARG_E", "" }}, &.{ "echo", "{{M8_ARG_E}}" }),
+        try built(arena, &.{.{ "__e__", "" }}, &.{ "echo", "{{e}}" }),
         &.{ "echo", "--e", "" },
     );
 }
@@ -173,28 +169,28 @@ test "true emits the flag alone, false and unset emit nothing" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const yes = &[_][2][]const u8{.{ "M8_ARG_DEEP", "true" }};
-    const no = &[_][2][]const u8{.{ "M8_ARG_DEEP", "false" }};
-    try expectArgv(try built(arena, yes, &.{"{{M8_ARG_DEEP?--deep}}"}), &.{"--deep"});
-    try expectArgv(try built(arena, no, &.{"{{M8_ARG_DEEP?--deep}}"}), &.{});
-    try expectArgv(try built(arena, &.{}, &.{"{{M8_ARG_DEEP?--deep}}"}), &.{});
+    const yes = &[_][2][]const u8{.{ "__deep__", "true" }};
+    const no = &[_][2][]const u8{.{ "__deep__", "false" }};
+    try expectArgv(try built(arena, yes, &.{"{{deep?--deep}}"}), &.{"--deep"});
+    try expectArgv(try built(arena, no, &.{"{{deep?--deep}}"}), &.{});
+    try expectArgv(try built(arena, &.{}, &.{"{{deep?--deep}}"}), &.{});
 
     // Anything else is refused rather than dropped: a call that looked like
     // it succeeded while ignoring what was asked is the worse answer.
-    const other = &[_][2][]const u8{.{ "M8_ARG_DEEP", "1" }};
+    const other = &[_][2][]const u8{.{ "__deep__", "1" }};
     try testing.expectError(
         Error.NotABoolean,
-        built(arena, other, &.{"{{M8_ARG_DEEP?--deep}}"}),
+        built(arena, other, &.{"{{deep?--deep}}"}),
     );
 }
 
-test "only a word opening with the prefix is looked at" {
+test "only whole placeholders are looked at" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
 
-    // The braces a templating language meant for itself, which is why the
-    // prefix is matched rather than the braces alone.
+    // An invalid name remains ordinary program text, so another templater's
+    // braces survive.
     try expectArgv(
         try built(arena, &.{}, &.{ "awk", "{{print $1}}", "f" }),
         &.{ "awk", "{{print $1}}", "f" },
@@ -202,8 +198,12 @@ test "only a word opening with the prefix is looked at" {
 
     // Nor is one spliced into a larger word, so a value cannot become syntax.
     try expectArgv(
-        try built(arena, &.{.{ "M8_ARG_X", "v" }}, &.{"x{{M8_ARG_X}}"}),
-        &.{"x{{M8_ARG_X}}"},
+        try built(arena, &.{.{ "__x__", "v" }}, &.{"x{{x}}"}),
+        &.{"x{{x}}"},
+    );
+    try expectArgv(
+        try built(arena, &.{.{ "____", "json" }}, &.{"x{{}}"}),
+        &.{"x{{}}"},
     );
 }
 
@@ -214,12 +214,12 @@ test "a definition that could never work is refused where it is written" {
 
     try testing.expectError(
         Error.UnclosedPlaceholder,
-        built(arena, &.{}, &.{"{{M8_ARG_X}"}),
+        built(arena, &.{}, &.{"{{x}"}),
     );
     // Caught before the value is looked at, because it is wrong however the
     // call went.
     try testing.expectError(
         Error.FlaglessQuestion,
-        built(arena, &.{}, &.{"{{M8_ARG_X?}}"}),
+        built(arena, &.{}, &.{"{{x?}}"}),
     );
 }

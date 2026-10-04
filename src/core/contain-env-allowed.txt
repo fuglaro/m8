@@ -16,12 +16,13 @@
 # for the call that reads it.
 
 # --- m8's own namespace. Not inherited from a machine so much as said by the
-#     call: M8_ARG_*, M8_ARGS and M8_CALL_ID are how a tool is handed what it
+#     call: __name__, ____, and M8_CALL_ID are how a tool is handed what it
 #     was asked for, and they must survive whatever a restriction does to the rest.
-#     Passing the prefix is what keeps that rule here, in the file that decides
-#     what an environment is, rather than as a special case in the code that
-#     builds one ---
-M8_*
+#     Passing the reserved spelling is what keeps that rule here, in the file
+#     that decides what an environment is, rather than as a special case in
+#     the code that builds one ---
+__*
+M8_CALL_ID
 
 # --- finding and running things ---
 PATH

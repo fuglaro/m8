@@ -197,7 +197,7 @@ test "a definition yields its model, shields and tools" {
         \\#### :shield:jail
         \\
         \\#### :toolbox:say
-        \\> `echo` `{{M8_ARG_TEXT|}}`
+        \\> `echo` `{{text|}}`
         \\> * text string
         \\> > Echoes.
         \\
@@ -246,7 +246,7 @@ test "tool variables use separate headers and accumulate" {
     const offered = try offer(arena, d);
     try testing.expectEqual(@as(usize, 1), offered.len);
     try testing.expectEqual(@as(usize, 3), offered[0].env_vars.len);
-    try testing.expectEqualStrings("M8_ARG_PAGE_LINES", offered[0].env_vars[0].key);
+    try testing.expectEqualStrings("__PAGE_LINES__", offered[0].env_vars[0].key);
     try testing.expectEqualStrings("100", offered[0].env_vars[0].value);
 }
 
