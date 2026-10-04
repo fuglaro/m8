@@ -46,12 +46,11 @@ const global_options = [_]opts.Option{
 };
 
 fn run(ctx: Ctx) !u8 {
-    // Global options belong before the operation, as they do in a traditional
-    // command ("munge --page-lines 50 read file").  Stop at the operation so
+    // Global options belong before the operation
+    // ("munge --page-lines 50 read file").  Stop at the operation so
     // its options remain its own business.
     var command_at: usize = 0;
     while (command_at < ctx.args.len and
-        !std.mem.eql(u8, ctx.args[command_at], "--") and
         std.mem.startsWith(u8, ctx.args[command_at], "--"))
     {
         // All munge-level options currently take a separate value.
