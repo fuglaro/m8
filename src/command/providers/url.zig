@@ -5,15 +5,22 @@
 //! writes the response on stdout, and everything it needs arrives in its
 //! environment.
 //!
-//! The reaching is curl's. TLS, certificates, proxies and http itself are
-//! what curl is for and what a distribution already keeps patched, so none of
-//! it is carried here: this turns an entry into a curl command line and gets
-//! out of the way.
+//! By default the reaching is curl's. TLS, certificates, proxies and http
+//! itself are what curl is for and what a distribution already keeps patched,
+//! so none of it is carried here. A no-curl build selects the standard-library
+//! HTTP client instead, without changing the provider's stdin/stdout shape.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const api = @import("../api.zig");
 const provider = @import("../../provider.zig");
 const Ctx = api.Ctx;
+
+/// The default keeps the provider tiny and delegates TLS, certificates, proxy
+/// support and HTTP to the curl already installed on the machine. The other
+/// branch is selected while compiling, so an executable contains only one
+/// transport.
+const no_curl_dep = build_options.no_curl_dep;
 
 pub const command: api.Command = .{
     .name = "url",
@@ -37,9 +44,24 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\provider that streams reaches whatever is next in the pipe while the
         \\model is still saying it.
         \\
-        \\The posting is done by `curl`, which has to be on PATH. Whatever the
-        \\api answers is passed on, an error as much as a reply; only a url
-        \\that could not be reached at all is a failure here.
+    );
+    if (comptime no_curl_dep) {
+        try w.writeAll(
+            \\The posting is done by m8's Zig standard-library HTTP client, so
+            \\this build does not need curl. Whatever the api answers is passed
+            \\on, an error as much as a reply; only a url that could not be
+            \\reached at all is a failure here.
+            \\
+        );
+    } else {
+        try w.writeAll(
+            \\The posting is done by `curl`, which has to be on PATH. Whatever
+            \\the api answers is passed on, an error as much as a reply; only a
+            \\url that could not be reached at all is a failure here.
+            \\
+        );
+    }
+    try w.writeAll(
         \\
         \\There is no path m8 appends. Which api lives where is a fact about a
         \\provider rather than about a format, so the whole endpoint is the url.
@@ -113,6 +135,73 @@ fn run(ctx: Ctx) !u8 {
         return 1;
     };
 
+    // This is a comptime choice, not a runtime mode. In particular, the
+    // curl build never references std.http.Client and the stdlib build never
+    // carries the curl command line or its curl-spawn path.
+    if (comptime no_curl_dep) return runStdlib(ctx, endpoint);
+    return runCurl(ctx, endpoint);
+}
+
+/// The no-curl transport. The stdlib client owns TLS and certificate lookup,
+/// which is the useful tradeoff for a self-contained binary. Keep this
+/// deliberately behind the comptime branch above: std.http is a substantial
+/// dependency and should not affect the default curl build.
+fn runStdlib(ctx: Ctx, endpoint: []const u8) !u8 {
+    var in_buf: [64 * 1024]u8 = undefined;
+    var input = std.Io.File.stdin().readerStreaming(ctx.io, &in_buf);
+    const request_body = try input.interface.allocRemaining(ctx.arena, .unlimited);
+
+    var extra: std.ArrayList(std.http.Header) = .empty;
+    try headersStdlib(ctx, &extra);
+
+    var client: std.http.Client = .{ .allocator = ctx.arena, .io = ctx.io };
+    defer client.deinit();
+
+    const uri = std.Uri.parse(endpoint) catch {
+        try ctx.err.print("m8 providers url: '{s}' is not a url\n", .{endpoint});
+        return 1;
+    };
+
+    var req = client.request(.POST, uri, .{
+        .headers = .{ .content_type = .{ .override = "application/json" } },
+        .extra_headers = extra.items,
+    }) catch |e| {
+        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
+        return 1;
+    };
+    defer req.deinit();
+
+    req.sendBodyComplete(@constCast(request_body)) catch |e| {
+        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
+        return 1;
+    };
+
+    var redirect_buf: [8192]u8 = undefined;
+    var response = req.receiveHead(&redirect_buf) catch |e| {
+        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
+        return 1;
+    };
+
+    // A non-200 response still contains the api's explanation. Passing its
+    // body through is part of the provider contract, just as it is in curl.
+    var transfer_buf: [64 * 1024]u8 = undefined;
+    const reader = response.reader(&transfer_buf);
+    while (true) {
+        reader.fill(1) catch |e| switch (e) {
+            error.EndOfStream => break,
+            else => return e,
+        };
+        const chunk = reader.buffered();
+        ctx.out.writeAll(chunk) catch return 0;
+        ctx.out.flush() catch return 0;
+        reader.toss(chunk.len);
+    }
+    return 0;
+}
+
+/// The default transport. curl keeps TLS, certificates, proxies and HTTP out
+/// of the executable, which is why it is the small build.
+fn runCurl(ctx: Ctx, endpoint: []const u8) !u8 {
     var lines: std.ArrayList(u8) = .empty;
     try headers(ctx, &lines);
 
@@ -159,6 +248,23 @@ const script =
     \\M8_END
     \\
 ;
+
+/// Collect the same configured headers for the stdlib client's typed header
+/// list. This is separate from the curl wire format so each comptime build
+/// only keeps the representation its transport uses.
+fn headersStdlib(ctx: Ctx, into: *std.ArrayList(std.http.Header)) !void {
+    const prefix = provider.env_prefix ++ "HEADER_";
+    var it = ctx.env.iterator();
+    while (it.next()) |e| {
+        const named = e.key_ptr.*;
+        if (!std.mem.startsWith(u8, named, prefix)) continue;
+        const value = (try ran(ctx, e.value_ptr.*)) orelse continue;
+        try into.append(ctx.arena, .{
+            .name = try headerName(ctx, named[prefix.len..]),
+            .value = value,
+        });
+    }
+}
 
 /// Where the key goes, and in what.
 ///

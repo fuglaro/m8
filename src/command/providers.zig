@@ -15,6 +15,7 @@
 //! the pages list and what the dispatch reads, so what is advertised and what
 //! answers cannot come apart.
 const std = @import("std");
+const build_options = @import("build_options");
 const config = @import("../config.zig");
 const provider = @import("../provider.zig");
 const launch = @import("../launch.zig");
@@ -195,4 +196,9 @@ test "the page for a provider command lists what it reads" {
     try @import("providers/url.zig").command.help.?(ctx, &url_page.writer);
     try testing.expect(std.mem.indexOf(u8, url_page.written(), "M8_PROVIDER_URL") != null);
     try testing.expect(std.mem.indexOf(u8, url_page.written(), "M8_PROVIDER_HEADER_") != null);
+    if (build_options.no_curl_dep) {
+        try testing.expect(std.mem.indexOf(u8, url_page.written(), "standard-library HTTP client") != null);
+    } else {
+        try testing.expect(std.mem.indexOf(u8, url_page.written(), "`curl`") != null);
+    }
 }

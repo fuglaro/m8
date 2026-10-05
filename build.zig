@@ -3,9 +3,14 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const no_curl_dep = b.option(
+        bool,
+        "no-curl-dep",
+        "Use Zig's stdlib HTTP client instead of requiring curl at runtime",
+    ) orelse false;
 
     // The single binary: every command, reached by calling it.
-    const exe = command(b, target, optimize, "m8", "src/main.zig", false, "");
+    const exe = command(b, target, optimize, "m8", "src/main.zig", false, "", no_curl_dep);
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
@@ -16,11 +21,11 @@ pub fn build(b: *std.Build) void {
     // Bare m8's prompt mode is part of the launcher, not a command in the set.
     const split = b.step("split", "Build the commands as separate programs");
     split.dependOn(&b.addInstallArtifact(
-        command(b, target, optimize, "m8", "src/main.zig", true, ""),
+        command(b, target, optimize, "m8", "src/main.zig", true, "", no_curl_dep),
         .{},
     ).step);
     for (paths(b)) |path| {
-        const leaf = command(b, target, optimize, program(b, path), "src/leaf.zig", true, path);
+        const leaf = command(b, target, optimize, program(b, path), "src/leaf.zig", true, path, no_curl_dep);
         split.dependOn(&b.addInstallArtifact(leaf, .{}).step);
     }
 
@@ -31,7 +36,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    tests.root_module.addOptions("build_options", options(b, false, ""));
+    tests.root_module.addOptions("build_options", options(b, false, "", no_curl_dep));
     b.step("test", "Run tests").dependOn(&b.addRunArtifact(tests).step);
 
     // A story file run straight through the machine, for working on the
@@ -57,6 +62,7 @@ fn command(
     root: []const u8,
     split: bool,
     path: []const u8,
+    no_curl_dep: bool,
 ) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = name,
@@ -66,14 +72,20 @@ fn command(
             .optimize = optimize,
         }),
     });
-    exe.root_module.addOptions("build_options", options(b, split, path));
+    exe.root_module.addOptions("build_options", options(b, split, path, no_curl_dep));
     return exe;
 }
 
-fn options(b: *std.Build, split: bool, path: []const u8) *std.Build.Step.Options {
+fn options(
+    b: *std.Build,
+    split: bool,
+    path: []const u8,
+    no_curl_dep: bool,
+) *std.Build.Step.Options {
     const o = b.addOptions();
     o.addOption(bool, "split", split);
     o.addOption([]const u8, "command", path);
+    o.addOption(bool, "no_curl_dep", no_curl_dep);
     return o;
 }
 

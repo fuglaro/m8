@@ -242,10 +242,13 @@ loop.
   and below. `build.zig.zon` declares no dependencies.
   Nothing vendored, nothing fetched at build time, no
   libcurl, no OpenSSL, nothing to CVE-track that is not
-  the toolchain.
-* No TLS or http of its own either. Reaching a url is
-  handed to the `curl` already on the machine, which a
-  distribution keeps patched anyway.
+  the toolchain in the default build.
+* The default `m8 providers url` hands reaching a url to
+  the `curl` already on the machine, which a distribution
+  keeps patched anyway. A self-contained HTTP transport is
+  available with `-Dno-curl-dep=true`; that build uses
+  Zig's standard-library HTTP client and carries TLS and
+  certificate handling instead.
 * No daemon, no database, no account, no telemetry, no
   bundled weights, and no network needed to build or
   test. `toy` answers locally, so the loop, tool
@@ -290,8 +293,10 @@ of the architecture. Most commands sit within a few
 kilobytes of a hello-world against this std, and the
 ones that do not say why: the codecs are in the ones
 that speak to a model, and a nested agent turn is in the
-shield that asks one. The command that posts to a url is
-not among them, because the posting is curl's.
+shield that asks one. In the default build the command
+that posts to a url is not among them, because the posting
+is curl's; `-Dno-curl-dep=true` deliberately puts the
+standard-library HTTP client in that command instead.
 
 Nothing about the command line changes between the two,
 and a distribution picks by what it is packaging rather
@@ -299,6 +304,26 @@ than by what it gets. Symlink `m8-cat` to the single
 binary and it *is* `m8-cat`, the way busybox is: same
 output, same status, so the uber download and the split
 package behave alike.
+
+The url transport is another build-time choice:
+
+```bash
+# Small default: curl is required at runtime.
+zig build -Doptimize=ReleaseSmall
+
+# Self-contained url provider: no curl executable is required.
+zig build -Doptimize=ReleaseSmall -Dno-curl-dep=true
+
+# The choice applies to split command binaries too.
+zig build split -Dno-curl-dep=true
+```
+
+`no-curl-dep` is comptime-selected in `providers url`. The
+unused transport is not linked, so the default does not carry
+`std.http` and the self-contained build does not carry the curl
+launcher. The latter is larger because TLS and certificate
+validation have to live somewhere, but only the url command
+pays for them in a split build.
 
 ### The field
 
