@@ -24,14 +24,11 @@ pub const command: api.Command = .{
 };
 
 fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len == 0) {
-        try ctx.err.writeAll("m8 encode: name a format\n");
-        try help(ctx, ctx.err);
-        try ctx.err.flush();
-        return 1;
-    }
-    const c = codec.find(ctx.args[0]) orelse {
-        try ctx.err.print("m8 encode: no format named '{s}'\n", .{ctx.args[0]});
+    // m8 is the lossless view of a ledger, so it is the useful default when
+    // no projection was requested explicitly.
+    const name = if (ctx.args.len == 0) "m8" else ctx.args[0];
+    const c = codec.find(name) orelse {
+        try ctx.err.print("m8 encode: no format named '{s}'\n", .{name});
         try help(ctx, ctx.err);
         try ctx.err.flush();
         return 1;
@@ -72,8 +69,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 encode — write a ledger as some api's request
         \\
-        \\  m8 encode FORMAT
+        \\  m8 encode [FORMAT]
         \\
+        \\With no FORMAT, the ledger is written as m8, the lossless format.
         \\The ledger arrives on stdin, with every 🧠 expanded into what it
         \\names. What comes out is one api's view of it.
         \\

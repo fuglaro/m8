@@ -599,7 +599,7 @@ nothing more.
 ### Encoding
 
 ```bash
-m8 encode FORMAT                   a ledger, as some api sees it
+m8 encode [FORMAT]                 a ledger, as some api sees it
 m8 decode FORMAT [PROVIDER]        that api's request, as a ledger
 m8 parse FORMAT                    that api's response, as a turn
 m8 send                            run a ledger and write the turn
@@ -617,7 +617,8 @@ There are four:
   where Codex and a ChatGPT plan answer.
 
 `m8 encode --help` is the same list, and any provider may
-name any of them.
+name any of them. With no format named, `m8 encode` uses
+`m8`, the lossless format.
 
 `m8` is a format like any other here, so `encode m8` is
 how a chat becomes one flat document.
