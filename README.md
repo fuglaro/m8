@@ -1953,7 +1953,6 @@ was never answered testable rather than only demonstrable:
 
 ```bash
 m8 @/toy/echo hello        # says the last thing said
-m8 @/toy/you-are anything  # "I know you are but what am I?"
 m8 @/toy/runner 'RUN;;;say;;;text=hi'
 m8 @/toy/eliza "I am not sleeping well."
 m8 @/toy/Z-Machine/zork1 "I would like to play"

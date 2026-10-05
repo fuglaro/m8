@@ -44,7 +44,6 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\
         \\  m8 @/toy/echo hello
-        \\  m8 @/toy/you-are anything
         \\  m8 @/toy/runner 'RUN;;;say;;;text=hi'
         \\  m8 @/toy/eliza "I am not sleeping well."
         \\  m8 @/toy/Z-Machine/zork1 "I would like to play"
@@ -136,11 +135,6 @@ const models = [_]Model{
         .answer = echo,
     },
     .{
-        .name = "you-are",
-        .summary = "\"I know you are but what am I?\", whatever you say",
-        .answer = youAre,
-    },
-    .{
         .name = "runner",
         .summary = "calls a tool per RUN;;;tool;;;property=value line",
         .answer = runner,
@@ -204,12 +198,6 @@ fn run(ctx: Ctx) !u8 {
 fn echo(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
     _ = model;
     return say(ctx, mode, lastSaid(records));
-}
-
-fn youAre(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
-    _ = model;
-    _ = records;
-    return say(ctx, mode, "I know you are but what am I?");
 }
 
 /// ELIZA. What she says back is decided by the last thing the person said and

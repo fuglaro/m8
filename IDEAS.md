@@ -45,9 +45,9 @@ Current system:
  |---|---|---|
  | `{{CODE}}` | fenced code inserted into a runner argv | `shield.zig:fill()` |
  | `{{M8}}` | current m8 executable path inserted into wrappers | shield substitution |
+ | `M8_CALL_ID` | call identity in the environment | converse/call path |
  | `{{__arg__}}` | tool call property exposed through the environment and optionally expanded by `m8 call` | toolbox + `argline.zig` |
  | `____` | whole call JSON in the environment / call template | toolbox + `argline.zig` |
- | `M8_CALL_ID` | call identity in the environment | converse/call path |
 
 
 ### MAYBE: Attachments
