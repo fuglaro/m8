@@ -10,6 +10,9 @@
 //! it printed. A trailing `:` asks without moving anything, and a trailing
 //! `-` takes a chat's pointer away so that it reads as its parent again.
 //!
+//! Resetting a chat also makes that fresh chat the main chat, so `@cody-`
+//! leaves the main conversation at cody's parent rather than at its old turn.
+//!
 //! An authored name is a path under `@/`, and the folder part is the mob —
 //! until the walk meets an agent file, after which every word is a chat under
 //! it. Generated chat state mirrors that path under the sibling `+/`. So
@@ -209,11 +212,14 @@ pub fn advance(
     }
 }
 
-/// Take a chat's pointer away. Only a chat has one of its own to take: the
-/// main chat has no parent to read as, and a turn or a model is not a chat.
+/// Reset a chat to its parent, and make that fresh chat the main chat. Only a
+/// chat has one of its own to take: the main chat has no parent to read as, and
+/// a turn or a model is not a chat.
 pub fn reset(arena: Allocator, io: std.Io, dirs: []const []const u8, a: Address) !void {
     if (a.kind != .chat) return Error.NothingToReset;
-    try session.unpoint(arena, io, dirs, try session.pointerOf(arena, a.name));
+    const ptr = try session.pointerOf(arena, a.name);
+    try session.unpoint(arena, io, dirs, ptr);
+    try session.point(arena, io, dirs, session.main, ptr);
 }
 
 /// Keep `records` as a turn tagged at `a`, and move what `a` moves.
@@ -378,5 +384,6 @@ test "tagging keeps a turn in the chat it advances, and moves main with it" {
     // Resetting reads as the parent again, and only a chat has one.
     try reset(arena, f.io, &dirs, fork);
     try testing.expectEqualStrings("mob/agent", try read(arena, f.io, &dirs, fork));
+    try testing.expectEqualStrings("mob/agent", try read(arena, f.io, &dirs, main));
     try testing.expectError(Error.NothingToReset, reset(arena, f.io, &dirs, main));
 }

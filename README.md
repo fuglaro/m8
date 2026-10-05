@@ -439,8 +439,8 @@ m8 @mathy/+/tduyxbutjb "Tell me more."
   so a 🧠 line pasted back in names what it printed.
 * A trailing `:` asks without moving anything, which is
   what a side question is. A trailing `-` resets a chat,
-  which then reads as its parent again; only a chat has
-  a parent to go back to.
+  makes that fresh chat the main chat, and reads as its
+  parent again; only a chat has a parent to go back to.
 * It is a pipeline written once. `m8 @mathy hi` is
   `echo hi | m8 cat @mathy | m8 send | m8 tag @mathy`,
   except that the reply is shown as it arrives and
