@@ -52,6 +52,7 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
         .in = "",
         .out = out,
         .err = err,
+        .stdout_pipe = stdoutPipe(io),
         .tty = api.openTty(io, &tty_storage),
     };
 
@@ -100,6 +101,7 @@ pub fn run(
         .in = "",
         .out = out,
         .err = err,
+        .stdout_pipe = stdoutPipe(io),
         .tty = api.openTty(io, &tty_storage),
     };
     return finish(ctx, name, launch.under(ctx, reach, args, input));
@@ -108,6 +110,7 @@ pub fn run(
 /// Everything on its way out, and whatever went wrong said once.
 fn finish(ctx: api.Ctx, name: []const u8, result: anyerror!u8) !u8 {
     const status = result catch |e| {
+        if (e == error.WriteFailed and ctx.stdout_pipe) return 0;
         try ctx.out.flush();
         if (ctx.tty) |t| try t.w.flush();
         try explain(ctx.err, name, e);
@@ -115,12 +118,21 @@ fn finish(ctx: api.Ctx, name: []const u8, result: anyerror!u8) !u8 {
         return 1;
     };
 
-    try ctx.out.flush();
+    ctx.out.flush() catch |e| {
+        if (e == error.WriteFailed and ctx.stdout_pipe) return 0;
+        return e;
+    };
     if (ctx.tty) |t| try t.w.flush();
     // A command that answered with a status rather than an error still said
     // why on the way, and this is the one place both are on their way out.
     try ctx.err.flush();
     return status;
+}
+
+/// Whether stdout is a pipe rather than a file or terminal.
+fn stdoutPipe(io: std.Io) bool {
+    const stat = std.Io.File.stdout().stat(io) catch return false;
+    return stat.kind == .named_pipe;
 }
 
 /// Where the m8 launcher is, from where this binary is.

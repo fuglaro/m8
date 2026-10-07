@@ -31,7 +31,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\`m8 cat` does with a 🧠. A 📚 expands to the file's top — what sits
         \\between its two 🔝 — so that is what joins the ledger.
         \\
-        \\  m8 top @tight-docs | m8 @mathy "tidy the README"
+        \\  m8 top @tight-docs | m8 @mathy -- "tidy the README"
         \\
     );
 }

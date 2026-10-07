@@ -47,6 +47,10 @@ pub const Ctx = struct {
     /// Diagnostics and help. Never part of the document, always visible, and
     /// unlike `tty` it is there even under a pipe.
     err: *std.Io.Writer,
+    /// Whether stdout is a pipe. A downstream command such as `head` is
+    /// allowed to close it early; a write failure there is a successful early
+    /// termination rather than a diagnostic.
+    stdout_pipe: bool = false,
     /// The person, when there is one, for anything that needs an answer back.
     /// Null under a pipe or in a script, which is the signal to run
     /// non-interactively rather than to fail.
@@ -144,7 +148,7 @@ pub const Command = struct {
 ///
 /// Asked once, here, so no command has to remember to answer `--help` and no
 /// two answer it differently. m8 reads it before a command sees its arguments;
-/// the words after an `@` are prose, and are the one exception.
+/// prompt words after an `@` are prose only after their `--` separator.
 pub fn wantsHelp(args: []const []const u8) bool {
     return args.len > 0 and std.mem.eql(u8, args[0], "--help");
 }

@@ -49,7 +49,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\`brain`, `books`. One kind per invocation, so a shield that wants
         \\several stacks several:
         \\
-        \\  ▄ 🛡️freeze-toolbox
+        \\  ▐ 🛡️freeze-toolbox
         \\  │ 🛡️filter-toolbox
         \\  │ 🛡️filter-brain
         \\

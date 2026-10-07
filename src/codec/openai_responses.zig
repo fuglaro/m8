@@ -11,8 +11,9 @@
 //! What it carries that chat completions cannot:
 //!
 //! * A thought is a `reasoning` item with `encrypted_content`, so 💭 and its
-//!   🔏 survive the round trip. The 🔏 holds `id,encrypted_content` — two
-//!   fields, because this api needs both to believe a thought it is handed
+//!   🔏 survive the round trip. Summary parts come back as compact value-only
+//!   💭 records when they are one line; the 🔏 holds `id,encrypted_content` —
+//!   two fields, because this api needs both to believe a thought it is handed
 //!   back. m8 reads neither; a signature is opaque here as everywhere.
 //! * A tool answer carries `status`, which is `in_progress`, `completed` or
 //!   `incomplete`.
@@ -165,7 +166,7 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
         switch (r.sigil) {
             .user => try message(s, "user", r.content orelse ""),
             .bot => try message(s, "assistant", r.content orelse ""),
-            .thought => if (try signed(arena, r.content orelse "")) |thought|
+            .thought => if (try signed(arena, api.thoughtText(r))) |thought|
                 try reasoning(s, try owedTo(arena, records, i, thought)),
             .call => {
                 try s.beginObject();
@@ -310,11 +311,11 @@ fn signed(arena: Allocator, content: []const u8) !?Thought {
 fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Thought) !Thought {
     var from = at;
     while (from > 0 and records[from - 1].sigil == .thought and
-        (try signed(arena, records[from - 1].content orelse "")) == null) from -= 1;
+        (try signed(arena, api.thoughtText(records[from - 1]))) == null) from -= 1;
     if (from == at) return thought;
 
     var parts: std.ArrayList([]const u8) = .empty;
-    for (records[from..at]) |r| try parts.append(arena, r.content orelse "");
+    for (records[from..at]) |r| try parts.append(arena, api.thoughtText(r));
     try parts.appendSlice(arena, thought.parts);
     return .{ .parts = parts.items, .id = thought.id, .encrypted = thought.encrypted };
 }
@@ -517,6 +518,9 @@ const Building = struct {
     shown: bool = false,
     /// Whether the part being read has said anything yet.
     said: bool = false,
+    /// A thought summary is held until its part closes, so a one-line summary
+    /// can use the compact value form rather than a quoted block.
+    summary: std.ArrayList(u8) = .empty,
     args: std.ArrayList(u8) = .empty,
     id: []const u8 = "",
     name: []const u8 = "",
@@ -539,6 +543,7 @@ const Building = struct {
         b.part = 0;
         b.parts = 0;
         b.said = false;
+        b.summary = .empty;
         b.args = .empty;
         b.id = "";
         b.name = "";
@@ -606,6 +611,15 @@ const Building = struct {
     /// next. A part that said nothing leaves nothing behind.
     fn nextPart(b: *Building, index: i64) !void {
         if (b.said) b.parts += 1;
+        if (b.summary.items.len > 0) {
+            const compact = std.mem.indexOfAny(u8, b.summary.items, "\r\n") == null;
+            try b.sink.record(
+                .thought,
+                if (compact) b.summary.items else "",
+                if (compact) "" else b.summary.items,
+            );
+            b.summary = .empty;
+        }
         if (b.shown) try b.sink.end();
         b.shown = false;
         b.said = false;
@@ -617,6 +631,10 @@ const Building = struct {
     fn say(b: *Building, s: sigil.Sigil, fragment: []const u8) !void {
         if (fragment.len == 0) return;
         b.said = true;
+        if (s == .thought) {
+            try b.summary.appendSlice(b.arena, fragment);
+            return;
+        }
         if (!b.shown) {
             try b.sink.begin(s, "");
             b.shown = true;
@@ -906,7 +924,8 @@ test "a thought goes out only when it is signed, with the id this api needs" {
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .thought, .content = "hmm\n:lock_with_ink_pen:rs_1,ENCRYPTED" },
+        .{ .sigil = .thought, .value = "hmm" },
+        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen:rs_1,ENCRYPTED" },
         .{ .sigil = .thought, .content = "came off another wire" },
         .{ .sigil = .bot, .content = "Hello." },
     };
@@ -1022,7 +1041,8 @@ test "a streamed reply reads as the items it was made of" {
 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[0].sigil);
-    try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings("weighing it", collect.got.records.items[0].value);
+    try testing.expect(collect.got.records.items[0].content == null);
     // The id and the encrypted content follow the thought they sign, in a 💭
     // asking to be kept aside: this api wants both back before it will
     // believe it, and nobody needs to read them.
@@ -1031,10 +1051,10 @@ test "a streamed reply reads as the items it was made of" {
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
 
-    // Streamed as it arrived, and the 🔏 when the item that carried it ended.
-    // The 📲 did not: a call cannot be shown until it is whole.
+    // The compact summary and then the 🔏 when the item that carried it
+    // ended. The 📲 did not: a call cannot be shown until it is whole.
     try testing.expectEqualStrings(
-        "thought:weighing it\nthought::lock_with_ink_pen:rs_1,ENCRYPTED\nbot:Let me look.",
+        "thought:\nthought::lock_with_ink_pen:rs_1,ENCRYPTED\nbot:Let me look.",
         collect.seen.items,
     );
 
@@ -1077,8 +1097,10 @@ test "each summary part is a 💭, and they go back as one item" {
         var collect: Collect = .{ .arena = arena };
         _ = try parse(arena, &r, collect.sink());
         try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
-        try testing.expectEqualStrings("**Verifying**", collect.got.records.items[0].content.?);
-        try testing.expectEqualStrings("**Refining**", collect.got.records.items[1].content.?);
+        try testing.expectEqualStrings("**Verifying**", collect.got.records.items[0].value);
+        try testing.expectEqualStrings("**Refining**", collect.got.records.items[1].value);
+        try testing.expect(collect.got.records.items[0].content == null);
+        try testing.expect(collect.got.records.items[1].content == null);
         try testing.expectEqualStrings(api.snip, collect.got.records.items[2].value);
 
         // Encoded, the parts are one item's summary again, signed once.
@@ -1106,7 +1128,8 @@ test "a whole reply reads the same as a streamed one" {
     const reply = try parse(arena, &r, collect.sink());
 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
-    try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings("weighing it", collect.got.records.items[0].value);
+    try testing.expect(collect.got.records.items[0].content == null);
     try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", collect.got.records.items[1].content.?);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
     try testing.expectEqualStrings(
@@ -1273,7 +1296,8 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     // reason given.
     _ = try parse(arena, &r, collect.sink());
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
-    try testing.expectEqualStrings("working it through", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings("working it through", collect.got.records.items[0].value);
+    try testing.expect(collect.got.records.items[0].content == null);
     try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENC", collect.got.records.items[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[2].value);

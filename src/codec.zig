@@ -37,6 +37,13 @@ pub const Error = error{UnknownCodec};
 /// The transient value a provider gives a 💭 whose content should be kept aside.
 pub const snip = @import("session.zig").snip;
 
+/// The text of a thought. A block is the full form; without one, the value is
+/// the compact one-line form. `snip` is special only when the block exists,
+/// so a blockless `💭snip` is ordinary thought text too.
+pub fn thoughtText(r: doc.Record) []const u8 {
+    return r.content orelse r.value;
+}
+
 /// How a request is read when decoding. m8 never writes a key twice, but a
 /// request from elsewhere may, and the last one is how most JSON reads it.
 pub const request_options: std.json.ParseOptions = .{ .duplicate_field_behavior = .use_last };
@@ -371,6 +378,22 @@ test "every codec has a name and a summary, and no two share one" {
     // The name a provider defaults to has to be one of them.
     try testing.expect(find(default) != null);
     try testing.expect(find("nosuch") == null);
+}
+
+test "a thought uses its block, or its compact value" {
+    try testing.expectEqualStrings("full", thoughtText(.{
+        .sigil = .thought,
+        .value = "ignored",
+        .content = "full",
+    }));
+    try testing.expectEqualStrings("compact", thoughtText(.{
+        .sigil = .thought,
+        .value = "compact",
+    }));
+    try testing.expectEqualStrings("snip", thoughtText(.{
+        .sigil = .thought,
+        .value = snip,
+    }));
 }
 
 test "m8 encodes to itself and decodes back" {

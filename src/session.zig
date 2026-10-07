@@ -61,7 +61,9 @@ pub fn keepSnip(
     return name;
 }
 
-/// Whether a record asks for what it holds to be kept aside.
+/// Whether a record asks for what it holds to be kept aside. The marker is
+/// meaningful only with a block on the same thought; a blockless `💭snip` is
+/// the compact one-line thought "snip".
 pub fn isSnip(r: doc.Record) bool {
     return r.sigil == .thought and r.content != null and std.mem.eql(u8, r.value, snip);
 }
@@ -315,6 +317,12 @@ test "an id is lowercase letters only" {
     // 640 letters over 26 buckets: a letter never appearing would mean the
     // rejection step is folding the range wrong.
     for (seen) |s| try std.testing.expect(s);
+}
+
+test "snip needs a block on the same thought" {
+    try testing.expect(!isSnip(.{ .sigil = .thought, .value = snip }));
+    try testing.expect(isSnip(.{ .sigil = .thought, .value = snip, .content = "hidden" }));
+    try testing.expect(!isSnip(.{ .sigil = .thought, .value = "summary", .content = "hidden" }));
 }
 
 test "a snip is a fresh short reference" {

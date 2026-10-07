@@ -2,7 +2,7 @@
 //!
 //! A record is a header line and at most one content block:
 //!
-//!     ▄ 🧰shell          #### :toolbox:shell
+//!     ▐ 🧰shell          #### :toolbox:shell
 //!     │ run a command    > run a command
 //!
 //! The header is a sigil and its value. The content is the block quoted
@@ -43,7 +43,7 @@ pub const Record = struct {
 pub fn header(mode: Mode) []const u8 {
     return switch (mode) {
         .md => "#### ",
-        .m8 => "\u{2584} ", // ▄
+        .m8 => "\u{2590} ", // ▐
     };
 }
 
@@ -350,16 +350,16 @@ test "both spellings parse the same document" {
     var d1: Diagnostic = .{};
     var d2: Diagnostic = .{};
     const md = try parse(a.allocator(), "#### :compass:\n> hi\n", &d1);
-    const m8 = try parse(b.allocator(), "\u{2584} \u{1F9ED}\n\u{2502} hi\n", &d2);
+    const m8 = try parse(b.allocator(), "\u{2590} \u{1F9ED}\n\u{2502} hi\n", &d2);
     try testing.expectEqual(md[0].sigil, m8[0].sigil);
     try testing.expectEqualStrings(md[0].content.?, m8[0].content.?);
 }
 
 test "detect finds the spelling, or says it is not a document" {
     try testing.expectEqual(Mode.md, detect("#### :brain:x\n").?);
-    try testing.expectEqual(Mode.m8, detect("\u{2584} \u{1F9E0}x\n").?);
+    try testing.expectEqual(Mode.m8, detect("\u{2590} \u{1F9E0}x\n").?);
     try testing.expect(detect("#### not a sigil\n") == null);
-    try testing.expect(detect("\u{2584} not a sigil\n") == null);
+    try testing.expect(detect("\u{2590} not a sigil\n") == null);
     try testing.expect(detect("just some words\n") == null);
     try testing.expect(detect("") == null);
 }
@@ -453,7 +453,7 @@ test "an unknown sigil is an error in either spelling" {
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    try testing.expectError(error.UnknownSigil, parse(b.allocator(), "\u{2584} \u{1F600}x\n", &d2));
+    try testing.expectError(error.UnknownSigil, parse(b.allocator(), "\u{2590} \u{1F600}x\n", &d2));
 }
 
 test "CRLF parses identically, and a doubled CR survives" {

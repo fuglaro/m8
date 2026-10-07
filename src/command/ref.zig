@@ -1,6 +1,6 @@
 //! `ref` — the 🧠 a document ends on, and nothing else.
 //!
-//! What `m8 @x hi` writes is the reply and then the 🧠 of the turn it kept,
+//! What `m8 @x -- hi` writes is the reply and then the 🧠 of the turn it kept,
 //! which is what a person or a script wants to read. What the next command
 //! wants is often the reference alone, and this is how one becomes the other.
 //!
@@ -27,12 +27,12 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  m8 ref
         \\
-        \\`m8 @x hi` writes the reply and then the 🧠 of the turn it kept. This
+        \\`m8 @x -- hi` writes the reply and then the 🧠 of the turn it kept. This
         \\keeps that last 🧠 alone, which is what a command wanting a reference
         \\is handed.
         \\
-        \\  m8 @x hi | m8 ref | m8 tag @y              fork the new turn into y
-        \\  m8 @x hi | m8 ref | m8 @y "review that"    hand y the conversation
+        \\  m8 @x -- hi | m8 ref | m8 tag @y          fork the new turn into y
+        \\  m8 @x -- hi | m8 ref | m8 @y -- "review that"    hand y the conversation
         \\
         \\A document that ends on anything else has nothing to reference: a
         \\turn `m8 send` wrote was never kept, so tag it first.

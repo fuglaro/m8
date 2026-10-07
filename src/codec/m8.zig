@@ -152,6 +152,21 @@ const Collect = struct {
     }
 };
 
+test "a blockless thought keeps its value, including snip" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var r: std.Io.Reader = .fixed("#### :thought_balloon:snip\n");
+    var collect: Collect = .{ .arena = arena };
+    _ = try parse(arena, &r, collect.sink());
+
+    try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
+    try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[0].sigil);
+    try testing.expectEqualStrings("snip", collect.got.records.items[0].value);
+    try testing.expect(collect.got.records.items[0].content == null);
+}
+
 test "a reply in the language streams as it is written" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();

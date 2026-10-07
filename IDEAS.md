@@ -1,5 +1,14 @@
 # IDEAS
 
+
+* DONE: make :thought_ballon:snip only apply when given along with a block quote
+  on the same sigil, clearing room for allowing single line thoughts
+  to be given on the value section (for compactness).
+  Providers should apply and interpret this if encountered (SHOULD apply, MUST interpret).
+  This improves UX on summarised thought bubbles significantly better.
+
+----
+
 ## Mission
 
 Review everything again on the mission statement in the README.md
@@ -338,7 +347,7 @@ Current system:
 
 ```
 >>> m8 cat @pagey/+/NOFILEHERE
-▄ 🧠pagey/+/NOFILEHERE
+▐ 🧠pagey/+/NOFILEHERE
 ```
 
 * DONE: No blank lines between recipt, green circle, call sigils, just like we did across though_balloons.

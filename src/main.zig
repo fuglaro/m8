@@ -1,10 +1,10 @@
 //! m8 — a composable shell harness.
 //!
-//!     m8 [@ADDRESS[:|-] [WHATEVER YOU WANT TO SAY]]
+//!     m8 [@ADDRESS[:|-] [-- PROMPT]]
 //!     m8 COMMAND [ARGS]
 //!
 //! `@` is how the command line names an address, and it sits where a command
-//! would. What follows it is prose, so nothing has to arbitrate between m8's
+//! would. A prompt follows `--`, so nothing has to arbitrate between m8's
 //! arguments and yours. A bare `m8` is `m8 @`, the main chat.
 //!
 //! Every other command is `m8 COMMAND ARGS` with stdin, and resolves whatever
@@ -36,18 +36,19 @@ fn overview(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 - the composable agentic shell harness
         \\
-        \\  m8 @AGENT[:|-] [REQUEST_MESSAGE]
+        \\  m8 @AGENT[:|-] [-- REQUEST_MESSAGE]
         \\  m8 COMMAND [ARGS]
         \\
-        \\@AGENT sends a REQUEST_MESSAGE or stdin 
+        \\@AGENT sends a REQUEST_MESSAGE or stdin. Put `--` before a
+        \\request supplied as command-line arguments.
         \\
         \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
         \\on whichever chat was talked to last. A chat under an agent is a fork
         \\of it, `:` asks without moving anything, and `-` starts a chat over.
         \\
-        \\  m8 @mathy "Tell me about the Riemann Sphere."
-        \\  m8 @ "Tell me more."
-        \\  m8 @mathy/aside "A different thought."
+        \\  m8 @mathy -- "Tell me about the Riemann Sphere."
+        \\  m8 @ -- "Tell me more."
+        \\  m8 @mathy/aside -- "A different thought."
         \\
         \\Every command reads stdin and writes stdout, so the same thing is a
         \\pipeline too:
@@ -107,16 +108,16 @@ pub fn main(init: std.process.Init) !u8 {
     const out = &stdout.interface;
     const err = &stderr.interface;
 
-    // The launcher owns its overview. Only the first word is reserved; after
-    // an address, `--help` is prose like everything else in the prompt.
+    // The launcher owns its overview. Only the first word is reserved; a
+    // prompt's `--help` is prose after its required `--` separator.
     if (command.api.wantsHelp(@ptrCast(args))) {
         try overview(out);
         try out.flush();
         return 0;
     }
 
-    // An address, or nothing at all, is the prompt. Its words are prose, so
-    // nothing in them is read here.
+    // An address, or nothing at all, is the prompt. The prompt parser owns
+    // the `--` separator after the address.
     if (args.len == 0 or address.isAddress(args[0]))
         return harness.run(io, arena, init.environ_map, .prompt, "", @ptrCast(args), .inherited, self, out, err);
 

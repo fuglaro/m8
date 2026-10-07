@@ -553,7 +553,9 @@ const LiveReply = struct {
     }
 
     fn snipped(self: *const LiveReply) bool {
-        return self.pending == .thought and std.mem.eql(u8, self.said.value, session.snip);
+        return self.pending == .thought and
+            self.said.text.items.len > 0 and
+            std.mem.eql(u8, self.said.value, session.snip);
     }
 
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {

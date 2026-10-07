@@ -1,4 +1,4 @@
-//! `m8 @ADDRESS WORDS` — the pipeline written once.
+//! `m8 @ADDRESS [-- WORDS]` — the pipeline written once.
 //!
 //!     echo WORDS | m8 cat @ADDRESS | m8 send | m8 tag @ADDRESS
 //!
@@ -8,9 +8,9 @@
 //! model call and every tool call, each naming the one before — rather than
 //! once there is a whole run to keep.
 //!
-//! `@` is not a command, but it sits where one would. Its arguments are prose,
-//! so nothing after it has to be told from m8's own flags — which is what the
-//! old `--` marker was for, and why there is no `--` any more.
+//! `@` is not a command, but it sits where one would. A prompt supplied as
+//! arguments follows the `--` marker, so prose cannot be mistaken for m8
+//! syntax.
 
 const std = @import("std");
 const doc = @import("m8/doc.zig");
@@ -21,16 +21,31 @@ const converse = @import("converse.zig");
 const api = @import("command/api.zig");
 const Ctx = api.Ctx;
 
-/// `args` are every word after `m8`: the address, and what to say to it. None
-/// at all is the main chat.
+/// Return the prompt words after the address. A command-line prompt must be
+/// explicitly separated from the address; an absent marker is distinct from
+/// an absent prompt.
+fn promptWords(args: []const []const u8) ?[]const []const u8 {
+    if (args.len == 0) return &.{};
+    const rest = args[1..];
+    if (rest.len == 0) return rest;
+    if (!std.mem.eql(u8, rest[0], "--")) return null;
+    return rest[1..];
+}
+
+/// `args` are every word after `m8`: the address, followed by an optional
+/// `--` and what to say to it. None at all is the main chat.
 pub fn run(ctx: Ctx, args: []const []const u8) !u8 {
+    const words = promptWords(args) orelse {
+        try ctx.err.writeAll("m8: put -- before what you want to say\n");
+        return 1;
+    };
+
     const arena = ctx.arena;
     const io = ctx.io;
     const dirs = try config.discover(arena, io, ctx.env);
 
     const word = if (args.len > 0) args[0] else "@";
     const a = try address.typed(arena, io, dirs, word, ctx.err);
-    const words = if (args.len > 0) args[1..] else args;
 
     if (a.suffix == .reset) {
         if (words.len > 0) {
@@ -167,4 +182,18 @@ fn readTerminalPrompt(
         if (got[got.len - 1] != '\n') break;
     }
     return text.items;
+}
+
+// ---------------------------------------------------------------- tests
+
+const testing = std.testing;
+
+test "a command-line prompt needs its separator" {
+    try testing.expect(promptWords(&.{}).?.len == 0);
+    try testing.expect(promptWords(&.{"@mathy"}).?.len == 0);
+    const words = promptWords(&.{ "@mathy", "--", "hello", "--help" }).?;
+    try testing.expectEqual(@as(usize, 2), words.len);
+    try testing.expectEqualStrings("hello", words[0]);
+    try testing.expectEqualStrings("--help", words[1]);
+    try testing.expect(promptWords(&.{ "@mathy", "hello" }) == null);
 }

@@ -256,7 +256,22 @@ pub fn run(
 
     var read_buf: [64 * 1024]u8 = undefined;
     var r = child.stdout.?.readerStreaming(io, &read_buf);
-    const reply = try c.parse(arena, &r.interface, sink);
+    const reply = c.parse(arena, &r.interface, sink) catch |parse_err| {
+        // A parser may have stopped at the first malformed line. Drain what
+        // remains before waiting, or a provider that wrote a large response
+        // can stay blocked with its stdout pipe full and hide the diagnostic.
+        _ = r.interface.discardRemaining() catch {};
+
+        var parse_err_buf: [8 * 1024]u8 = undefined;
+        var parse_stderr = child.stderr.?.readerStreaming(io, &parse_err_buf);
+        const parse_said = parse_stderr.interface.allocRemaining(arena, .limited(8192)) catch "";
+        const why = std.mem.trimEnd(u8, parse_said, "\n");
+        if (why.len > 0)
+            try err.print("m8: provider {s} stderr: {s}\n", .{ c.name, why });
+        try err.print("m8: provider {s}: {s}\n", .{ c.name, @errorName(parse_err) });
+        _ = child.wait(io) catch {};
+        return parse_err;
+    };
 
     var err_buf: [8 * 1024]u8 = undefined;
     var e = child.stderr.?.readerStreaming(io, &err_buf);

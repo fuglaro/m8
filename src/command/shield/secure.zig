@@ -86,9 +86,9 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
         \\Restrictions come as one space separated argument, which is how a
         \\🛡 hands over what was appended to its variable:
         \\
-        \\  ▄ 🛡️secure
+        \\  ▐ 🛡️secure
         \\  │ `bash` `-e` `-c` `exec {{M8}} shield secure "${__secures__}" -- "$@"` `bash`
-        \\  ▄ 🛡️secure secures airgap
+        \\  ▐ 🛡️secure secures airgap
         \\
         \\A restriction it does not recognise is refused rather than ignored.
         \\Not understanding what was asked for is never a reason to apply less

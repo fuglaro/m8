@@ -189,7 +189,7 @@ fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                 i += 1;
             },
             .thought => {
-                if (try signed(arena, r.content orelse "")) |thought| {
+                if (try signed(arena, api.thoughtText(r))) |thought| {
                     try turn.speak(.assistant);
                     try writeThinking(s, try owedTo(arena, records, i, thought));
                 }
@@ -408,13 +408,13 @@ fn signed(arena: Allocator, content: []const u8) !?Thought {
 fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Thought) !Thought {
     var from = at;
     while (from > 0 and records[from - 1].sigil == .thought and
-        (try signed(arena, records[from - 1].content orelse "")) == null) from -= 1;
+        (try signed(arena, api.thoughtText(records[from - 1]))) == null) from -= 1;
     if (from == at) return thought;
 
     var text: std.ArrayList(u8) = .empty;
     for (records[from..at]) |r| {
         if (text.items.len > 0) try text.append(arena, '\n');
-        try text.appendSlice(arena, r.content orelse "");
+        try text.appendSlice(arena, api.thoughtText(r));
     }
     if (thought.text.len > 0) {
         if (text.items.len > 0) try text.append(arena, '\n');
@@ -1025,7 +1025,8 @@ test "a thought goes out only when it is signed" {
 
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Hi." },
-        .{ .sigil = .thought, .content = "hmm\n:lock_with_ink_pen:abc123" },
+        .{ .sigil = .thought, .value = "hmm" },
+        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen:abc123" },
         .{ .sigil = .thought, .content = "came off another wire" },
         .{ .sigil = .bot, .content = "Hello." },
     };

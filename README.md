@@ -4,18 +4,18 @@
 The command-line-first agentic harness - fully embracing the shell.
 
 ```
-fuglaro@localhost> m8 @pagey 'One word -> do you like Haiku?'
-▄ 🤖
+fuglaro@localhost> m8 @pagey -- 'One word -> do you like Haiku?'
+▐ 🤖
 │ Yes.
 
-▄ 🧠pagey/+/swlyayqtjk
-fuglaro@localhost> m8 @ 'Throw me a quick one please.'
-▄ 🤖
+▐ 🧠pagey/+/swlyayqtjk
+fuglaro@localhost> m8 @ -- 'Throw me a quick one please.'
+▐ 🤖
 │ Moonlight on still ponds
 │ Crickets stitch the dark with song
 │ Dawn waits behind hills
 
-▄ 🧠pagey/+/psbarddrym
+▐ 🧠pagey/+/psbarddrym
 fuglaro@localhost>
 ```
 
@@ -398,24 +398,24 @@ relitigating them.
 ## Commands
 
 ```bash
-m8 [@ADDRESS[:|-] [WHATEVER YOU WANT TO SAY]]
+m8 [@ADDRESS[:|-] [-- PROMPT]]
 m8 COMMAND [ARGS]
 ```
 
 ```bash
-m8 @mathy "Tell me about the Riemann Sphere\nin detail."
-m8 @ "Tell me more."
-m8 @mathy/aside "And what about the Möbius strip?"
+m8 @mathy -- "Tell me about the Riemann Sphere\nin detail."
+m8 @ -- "Tell me more."
+m8 @mathy/aside -- "And what about the Möbius strip?"
 ```
 
 ```bash
 echo "Tell me about the Riemann Sphere\nin detail." | m8 @mathy
 ```
 ```
-▄ 🤖
+▐ 🤖
 │ The Riemann Sphere is a ...
 
-▄ 🧠mathy/+/tduyxbutjb
+▐ 🧠mathy/+/tduyxbutjb
 ```
 
 The reply went to a tty, so it is rendered. The turn
@@ -436,20 +436,20 @@ cat ".m8-st8/+/mathy/+/tduyxbutjb.md"
 ```
 
 ```bash
-m8 @mathy/+/tduyxbutjb "Tell me more."
+m8 @mathy/+/tduyxbutjb -- "Tell me more."
 ```
 ```
-▄ 🤖
+▐ 🤖
 │ Additionally,
 │ ...
 
-▄ 🧠mathy/+/ypfpkuimzg
+▐ 🧠mathy/+/ypfpkuimzg
 ```
 
-* `@` sits where a command would, and is not one. The
-  words after it are prose, joined with a space, so
-  nothing has to arbitrate between m8's arguments and
-  yours.
+* `@` sits where a command would, and is not one. A
+  prompt supplied as arguments follows `--`, and its
+  words are joined with a space, so nothing has to
+  arbitrate between m8's arguments and yours.
 * A bare `m8` is `m8 @`, the main chat — whichever chat
   was talked to last.
 * An address is a chat, a turn or a model:
@@ -466,7 +466,7 @@ m8 @mathy/+/tduyxbutjb "Tell me more."
   what a side question is. A trailing `-` resets a chat,
   makes that fresh chat the main chat, and reads as its
   parent again; only a chat has a parent to go back to.
-* It is a pipeline written once. `m8 @mathy hi` is
+* It is a pipeline written once. `m8 @mathy -- hi` is
   `echo hi | m8 cat @mathy | m8 send | m8 tag @mathy`,
   except that the reply is shown as it arrives and
   tagged as it goes. See Composing and Turns and chats.
@@ -506,8 +506,8 @@ m8 munge --help            one tool and all its operations
 A leading `--help` is m8's rather than any command's, so no
 command has to parse it and no two answer it differently.
 It is the only help option; `-h` remains an ordinary argument.
-The words after an `@` are prose, so a `--help` among them is
-said rather than read.
+The words after an `@` are prose after the required `--`, so a
+`--help` among them is said rather than read.
 
 A page you asked for is written to stdout, where it can
 be paged and piped. A page handed back instead of what
@@ -536,9 +536,9 @@ somebody would have typed after the address — so it
 joins the prompt.
 
 ```bash
-cat notes.txt | m8 @ "Summarize:"               # one 🙋, prompt first
-echo "#### :brain:/local/tiny" | m8 @mathy "Quickly?"
-m8 top @tight-docs | m8 @mathy "Tidy the README."
+cat notes.txt | m8 @ -- "Summarize:"               # one 🙋, prompt first
+echo "#### :brain:/local/tiny" | m8 @mathy -- "Quickly?"
+m8 top @tight-docs | m8 @mathy -- "Tidy the README."
 ```
 
 Piping is not required, and neither is a prompt when
@@ -564,7 +564,7 @@ m8 cat @mathy | m8 send | m8 tag @mathy      what m8 @mathy does
 m8 cat @mathy | m8 tag @mathy/aside          fork, with nothing said
 m8 cat @ | m8 send | m8 tag @mathy/other     keep a run somewhere else
 m8 cat @ | m8 encode m8 | m8 save @notes     a chat, flattened into an agent
-m8 @mathy hi | m8 ref | m8 @critic "Review that."
+m8 @mathy -- hi | m8 ref | m8 @critic -- "Review that."
 ```
 
 * `cat @X` writes the 🧠 that X reads as now, then
@@ -815,9 +815,9 @@ trailer is not counted.
 Agent definition:
 
 ```m8
-▄ 🧠Address, Agent Name or Model
+▐ 🧠Address, Agent Name or Model
 
-▄ 🧰Tool Name
+▐ 🧰Tool Name
 │ │ Tool Description
 │ 🛡️Shield Name
 │ `m8` `call` `cmd` `{{propertyname|--flag}}`
@@ -826,10 +826,10 @@ Agent definition:
 │ * Other? integer
 │   Optional, so ? on the name
 
-▄ 🏃bash
+▐ 🏃bash
 │ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
 
-▄ 🧰Tool Name
+▐ 🧰Tool Name
 │ │ A fenced block runs through the 🏃 it names.
 │ ```bash
 │ echo "$__propertyname__"
@@ -843,11 +843,11 @@ Agent definition:
 │ * ParentName.PropertyName integer
 │   Nested
 
-▄ 🧰Tool Name
+▐ 🧰Tool Name
 
-▄ 🛡️Shield Name
+▐ 🛡️Shield Name
 
-▄ 🧭
+▐ 🧭
 │ System Prompt
 │ A record is a header and a content block, and
 │ content is verbatim, so this line may begin with
@@ -855,7 +855,7 @@ Agent definition:
 │ A , separates a fixed number of fields, so the
 │ last field may hold one safely.
 
-▄ 🧭
+▐ 🧭
 │ Included Agents inject Tools and System
 │ Prompts.
 ```
@@ -863,24 +863,24 @@ Agent definition:
 Query:
 
 ```m8
-▄ 🧠Agent or Model Name
+▐ 🧠Agent or Model Name
 
-▄ 🙋
+▐ 🙋
 │ User Content Text
 
-▄ 💭
+▐ 💭
 │ Assistant Thoughts
 │ 🔏Optional Signature
 
-▄ 🤖
+▐ 🤖
 │ Assistant Content Text
 
-▄ 📲Called Tool Name,Call ID
+▐ 📲Called Tool Name,Call ID
 
-▄ 🚫Call ID
+▐ 🚫Call ID
 │ Error response
 
-▄ 📲Called Tool Name,Call ID
+▐ 📲Called Tool Name,Call ID
 │ * Argument Name `value`
 │ * Argument Name
 │ * Argument Name
@@ -889,10 +889,10 @@ Query:
 │   more than one line
 │   ```
 
-▄ 🧾Call ID
+▐ 🧾Call ID
 │ Response
 
-▄ 🟢Call ID
+▐ 🟢Call ID
 ```
 
 A call is answered by what the tool said and then by
@@ -959,9 +959,9 @@ another to m8.
 Simple example query with definition:
 
 ```m8
-▄ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
+▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
 
-▄ 🧭
+▐ 🧭
 │ You are a mathematics expert that will answer questions,
 │ give insight, and advise on any relevant technique.
 │ Describe concepts with analogies and spatial models
@@ -969,7 +969,7 @@ Simple example query with definition:
 │ to the components, equations, and relationships in
 │ the mathematical equations.
 
-▄ 🙋
+▐ 🙋
 │ Tell me about the Riemann Sphere in detail.
 ```
 
@@ -1042,7 +1042,7 @@ is an error. Files and piped streams are `m8.md`,
 which is also valid markdown, so anything that
 renders markdown renders them. A tty gets `m8`.
 
-* ▄ header -> `####`
+* ▐ header -> `####`
 * │ content -> `>`
 * 🧠 agent -> `:brain:`
 * 🙋 user -> `:raising_hand:`
@@ -1061,15 +1061,18 @@ renders markdown renders them. A tty gets `m8`.
 * 🧰 tool -> `:toolbox:`
 
 A sigil takes a value, a content block, or both — or, for the
-one that is a fence rather than a record, neither. 🧰 has three
-separate header forms: a content-bearing header defines a tool, a
-blockless header with a variable and values configures that tool,
-and a bare blockless header offers it. A definition header may not
-combine content and variable configuration.
+one that is a fence rather than a record, neither. A 💭 without a
+block uses its value as a compact one-line thought. Its `snip` value
+is special only when that same 💭 also has a block; otherwise it is
+simply the one-line thought `snip`. 🧰 has three separate header
+forms: a content-bearing header defines a tool, a blockless header
+with a variable and values configures that tool, and a bare blockless
+header offers it. A definition header may not combine content and
+variable configuration.
 
-* Value only: 🧠 📚 🔏 🟢
+* Value only: 🧠 📚 🔏 🟢 💭
 * Content only: 🙋 🧭
-* Both: 🤖 💭 🧰 📲 🧾 🚫 🛡️ 🏃
+* Both: 🤖 🧰 📲 🧾 🚫 🛡️ 🏃
 * Neither: 🔝
 
 ### Stopping Short
@@ -1078,11 +1081,11 @@ A reply the model did not finish ends with a 🤖 that has a
 value and nothing under it.
 
 ```m8
-▄ 🤖
+▐ 🤖
 │ Moonlight on still ponds
 │ Crickets stitch the
 
-▄ 🤖(cut off at max_tokens)
+▐ 🤖(cut off at max_tokens)
 ```
 
 * The value is `(words term)`.
@@ -1109,16 +1112,26 @@ value and nothing under it.
 
 ### Kept Aside
 
-A 💭 whose value is `snip` asks for what it holds to be kept
-out of the way. Keeping it writes a snip, and leaves the 🧠
-naming it in its place.
+A 💭 whose value is `snip` and which has a block asks for what it
+holds to be kept out of the way. Keeping it writes a snip, and leaves
+the 🧠 naming it in its place. Without a block, `💭snip` is simply the
+compact one-line thought "snip".
 
 ```m8
-▄ 💭snip
+▐ 💭snip
 │ 🔏c2lnbmF0dXJl
 
-▄ 🧠mathy/+/snip-oniwhbxumk
+▐ 🧠mathy/+/snip-oniwhbxumk
 ```
+
+A compact thought keeps its text on the header:
+
+```m8
+▐ 💭Checking the result
+```
+
+Providers should use this compact form for one-line thought summaries when
+possible, and must interpret a value-only 💭 as thought text when reading it.
 
 * Which thoughts ask is the codec's decision.
   * A signature is the case today - it exists only to be handed back.
@@ -1143,14 +1156,14 @@ What is between them is that file's top: what it says
 about itself, rather than what it says.
 
 ```m8
-▄ 🔝
+▐ 🔝
 
-▄ 🧭
+▐ 🧭
 │ Load tight-docs when working on documentation.
 
-▄ 🔝
+▐ 🔝
 
-▄ 🧭
+▐ 🧭
 │ Keep every doc comment to one line.
 ```
 
@@ -1238,10 +1251,10 @@ definition's business.
   🚫.
 
 ```m8
-▄ 🏃bash
+▐ 🏃bash
 │ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
 
-▄ 🧰search
+▐ 🧰search
 │ │ Look for something.
 │ ```bash
 │ grep -r "$__pattern__" .
@@ -1275,7 +1288,7 @@ command's own business rather than the framework's.
 `m8 call` is the one m8 ships for it.
 
 ```m8
-▄ 🧰bash
+▐ 🧰bash
 │ │ Run a bash command.
 │ `m8` `call` `bash` `-euo` `pipefail` `{{command|-c}}`
 │ * command string
@@ -1309,13 +1322,13 @@ putting them on the definition header. Each value gets its own
 blockless header, and a final bare header offers the tool:
 
 ```m8
-▄ 🧰read
+▐ 🧰read
 │ │ Read a file or directory.
 │ `m8` `call` `m8` `munge` `read` `{{page_lines|--page-lines}}` `--` `{{path|}}`
 │ * path string
 
-▄ 🧰read page_lines 100
-▄ 🧰read
+▐ 🧰read page_lines 100
+▐ 🧰read
 ```
 
 Definition variables and call parameters share the `__name__`
@@ -1375,10 +1388,10 @@ With a block it defines; with a value alone it
 activates.
 
 ```m8
-▄ 🛡️deny
+▐ 🛡️deny
 │ `false`
 
-▄ 🛡️deny                   now it is on
+▐ 🛡️deny                   now it is on
 ```
 
 A definition body holds a command spelled out in
@@ -1387,13 +1400,13 @@ backticks, a fenced block in some language, or another
 them stack.
 
 ```m8
-▄ 🏃bash
+▐ 🏃bash
 │ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
 
-▄ 🏃bash raw
+▐ 🏃bash raw
 │ `bash` `-e` `-c` `{{CODE}}` `bash`
 
-▄ 🛡️passthrough
+▐ 🛡️passthrough
 │ ```bash raw
 │ exec "$@"
 │ ```
@@ -1447,9 +1460,9 @@ bare command rather than about a stack of prefixes.
 ### Where a shield is written
 
 ```m8
-▄ 🛡️jail                   the floor for this agent
+▐ 🛡️jail                   the floor for this agent
 
-▄ 🧰deploy
+▐ 🧰deploy
 │ 🛡️airgap                 and this tool as well
 ```
 
@@ -1469,7 +1482,7 @@ your own config or from the copy m8 carries. What
 `jail` means is a composition you can read:
 
 ```m8
-▄ 🛡️sandbox
+▐ 🛡️sandbox
 │ 🛡️freeze-toolbox
 │ 🛡️private
 │ 🛡️contain-writes
@@ -1478,7 +1491,7 @@ your own config or from the copy m8 carries. What
 │ 🛡️no-edit-m8-st8
 │ 🛡️contain-env
 
-▄ 🛡️jail
+▐ 🛡️jail
 │ 🛡️sandbox
 │ 🛡️airgap
 ```
@@ -1513,7 +1526,7 @@ that is how a toolmaker works — and closing that
 channel is three filters rather than a rule:
 
 ```m8
-▄ 🛡️freeze-toolbox
+▐ 🛡️freeze-toolbox
 │ 🛡️filter-toolbox
 │ 🛡️filter-brain
 │ 🛡️filter-books
@@ -1562,11 +1575,11 @@ One that cannot widen, whatever it includes or is asked
 to do:
 
 ```m8
-▄ 🛡️jail
+▐ 🛡️jail
 
-▄ 🧠team/helpers
+▐ 🧠team/helpers
 
-▄ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
+▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
 ```
 
 `team/helpers` may define whatever tools and shields it
@@ -1581,15 +1594,15 @@ channel too.
 One that builds its own:
 
 ```m8
-▄ 🧠/local/Ternary-Bonsai-27B-mlx-2bit
+▐ 🧠/local/Ternary-Bonsai-27B-mlx-2bit
 
-▄ 🧰toolmaker
+▐ 🧰toolmaker
 │ │ Write a new tool and return its definition.
 │ `make-tool`
 │ * spec string
 │   What the tool should do
 
-▄ 🧰toolmaker
+▐ 🧰toolmaker
 ```
 
 No 🛡 at all, so `toolmaker` may hand back 🧰 records
@@ -1702,12 +1715,12 @@ and they are git's objects and refs.
   `m8 @mathy/+/tduyxbutjb` — and moves itself.
 
 ```m8
-▄ 🧠mathy/+/tduyxbutjb
+▐ 🧠mathy/+/tduyxbutjb
 
-▄ 🙋
+▐ 🙋
 │ Tell me more.
 
-▄ 🤖
+▐ 🤖
 │ Additionally, ...
 ```
 
@@ -1776,7 +1789,7 @@ A 🧠 written with a leading `/` names a model rather than an
 agent, and carries whatever the api should be asked for:
 
 ```m8
-▄ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192,temperature:0.7
+▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192,temperature:0.7
 ```
 
 Parameters are the api's own words, passed through as
@@ -1801,7 +1814,7 @@ used everywhere:
 ```
 
 ```m8
-▄ 🧠/local/Ternary-Bonsai-1.7B-mlx-2bit,max_tokens:2048
+▐ 🧠/local/Ternary-Bonsai-1.7B-mlx-2bit,max_tokens:2048
 ```
 
 An agent file is the only kind of alias there is, so it also
@@ -1810,8 +1823,8 @@ model wins, since the last model named is the one that
 answers — the same rule as a tool's last definition.
 
 ```m8
-▄ 🧠mathy
-▄ 🧠/local/Ternary-Bonsai-27B-mlx-2bit,max_tokens:16384
+▐ 🧠mathy
+▐ 🧠/local/Ternary-Bonsai-27B-mlx-2bit,max_tokens:16384
 ```
 
 A chat is the same: a model piped in after one runs it, and
@@ -1978,10 +1991,10 @@ what makes the loop, tool calling, and picking up a call that
 was never answered testable rather than only demonstrable:
 
 ```bash
-m8 @/toy/echo hello        # says the last thing said
-m8 @/toy/runner 'RUN;;;say;;;text=hi'
-m8 @/toy/eliza "I am not sleeping well."
-m8 @/toy/Z-Machine/zork1 "I would like to play"
+m8 @/toy/echo -- hello     # says the last thing said
+m8 @/toy/runner -- 'RUN;;;say;;;text=hi'
+m8 @/toy/eliza -- "I am not sleeping well."
+m8 @/toy/Z-Machine/zork1 -- "I would like to play"
 ```
 
 `eliza` is Weizenbaum's doctor of 1966: a keyword found in
