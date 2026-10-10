@@ -20,24 +20,15 @@ pub const command: api.Command = .{
 fn run(ctx: Ctx) !u8 {
     const w = try wrapping.cut(ctx.args);
 
-    // Who it stands as, which is who it asks as and where its answer is.
-    const who = try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{
-        api.asks_shield, if (w.head.len > 0) w.head[0] else "ask-1",
-    });
-
-    // Run by hand there is nothing handed in, which is a question nobody has
+    // Who it stands as, which is who it asks as and what its answer is
+    // called. Run by hand there is no answer, which is a question nobody has
     // answered yet like any other.
-    const handed = ctx.env.get(api.params_var) orelse "";
-    const said = if (handed.len == 0) null else std.Io.Dir.cwd().readFileAlloc(
-        ctx.io,
-        try std.fmt.allocPrint(ctx.arena, "{s}/{s}/{s}1", .{ handed, who, api.exclamation }),
-        ctx.arena,
-        .limited(64 * 1024),
-    ) catch null;
+    const name = if (w.head.len > 0) w.head[0] else "ask_1";
+    const said = ctx.env.get(try std.fmt.allocPrint(ctx.arena, "{s}1_{s}", .{ api.exclamation, name }));
 
     const answer = std.mem.trim(u8, said orelse {
-        try ctx.err.print("{s}{s}: run this? [yes/no]\n{s}\n", .{
-            api.ask_lead, who, try std.mem.join(ctx.arena, " ", w.argv),
+        try ctx.err.print("{s}{s}{s}: run this? [yes/no]\n{s}\n", .{
+            api.ask_lead, api.asks_shield, name, try std.mem.join(ctx.arena, " ", w.argv),
         });
         return api.ask_exit;
     }, " \t\r\n");
@@ -60,7 +51,7 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
         \\  m8 shield ask [NAME] -- CMD [ARGS]
         \\
         \\NAME is who it asks as, which a shield definition says with
-        \\{{SHIELD}}. Without one it is ask-1.
+        \\{{SHIELD}}. Without one it is ask_1.
         \\
         \\It stops with the command as a question, which the run that made
         \\the call puts to the person as a ❓. What they say next is the

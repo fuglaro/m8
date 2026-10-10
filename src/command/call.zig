@@ -306,9 +306,9 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\A program asks the person something by exiting 75 with nothing on
         \\stdout and a stderr that opens `QUESTION:tool:`. It is run again
-        \\once they answer, with what they said in
-        \\$M8_TOOL_PARAMS/exclamation-1, and the next answer in
-        \\exclamation-2. Exiting 75 again without asking hands the
+        \\once they answer, with what they said in $M8_EXCLAMATION_1,
+        \\and the next answer in $M8_EXCLAMATION_2. Exiting 75 again
+        \\without asking hands the
         \\conversation back to the person rather than the model.
         \\
         \\A whole argument naming a call variable becomes whole argv elements:

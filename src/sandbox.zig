@@ -140,12 +140,6 @@ pub fn makeTmp(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map
     return tmp;
 }
 
-/// What the harness hands a call is the call's to read and never to write,
-/// though it sits in the scratch a tool may write anywhere else in. Added
-/// here rather than written in the profile, so a profile somebody overrode
-/// before this existed still keeps it.
-const handed_in = "\n(deny file-write* (regex #\"(^|/)\\" ++ api.params_dir ++ "($|/)\"))\n";
-
 /// `sandbox-exec -p <resolved> -D ... -- argv`
 ///
 /// The profile is handed over as text rather than as a file. One `secure`
@@ -169,9 +163,7 @@ pub fn exec(
     try full.appendSlice(arena, &.{
         "sandbox-exec",
         "-p",
-        try std.mem.concat(arena, u8, &.{
-            try resolve(arena, try profile(arena, io, env), active), handed_in,
-        }),
+        try resolve(arena, try profile(arena, io, env), active),
         "-D",
         try std.fmt.allocPrint(arena, "CWD={s}", .{cwd}),
         "-D",
@@ -196,15 +188,15 @@ pub fn contained(
     var m: std.process.Environ.Map = .init(arena);
     var it = env.iterator();
     while (it.next()) |e| {
-        if (envPasses(rules, e.key_ptr.*)) try m.put(e.key_ptr.*, e.value_ptr.*);
+        // What the person answered is not the list's to drop: without it a
+        // tool that asked them never finds the answer, and asks again for ever.
+        if (envPasses(rules, e.key_ptr.*) or std.mem.startsWith(u8, e.key_ptr.*, api.exclamation))
+            try m.put(e.key_ptr.*, e.value_ptr.*);
     }
     if (tmp.len > 0) {
         try m.put("TMPDIR", tmp);
         try m.put("HOME", tmp);
     }
-    // Not the list's to drop: without it a tool that asked the person never
-    // finds the answer, and asks again for ever.
-    if (env.get(api.params_var)) |handed| try m.put(api.params_var, handed);
     const boxed = try arena.create(std.process.Environ.Map);
     boxed.* = m;
     return boxed;

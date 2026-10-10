@@ -1340,8 +1340,8 @@ What a tool is handed:
   Anything nested, dotted or arrayed has no scalar env
   spelling and lives here instead.
 * `M8_CALL_ID`, which call this is.
-* `M8_TOOL_PARAMS`, a folder of what the harness hands
-  the call. See Asking the Person.
+* `M8_EXCLAMATION_1` and up, what the person answered the
+  call. See Asking the Person.
 
 An inherited `__<NAME>__` environment variable is available
 as a fallback when the call does not supply that argument.
@@ -1459,8 +1459,8 @@ conversation.
   * A stderr that opens `QUESTION:tool:`, with the question
     after it.
 * A shield asks the same way, under its own name.
-  * `QUESTION:shield-ask-1:` is the first wrapper of `🛡️ask`.
-  * `{{SHIELD}}` in a shield's command is that name, `ask-1`.
+  * `QUESTION:shield_ask_1:` is the first wrapper of `🛡️ask`.
+  * `{{SHIELD}}` in a shield's command is that name, `ask_1`.
 * The ❓ says who asked and of which call: `❓tool,c1`.
 * The run stops on the ❓.
   * Calls the model made alongside it are written down
@@ -1488,29 +1488,27 @@ conversation.
   * The conversation goes to the person, not the model, so
     a refusal is followed by what to do instead.
 
-What the person answered is in `M8_TOOL_PARAMS`:
+What the person answered is in the call's environment:
 
 ```
-$M8_TOOL_PARAMS/exclamation-1                 the tool's first answer
-$M8_TOOL_PARAMS/exclamation-2                 its second
-$M8_TOOL_PARAMS/shield-ask-1/exclamation-1    a shield's first
+M8_EXCLAMATION_1          the tool's first answer
+M8_EXCLAMATION_2          its second
+M8_EXCLAMATION_1_ask_1    a shield's first
 ```
 
-* The folder is the call's own, and is there every run.
-  * The tool and every shield around it are handed the same
-    one.
-  * Empty is nothing answered yet.
-  * It is made from the ledger and removed after, so the
-    ledger is the only place an answer lives.
-* It is a file, so an answer is as long as it is.
-* A tool reads it and never writes it.
-  * The sandbox profile denies writing there, whatever
-    else it allows.
-  * With no sandbox it is an ordinary folder.
+* The tool and every shield around it are handed the same
+  ones.
+  * None set is nothing answered yet.
+  * They are made from the ledger every run, so the ledger
+    is the only place an answer lives.
+* An answer has to fit in an environment.
+  * One too long for it is a call that fails to start.
+* A run of `m8` starts with none.
+  * It drops any it was handed, so an agent run by a tool
+    never takes that tool's answers as its own.
 
 ```bash
-f="$M8_TOOL_PARAMS/exclamation-1"
-[ -f "$f" ] || { echo "QUESTION:tool: deploy to prod?" >&2; exit 75; }
+[ -n "${M8_EXCLAMATION_1+x}" ] || { echo "QUESTION:tool: deploy to prod?" >&2; exit 75; }
 ```
 
 ## Shields
@@ -1605,11 +1603,11 @@ A tool's own command is read the same way.
 
 `{{SHIELD}}` is the name a wrapper stands as.
 
-* It is the shield's name and a count from one: `ask-1`.
+* It is the shield's name and a count from one: `ask_1`.
   * The count separates the wrappers of a name defined
     more than once.
-* It is who a wrapper asks the person as, and the folder
-  its answers are in. See [Asking the Person](#asking-the-person).
+* It is who a wrapper asks the person as, and what its
+  answers are named for. See [Asking the Person](#asking-the-person).
 
 Nothing inserts an argv0 for you. `bash -c` binds `$0`
 to the first argument after the script, which is why
@@ -2261,5 +2259,5 @@ whatever its entry says, under its own name.
 Under `contain-env` the environment is rebuilt from
 `core/contain-env-allowed.txt` rather than inherited, and
 `HOME` and `TMPDIR` become the sandbox's own directory.
-`M8_TOOL_PARAMS` is passed whatever that file says: a tool
+`M8_EXCLAMATION_*` is passed whatever that file says: a tool
 that cannot find what the person answered asks for ever.

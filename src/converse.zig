@@ -77,8 +77,10 @@ const Progress = struct {
 
 /// Run whatever `ctx.in` holds, writing the reply as it arrives, and hand
 /// back the turn: what arrived, settled, and everything the run added.
-pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
-    const arena = ctx.arena;
+pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
+    const arena = handed.arena;
+    var ctx = handed;
+    ctx.env = try unanswered(arena, handed.env);
     const io = ctx.io;
     const out = ctx.out;
     const mode = ctx.mode;
@@ -297,36 +299,50 @@ const Went = enum {
     refused,
 };
 
-/// Lay out what the person answered where a call can read it, and say where.
+/// What the person answered, as the variables a call reads it from.
 ///
-/// Made from the ledger each time and removed once the call is over, so the
-/// ledger is the only place an answer lives. The tool's own are at the top,
-/// and a shield's are in a folder of its name, each counted from one — so
-/// everything a call stands inside is handed the same place and finds only
-/// what was said to it.
-fn params(arena: Allocator, io: std.Io, dir: []const u8, said: []const ledger.Answer) !void {
-    try std.Io.Dir.cwd().createDirPath(io, dir);
+/// Made from the ledger each time, so the ledger is the only place an answer
+/// lives. The tool's own are numbered and nothing more, and a shield's have
+/// its name after, each counted from one — so everything a call stands
+/// inside is handed the same environment and finds only what was said to it.
+fn exclaimed(arena: Allocator, said: []const ledger.Answer) ![]const api.EnvVar {
+    var out: std.ArrayList(api.EnvVar) = .empty;
     for (said, 0..) |s, at| {
         if (!asks(s.who)) continue;
         var n: usize = 1;
         for (said[0..at]) |earlier| {
             if (std.mem.eql(u8, earlier.who, s.who)) n += 1;
         }
-        const own = if (std.mem.eql(u8, s.who, api.asks_tool)) dir else try std.fs.path.join(arena, &.{ dir, s.who });
-        try std.Io.Dir.cwd().createDirPath(io, own);
-        try std.Io.Dir.cwd().writeFile(io, .{
-            .sub_path = try std.fmt.allocPrint(arena, "{s}/{s}{d}", .{ own, api.exclamation, n }),
-            .data = s.text,
+        try out.append(arena, .{
+            .key = if (std.mem.eql(u8, s.who, api.asks_tool))
+                try std.fmt.allocPrint(arena, "{s}{d}", .{ api.exclamation, n })
+            else
+                try std.fmt.allocPrint(arena, "{s}{d}_{s}", .{ api.exclamation, n, s.who[api.asks_shield.len..] }),
+            .value = s.text,
         });
     }
+    return out.items;
+}
+
+/// The environment without what somebody was answered further up. An agent
+/// run by a tool counts its shields from one again, and would otherwise take
+/// what was said to that tool's as said to its own.
+fn unanswered(arena: Allocator, env: *const std.process.Environ.Map) !*const std.process.Environ.Map {
+    const own = try arena.create(std.process.Environ.Map);
+    own.* = .init(arena);
+    var it = env.iterator();
+    while (it.next()) |e| {
+        if (!std.mem.startsWith(u8, e.key_ptr.*, api.exclamation)) try own.put(e.key_ptr.*, e.value_ptr.*);
+    }
+    return own;
 }
 
 /// Whether a name is one a question can come from: the tool, or a shield
-/// under a name that is safe to be a folder's.
+/// under a name that is safe to be a variable's.
 fn asks(who: []const u8) bool {
     if (std.mem.eql(u8, who, api.asks_tool)) return true;
     if (!std.mem.startsWith(u8, who, api.asks_shield) or who.len == api.asks_shield.len) return false;
-    for (who) |c| if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_') return false;
+    for (who) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return false;
     return true;
 }
 
@@ -432,21 +448,7 @@ fn answer(
     try env.appendSlice(arena, try toolbox.callEnv(arena, args, c.arguments, c.id));
     try mergeEnv(arena, &env);
 
-    // Inside the tool's scratch, so whatever can read that can read this, and
-    // named for the call, so two at once are handed their own.
-    const handed = try std.fs.path.join(arena, &.{
-        if (scratch.len > 0) scratch else ctx.env.get("TMPDIR") orelse "/tmp",
-        api.params_dir,
-        try filename(arena, c.id),
-    });
-    params(arena, io, handed, said) catch |e|
-        return failure(arena, c.id, "{s}", .{@errorName(e)});
-    defer {
-        std.Io.Dir.cwd().deleteTree(io, handed) catch {};
-        // And the folder they all go in, once nothing else is using it.
-        std.Io.Dir.cwd().deleteDir(io, std.fs.path.dirname(handed).?) catch {};
-    }
-    try env.append(arena, .{ .key = api.params_var, .value = handed });
+    try env.appendSlice(arena, try exclaimed(arena, said));
 
     var captured: std.Io.Writer.Allocating = .init(arena);
     var err_sink: std.Io.Writer.Allocating = .init(arena);
@@ -477,7 +479,7 @@ fn answer(
     if (status == api.ask_exit and captured.written().len == 0 and
         std.mem.startsWith(u8, complaint, api.ask_lead))
     asked: {
-        // Who is asking comes first, so the answer is laid out for them.
+        // Who is asking comes first, so the answer is named for them.
         const after = complaint[api.ask_lead.len..];
         const end = std.mem.indexOfScalar(u8, after, ':') orelse break :asked;
         if (!asks(after[0..end])) break :asked;
@@ -583,12 +585,6 @@ fn once(
         sink,
         ctx.err,
     );
-}
-
-/// A call's id as one path component. A provider chooses the id, and nothing
-/// says it chose one a directory can be called.
-fn filename(arena: Allocator, id: []const u8) ![]const u8 {
-    return api.component(arena, if (id.len > 0) id else "call");
 }
 
 /// The one record that says a call could not be run. A slice, because that is
@@ -1038,41 +1034,42 @@ test "a call runs into its answer" {
     );
 }
 
-test "what the person answered is laid out for a call, and for what it stands inside" {
+test "what the person answered is named for a call, and for what it stands inside" {
     var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
 
-    const dir = "/private/tmp/m8-converse-params";
-    std.Io.Dir.cwd().deleteTree(io, dir) catch {};
-    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
-
-    try params(arena, io, dir, &.{
-        .{ .who = "shield-ask-1", .text = "yes" },
+    const env = try exclaimed(arena, &.{
+        .{ .who = "shield_ask_1", .text = "yes" },
         .{ .who = "tool", .text = "John" },
         .{ .who = "tool", .text = "Leeds" },
-        // Nobody a question can come from, so nowhere to put it.
-        .{ .who = "shield-../up", .text = "no" },
+        // Nobody a question can come from, so nothing to call it.
+        .{ .who = "shield_a=b", .text = "no" },
+        .{ .who = "shield-ask-1", .text = "no" },
         .{ .who = "", .text = "no" },
     });
-    const read = struct {
-        fn f(al: Allocator, i: std.Io, comptime path: []const u8) ![]const u8 {
-            return std.Io.Dir.cwd().readFileAlloc(i, dir ++ path, al, .limited(64));
-        }
-    }.f;
     // Each is counted from one, whoever else was answered in between.
-    try std.testing.expectEqualStrings("yes", try read(arena, io, "/shield-ask-1/exclamation-1"));
-    try std.testing.expectEqualStrings("John", try read(arena, io, "/exclamation-1"));
-    try std.testing.expectEqualStrings("Leeds", try read(arena, io, "/exclamation-2"));
-    try std.testing.expectError(error.FileNotFound, read(arena, io, "/exclamation-3"));
-    try std.testing.expectError(error.FileNotFound, read(arena, io, "/shield-ask-1/exclamation-2"));
-    try std.testing.expect(!asks("shield-"));
-    try std.testing.expect(!asks("ask-1"));
+    try std.testing.expectEqual(@as(usize, 3), env.len);
+    try std.testing.expectEqualStrings("M8_EXCLAMATION_1_ask_1", env[0].key);
+    try std.testing.expectEqualStrings("yes", env[0].value);
+    try std.testing.expectEqualStrings("M8_EXCLAMATION_1", env[1].key);
+    try std.testing.expectEqualStrings("John", env[1].value);
+    try std.testing.expectEqualStrings("M8_EXCLAMATION_2", env[2].key);
+    try std.testing.expectEqualStrings("Leeds", env[2].value);
+    try std.testing.expect(!asks("shield_"));
+    try std.testing.expect(!asks("ask_1"));
+}
 
-    // An id is the provider's, and is made safe to be a folder's name.
-    try std.testing.expectEqualStrings("a_b-c__", try filename(arena, "a/b-c.."));
-    try std.testing.expectEqualStrings("call", try filename(arena, ""));
+test "a run starts with nothing answered, whatever it was handed" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("M8_EXCLAMATION_1", "John");
+    try env.put("M8_EXCLAMATION_1_ask_1", "yes");
+    try env.put("PATH", "/bin");
+    const own = try unanswered(arena, &env);
+    try std.testing.expectEqual(@as(usize, 1), own.count());
+    try std.testing.expectEqualStrings("/bin", own.get("PATH").?);
 }

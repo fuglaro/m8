@@ -68,19 +68,17 @@ pub const ask_lead = "QUESTION:";
 /// Who is asking follows the lead and closes with a colon: the tool itself,
 /// or a shield by the name it was told it stands as.
 pub const asks_tool = "tool";
-pub const asks_shield = "shield-";
-/// A folder of what the harness hands a call, which the call only reads.
-/// `exclamation-1` is the first thing the person answered the tool, and so on
-/// up. What they answered a shield is the same under a folder of its name.
-pub const params_var = "M8_TOOL_PARAMS";
-pub const params_dir = ".m8-tool-params";
-pub const exclamation = "exclamation-";
+pub const asks_shield = "shield_";
+/// What the person answered, in the environment of the call it was said to.
+/// `M8_EXCLAMATION_1` is the first thing they answered the tool, and so on
+/// up. What they answered a shield has its name after: `M8_EXCLAMATION_1_ask_1`.
+pub const exclamation = "M8_EXCLAMATION_";
 
-/// A name as one path component. Whoever chose it was not choosing a
-/// folder's name, and nothing says they chose one a folder can have.
+/// A name as part of a variable's. Whoever chose it was not choosing a
+/// variable's name, and nothing says they chose one a variable can have.
 pub fn component(arena: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error![]const u8 {
     const out = try arena.dupe(u8, name);
-    for (out) |*c| if (!std.ascii.isAlphanumeric(c.*) and c.* != '-' and c.* != '_') {
+    for (out) |*c| if (!std.ascii.isAlphanumeric(c.*)) {
         c.* = '_';
     };
     return out;

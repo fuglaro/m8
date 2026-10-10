@@ -168,9 +168,6 @@
 ;; says nothing about what runs.
 (deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))
 (allow file-write* (regex #"(^|/)\.?m8-st8/\+/([^/]+/)*\.tmpdir($|/)"))
-;; m8 adds one rule after this file, whichever copy of it is in use: nothing
-;; is written under a .m8-tool-params/, which is where a call is handed what
-;; the person answered it.
 
 ;; --- non-local internet access ---
 (allow network*)                      ;;!! !airgap

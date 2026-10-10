@@ -60,10 +60,10 @@ pub const code_mark = "{{CODE}}";
 pub const self_mark = "{{M8}}";
 
 /// The placeholder that is the name a wrapper stands as: its shield's name
-/// and which of that name's wrappers it is, counted from one — `ask-1`.
+/// and which of that name's wrappers it is, counted from one — `ask_1`.
 ///
 /// It is who the wrapper says it is when it asks the person something, and
-/// where it finds what they answered. A name stands once in a call, so the
+/// what the answer it finds is called. A name stands once in a call, so the
 /// count passes one only where a name has been defined more than once.
 pub const name_mark = "{{SHIELD}}";
 
@@ -317,7 +317,7 @@ fn one(
         for (d.steps) |s| switch (s) {
             .command => |argv| {
                 nth += 1;
-                const stands = try std.fmt.allocPrint(arena, "{s}-{d}", .{ try api.component(arena, a.name), nth });
+                const stands = try std.fmt.allocPrint(arena, "{s}_{d}", .{ try api.component(arena, a.name), nth });
                 const told = try arena.alloc([]const u8, argv.len);
                 for (argv, told) |word, *t| t.* = try said(arena, word, name_mark, stands);
                 try wrappers.append(arena, told);
@@ -459,10 +459,10 @@ test "a wrapper is told the name it stands as" {
     const got = try resolve(arena, &all, &.{ .{ .name = "guard" }, .{ .name = "alias" }, .{ .name = "guard" } });
     try testing.expectEqual(@as(usize, 3), got.wrappers.len);
     // Counted within the name, so two that share one are still told apart.
-    try testing.expectEqualStrings("guard-1", got.wrappers[0][1]);
-    try testing.expectEqualStrings("as=guard-2", got.wrappers[1][1]);
+    try testing.expectEqualStrings("guard_1", got.wrappers[0][1]);
+    try testing.expectEqualStrings("as=guard_2", got.wrappers[1][1]);
     // And made safe to be a folder's name, which is what it becomes.
-    try testing.expectEqualStrings("odd_name-1", got.wrappers[2][1]);
+    try testing.expectEqualStrings("odd_name_1", got.wrappers[2][1]);
 }
 
 test "a second definition of a name stacks a wrapper and cannot replace one" {
