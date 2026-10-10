@@ -641,8 +641,10 @@ line rather than beside it.
     half the terminal.
   * It does not shrink while a message is being written.
   * Sending makes it one row again, before CMD says anything.
-  * Enter is a new line.
-  * Ctrl-d sends, and leaves when there is nothing to send.
+  * Enter sends.
+  * Ctrl-j is a new line, and so is Alt-Enter.
+  * A paste keeps its lines: nothing in one sends.
+  * Ctrl-d sends too, and leaves when there is nothing to send.
   * PgUp and PgDn move by the editor's height.
   * Ctrl-c interrupts a run, and leaves when nothing is running.
 * `-c` is continuous: one run of CMD for every message.

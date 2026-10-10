@@ -42,9 +42,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\The editor is one row, grows with the message to at most half the
         \\terminal, and is one row again once the message is sent.
         \\
-        \\  Enter    a new line
-        \\  Ctrl-d   send, and a message sent mid-run waits its turn;
-        \\           with nothing to send and nothing running, leave
+        \\  Enter    send, and a message sent mid-run waits its turn
+        \\  Ctrl-j   a new line, and so is Alt-Enter
+        \\  Ctrl-d   send; with nothing to send and nothing running, leave
         \\  Ctrl-c   interrupt the run; with nothing running, leave
         \\
         \\`-c` is continuous: the first message starts CMD and every message
@@ -167,11 +167,13 @@ fn run(ctx: Ctx) !u8 {
 /// stop, or it is the person's turn and this is the key that does something.
 const working = "Dispatched...\n";
 const stopping = "Stopping...";
-const waiting_empty = "Waiting (ctrl-c to cancel / ctrl-d to exit)...";
-const waiting_written = "Waiting (ctrl-d to dispatch)...";
+const waiting_empty = "Waiting (ctrl-c:cancel,ctrl-d:exit)...";
+const waiting_written = "Waiting (enter:dispatch,alt-enter/ctrl-j:newline)...";
 
 /// The most status lines there may be.
 const most_bars = 8;
+/// The longest a key's sequence is left unfinished before it is let go.
+const keep = 16;
 
 const Riff = struct {
     ctx: Ctx,
@@ -191,6 +193,9 @@ const Riff = struct {
     /// Whether the terminal says it has the keyboard. One that never says is
     /// taken to have it.
     focused: bool = true,
+    /// The terminal is part way through a paste, where a new line is text
+    /// and no byte is a key.
+    pasting: bool = false,
     /// The command has been interrupted and has not ended yet.
     stopping: bool = false,
     /// A run is kept and sent each message, where otherwise each message is
@@ -277,19 +282,20 @@ const Riff = struct {
         if (l > 0) try r.out.print("\x1b[{d}A", .{l});
         // Setting a region sends the cursor home, so it is put back.
         // And the terminal is asked to say when it gains and loses focus.
-        try r.out.print("\x1b7\x1b[1;{d}r\x1b8\x1b[?25l\x1b[?1004h", .{r.h - l});
+        try r.out.print("\x1b7\x1b[1;{d}r\x1b8\x1b[?25l\x1b[?1004h\x1b[?2004h", .{r.h - l});
         try r.render();
     }
 
     fn close(r: *Riff) void {
         if (r.child) |c| posix.kill(-c.id.?, .HUP) catch {};
         r.wipe() catch {};
-        r.out.writeAll("\x1b[0m\x1b[?1004l\x1b[?25h") catch {};
+        r.out.writeAll("\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?25h") catch {};
         r.out.flush() catch {};
     }
 
     fn loop(r: *Riff) !void {
         var chunk: [4096]u8 = undefined;
+        var held: usize = 0;
         while (!quit) {
             if (winch) {
                 // Reflow has moved everything, so ask where the command's
@@ -326,9 +332,13 @@ const Riff = struct {
             if (n == 0 and r.asking != .no) try r.answered(r.first, null);
 
             if (fds[0].revents != 0) {
-                const got = posix.read(0, &chunk) catch 0;
+                const got = posix.read(0, chunk[held..]) catch 0;
                 if (got == 0) return;
-                try r.keys(chunk[0..got]);
+                // A sequence cut short by the read is kept for the next one.
+                const all = chunk[0 .. held + got];
+                const read = try r.keys(all);
+                held = all.len - read;
+                std.mem.copyForwards(u8, chunk[0..held], all[read..]);
                 try r.render();
             }
             if (fds[1].revents != 0 and r.asking == .no) {
@@ -702,18 +712,29 @@ const Riff = struct {
 
     // ------------------------------------------------------------ editing
 
-    fn keys(r: *Riff, bytes: []const u8) !void {
+    /// Take what was typed, and say how much of it was read: a sequence the
+    /// bytes end part way through is left for when the rest has come.
+    fn keys(r: *Riff, bytes: []const u8) !usize {
         var i: usize = 0;
         while (i < bytes.len) : (i += 1) switch (bytes[i]) {
             0x1b => {
+                const start = i;
+                // Left only when it is plainly the start of one. A lone
+                // escape is a key, except in a paste where nothing is.
+                const left = if (bytes.len - start > keep or (!r.pasting and bytes.len - start < 2)) bytes.len else start;
                 i += 1;
-                if (i >= bytes.len) return;
+                if (i >= bytes.len) return left;
+                // Alt-Enter, which is a new line whatever Enter is.
+                if (bytes[i] == '\r' or bytes[i] == '\n') {
+                    try r.insert("\n");
+                    continue;
+                }
                 if (bytes[i] != '[' and bytes[i] != 'O') continue;
                 const csi = bytes[i] == '[';
                 const from = i + 1;
                 while (i + 1 < bytes.len and (bytes[i + 1] < 0x40 or bytes[i + 1] > 0x7e)) i += 1;
                 i += 1;
-                if (i >= bytes.len) return;
+                if (i >= bytes.len) return left;
                 var params = std.mem.splitScalar(u8, bytes[from..i], ';');
                 const p1 = std.fmt.parseInt(usize, params.first(), 10) catch 1;
                 const p2 = std.fmt.parseInt(usize, params.next() orelse "", 10) catch 1;
@@ -735,6 +756,7 @@ const Riff = struct {
                         4, 8 => r.at = r.lineEnd(),
                         3 => r.cut(r.at, r.after()),
                         5, 6 => for (0..r.e) |_| try r.vertical(p1 == 5),
+                        200, 201 => r.pasting = p1 == 200,
                         else => {},
                     },
                     'R' => if (r.asking == .place) {
@@ -745,9 +767,12 @@ const Riff = struct {
                     else => {},
                 }
             },
-            '\r', '\n' => try r.insert("\n"),
-            0x7f, 0x08 => r.cut(r.before(), r.at),
-            0x03 => if (r.child) |c| {
+            // Enter sends. In a paste it is a line's end, and so is the pair
+            // some text ends its lines with.
+            '\r' => if (r.pasting) try r.insert("\n") else try r.send(),
+            '\n' => if (!r.pasting or i == 0 or bytes[i - 1] != '\r') try r.insert("\n"),
+            0x7f, 0x08 => if (!r.pasting) r.cut(r.before(), r.at),
+            0x03 => if (r.pasting) {} else if (r.child) |c| {
                 posix.kill(-c.id.?, .INT) catch {};
                 // A continuous run is interrupted and carries on, so there
                 // is no ending to wait for.
@@ -755,11 +780,12 @@ const Riff = struct {
             } else {
                 quit = true;
             },
-            0x04 => if (r.buf.items.len > 0) try r.send() else if (r.child == null) {
+            0x04 => if (r.pasting) {} else if (r.buf.items.len > 0) try r.send() else if (r.child == null) {
                 quit = true;
             } else if (r.continuous) r.hang(),
             else => |b| if (b >= 0x20 or b == '\t') try r.insert(&.{b}),
         };
+        return bytes.len;
     }
 
     fn insert(r: *Riff, text: []const u8) !void {
@@ -1102,4 +1128,34 @@ test "a message wraps into rows, and the cursor is found on one" {
 
     try r.vertical(true);
     try testing.expectEqualStrings("日", r.buf.items[r.rows.items[2]..r.at]);
+}
+
+test "Enter sends, and a paste keeps its lines" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    var ctx: Ctx = undefined;
+    ctx.arena = a.allocator();
+    var r: Riff = .{ .ctx = ctx, .out = undefined, .cmd = &.{} };
+
+    // Ctrl-j and Alt-Enter are new lines, and Enter is the message gone.
+    _ = try r.keys("a\nb\x1b\rc");
+    try testing.expectEqualStrings("a\nb\nc", r.buf.items);
+    _ = try r.keys("\r");
+    try testing.expectEqual(@as(usize, 0), r.buf.items.len);
+    try testing.expectEqualStrings("a\nb\nc", r.queue.items[0]);
+
+    // In a paste nothing is a key, and a line ending in both is one line.
+    _ = try r.keys("\x1b[200~one\rtwo\r\nthree\x03\x04\x1b[201~");
+    try testing.expectEqualStrings("one\ntwo\nthree", r.buf.items);
+    try testing.expectEqual(@as(usize, 1), r.queue.items.len);
+
+    // A paste's end cut in two by a read is waited for, not typed.
+    r.cut(0, r.buf.items.len);
+    const whole = "\x1b[200~x\x1b[20";
+    try testing.expectEqual(whole.len - 4, try r.keys(whole));
+    try testing.expect(r.pasting);
+    _ = try r.keys("\x1b[201~");
+    try testing.expect(!r.pasting);
+    // A lone escape is a key that does nothing, and is not waited on.
+    try testing.expectEqual(@as(usize, 1), try r.keys("\x1b"));
 }
