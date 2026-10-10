@@ -12,6 +12,10 @@
 //! a failure with no reason in it tells a model only that something broke.
 //! Stdin remains whatever descriptor call was given. Stdout is captured only
 //! so it can be written as the m8 answer while the program is still speaking.
+//!
+//! One ending is neither: exit 75 having said nothing, with a stderr that
+//! opens `QUESTION:`. That is a question for the person, and it leaves here the way
+//! it arrived so the run that made the call can put it to them.
 
 const std = @import("std");
 const api = @import("api.zig");
@@ -126,7 +130,20 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
 
     const code = status(try child.wait(ctx.io));
     const wrote = try said.finish();
-    if (how == .document) return code;
+    const why = complaint.written(ctx.arena) catch "";
+
+    // A question for the person is handed up as it was asked, so whatever
+    // stands outside this sees what the tool itself would have shown it.
+    if (code == api.ask_exit and !wrote and std.mem.startsWith(u8, why, api.ask_lead)) {
+        try ctx.err.print("{s}\n", .{why});
+        return code;
+    }
+    if (how == .document) {
+        // Nothing said and a failure is a wrapper that stopped the tool, and
+        // why it did is all there is to tell the model.
+        if (!wrote and code != 0 and why.len > 0) try ctx.err.print("{s}\n", .{why});
+        return code;
+    }
 
     // The verdict, which is only knowable now. Everything the tool said is
     // already written and already gone.
@@ -136,7 +153,6 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
         return 0;
     }
 
-    const why = complaint.written(ctx.arena) catch "";
     try doc.write(ctx.out, ctx.mode, .{
         .sigil = .failed,
         .value = ctx.call_id,
@@ -287,6 +303,13 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\The program's stdout becomes a 🧾 receipt, followed by 🟢 or 🚫 for
         \\how it ended. Stdin remains the descriptor call itself was given.
+        \\
+        \\A program asks the person something by exiting 75 with nothing on
+        \\stdout and a stderr that opens `QUESTION:tool:`. It is run again
+        \\once they answer, with what they said in
+        \\$M8_TOOL_PARAMS/exclamation-1, and the next answer in
+        \\exclamation-2. Exiting 75 again without asking hands the
+        \\conversation back to the person rather than the model.
         \\
         \\A whole argument naming a call variable becomes whole argv elements:
         \\

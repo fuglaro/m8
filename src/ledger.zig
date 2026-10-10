@@ -376,22 +376,68 @@ pub fn callName(value: []const u8) []const u8 {
 /// to find out how it would have ended would do whatever it does a second
 /// time. What happened is in the ledger either way, which is the point of it.
 pub fn outstanding(arena: Allocator, records: []const doc.Record) ![]const doc.Record {
-    var answered: std.ArrayList([]const u8) = .empty;
+    // In the order it happened, so an answer settles the call before it and
+    // never one made later under an id a provider used twice.
+    var out: std.ArrayList(doc.Record) = .empty;
     for (records) |r| switch (r.sigil) {
-        .result, .ok, .failed => try answered.append(arena, std.mem.trim(u8, r.value, " \t")),
+        .call => try out.append(arena, r),
+        .result, .ok, .failed => {
+            const id = std.mem.trim(u8, r.value, " \t");
+            var i: usize = 0;
+            while (i < out.items.len) {
+                if (std.mem.eql(u8, callId(out.items[i].value), id)) _ = out.orderedRemove(i) else i += 1;
+            }
+        },
         else => {},
     };
-
-    var out: std.ArrayList(doc.Record) = .empty;
-    for (records) |r| {
-        if (r.sigil != .call) continue;
-        const id = callId(r.value);
-        const has = for (answered.items) |a| {
-            if (std.mem.eql(u8, a, id)) break true;
-        } else false;
-        if (!has) try out.append(arena, r);
-    }
     return out.items;
+}
+
+/// One thing the person answered, and who had asked: the tool, or one of the
+/// shields it stood inside.
+pub const Answer = struct { who: []const u8, text: []const u8 };
+
+/// Who asked, from a ❓ or ❗ value, which says that first and the call after.
+pub fn asker(value: []const u8) []const u8 {
+    const v = std.mem.trim(u8, value, " \t");
+    return v[0 .. std.mem.indexOfScalar(u8, v, ',') orelse 0];
+}
+
+/// The call a ❓ or ❗ value is about.
+pub fn askedId(value: []const u8) []const u8 {
+    const v = std.mem.trim(u8, value, " \t");
+    return if (std.mem.indexOfScalar(u8, v, ',')) |at| v[at + 1 ..] else v;
+}
+
+/// What the person has answered a call's questions with, oldest first.
+///
+/// Counted from the call itself. An id is the provider's to choose, and one
+/// that chose the same id twice has not had its second call answered by what
+/// was said to its first.
+pub fn exclamations(arena: Allocator, records: []const doc.Record, id: []const u8) ![]const Answer {
+    var out: std.ArrayList(Answer) = .empty;
+    for (records) |r| switch (r.sigil) {
+        .call => if (std.mem.eql(u8, callId(r.value), id)) out.clearRetainingCapacity(),
+        .exclaim => if (std.mem.eql(u8, askedId(r.value), id))
+            try out.append(arena, .{ .who = asker(r.value), .text = r.content orelse "" }),
+        else => {},
+    };
+    return out.items;
+}
+
+/// What a ledger is waiting on the person for: who asked and of which call,
+/// as its last record says it, when its last record is a question.
+pub fn asking(records: []const doc.Record) ?[]const u8 {
+    if (records.len == 0) return null;
+    const last = records[records.len - 1];
+    return if (last.sigil == .question) std.mem.trim(u8, last.value, " \t") else null;
+}
+
+/// The same, of whatever a name reads as. A name that reads as nothing is
+/// waiting on nobody, and whoever runs it is the one to say what is wrong.
+pub fn waiting(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []const u8) ?[]const u8 {
+    const l = expand(arena, io, dirs, name) catch return null;
+    return asking(l.records);
 }
 
 // ---------------------------------------------------------------- tests
@@ -953,4 +999,43 @@ test "a top that names its own top is a loop; a body naming it is not" {
     const ok = try expand(arena, f.io, &dirs, "advertises-itself");
     try testing.expectEqual(@as(usize, 1), ok.records.len);
     try testing.expectEqualStrings("What I am for.", ok.records[0].content.?);
+}
+
+test "a call that asked is still owed, and is handed what was answered" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const records = [_]doc.Record{
+        // An earlier call under the same id, long settled, with an answer of
+        // its own that is none of the next one's business.
+        .{ .sigil = .call, .value = "run,c1" },
+        .{ .sigil = .question, .value = "tool,c1", .content = "sure?" },
+        .{ .sigil = .exclaim, .value = "tool,c1", .content = "old" },
+        .{ .sigil = .ok, .value = "c1" },
+        .{ .sigil = .call, .value = "run,c1" },
+        .{ .sigil = .call, .value = "run,c2" },
+        .{ .sigil = .question, .value = "shield-ask-1,c1", .content = "sure?" },
+        .{ .sigil = .exclaim, .value = "shield-ask-1,c1", .content = "yes" },
+        .{ .sigil = .question, .value = "tool,c1", .content = "really?" },
+    };
+
+    // A question is not an answer, so both calls are owed, in the order made.
+    const owed = try outstanding(arena, &records);
+    try testing.expectEqual(@as(usize, 2), owed.len);
+    try testing.expectEqualStrings("run,c1", owed[0].value);
+    try testing.expectEqualStrings("run,c2", owed[1].value);
+
+    const said = try exclamations(arena, &records, "c1");
+    try testing.expectEqual(@as(usize, 1), said.len);
+    try testing.expectEqualStrings("shield-ask-1", said[0].who);
+    try testing.expectEqualStrings("yes", said[0].text);
+    try testing.expectEqual(@as(usize, 0), (try exclamations(arena, &records, "c2")).len);
+
+    // Waiting on the person only while a question is the last thing said.
+    // Who asked and of which call, as it will be said back with the answer.
+    try testing.expectEqualStrings("tool,c1", asking(&records).?);
+    try testing.expectEqualStrings("tool", asker("tool,c1"));
+    try testing.expectEqualStrings("c1", askedId("tool,c1"));
+    try testing.expectEqual(@as(?[]const u8, null), asking(records[0..8]));
 }

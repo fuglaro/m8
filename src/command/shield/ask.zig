@@ -1,8 +1,8 @@
 //! `shield ask` — put the command to the person.
 //!
-//! One of the two that could not be written in the shell: this one needs the
-//! person. Nobody to ask is a no — a pipe or a cron job must not be a way of
-//! skipping the question.
+//! It asks the way any tool does: by stopping with the question, and being
+//! run again once it is answered. So it needs no terminal, and whoever
+//! answers the conversation is who it asked.
 
 const std = @import("std");
 const api = @import("../api.zig");
@@ -11,7 +11,7 @@ const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "ask",
-    .summary = "ask whoever is at the terminal before running it",
+    .summary = "ask the person before running it",
     .takes = .nothing,
     .run = run,
     .help = page,
@@ -20,27 +20,54 @@ pub const command: api.Command = .{
 fn run(ctx: Ctx) !u8 {
     const w = try wrapping.cut(ctx.args);
 
-    const t = ctx.tty orelse {
-        try ctx.err.writeAll("m8 shield ask: 'ask' is in force and there is no terminal\n");
-        return wrapping.Error.Refused;
-    };
-    try t.prompt("run: {s} ? [y/N] ", .{try std.mem.join(ctx.arena, " ", w.argv)});
-    const line = (try t.line()) orelse return wrapping.Error.Refused;
-    const answer = std.mem.trim(u8, line, " \t");
-    if (!std.mem.eql(u8, answer, "y") and !std.mem.eql(u8, answer, "Y"))
-        return wrapping.Error.Refused;
+    // Who it stands as, which is who it asks as and where its answer is.
+    const who = try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{
+        api.asks_shield, if (w.head.len > 0) w.head[0] else "ask-1",
+    });
+
+    // Run by hand there is nothing handed in, which is a question nobody has
+    // answered yet like any other.
+    const handed = ctx.env.get(api.params_var) orelse "";
+    const said = if (handed.len == 0) null else std.Io.Dir.cwd().readFileAlloc(
+        ctx.io,
+        try std.fmt.allocPrint(ctx.arena, "{s}/{s}/{s}1", .{ handed, who, api.exclamation }),
+        ctx.arena,
+        .limited(64 * 1024),
+    ) catch null;
+
+    const answer = std.mem.trim(u8, said orelse {
+        try ctx.err.print("{s}{s}: run this? [yes/no]\n{s}\n", .{
+            api.ask_lead, who, try std.mem.join(ctx.arena, " ", w.argv),
+        });
+        return api.ask_exit;
+    }, " \t\r\n");
+
+    // The same status as asking, and no question: the person is who decides
+    // what happens instead, so the conversation goes back to them.
+    if (!std.ascii.eqlIgnoreCase(answer, "y") and !std.ascii.eqlIgnoreCase(answer, "yes")) {
+        try ctx.err.writeAll("The person said no to running this, and is being asked what to do instead.\n");
+        return api.ask_exit;
+    }
+
     return wrapping.through(ctx, w.argv, null);
 }
 
 fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     _ = ctx;
     try out.writeAll(
-        \\m8 shield ask — ask whoever is at the terminal before running it
+        \\m8 shield ask — ask the person before running it
         \\
-        \\  m8 shield ask -- CMD [ARGS]
+        \\  m8 shield ask [NAME] -- CMD [ARGS]
         \\
-        \\Anything but `y` is no, and so is a terminal that is not there: a
-        \\pipe or a cron job is not a way of skipping the question.
+        \\NAME is who it asks as, which a shield definition says with
+        \\{{SHIELD}}. Without one it is ask-1.
+        \\
+        \\It stops with the command as a question, which the run that made
+        \\the call puts to the person as a ❓. What they say next is the
+        \\answer, and the call is run again with it.
+        \\
+        \\`y` or `yes` runs the command. Anything else does not, and hands
+        \\the conversation back to the person to say what to do instead.
         \\
     );
 }

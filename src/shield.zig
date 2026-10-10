@@ -59,6 +59,14 @@ pub const code_mark = "{{CODE}}";
 /// underneath it.
 pub const self_mark = "{{M8}}";
 
+/// The placeholder that is the name a wrapper stands as: its shield's name
+/// and which of that name's wrappers it is, counted from one — `ask-1`.
+///
+/// It is who the wrapper says it is when it asks the person something, and
+/// where it finds what they answered. A name stands once in a call, so the
+/// count passes one only where a name has been defined more than once.
+pub const name_mark = "{{SHIELD}}";
+
 /// Which shield, and what it appends to which environment variable.
 pub const Activation = struct {
     name: []const u8,
@@ -258,8 +266,9 @@ fn fill(arena: Allocator, argv: []const []const u8, code: []const u8) Allocator.
 /// Flatten activations into the wrappers they stand for.
 ///
 /// Every definition of a name contributes, in the order they were met, since a
-/// later one stacks a wrapper rather than replacing one. What comes back is
-/// outermost first.
+/// later one stacks a wrapper rather than replacing one. A name activated more
+/// than once still stands once, at its first activation, told everything
+/// every activation said. What comes back is outermost first.
 pub fn resolve(
     arena: Allocator,
     defs: []const Definition,
@@ -268,8 +277,9 @@ pub fn resolve(
     var wrappers: std.ArrayList([]const []const u8) = .empty;
     var vars: std.ArrayList(api.EnvVar) = .empty;
     var path: std.ArrayList([]const u8) = .empty;
+    var stood: std.ArrayList([]const u8) = .empty;
 
-    for (active) |a| try one(arena, defs, a, &wrappers, &vars, &path);
+    for (active) |a| try one(arena, defs, a, &wrappers, &vars, &path, &stood);
     return .{ .wrappers = wrappers.items, .env = vars.items };
 }
 
@@ -280,6 +290,7 @@ fn one(
     wrappers: *std.ArrayList([]const []const u8),
     vars: *std.ArrayList(api.EnvVar),
     path: *std.ArrayList([]const u8),
+    stood: *std.ArrayList([]const u8),
 ) (Error || Allocator.Error)!void {
     for (path.items) |seen| if (std.mem.eql(u8, seen, a.name)) return Error.ShieldLoops;
 
@@ -291,14 +302,27 @@ fn one(
         try append(arena, vars, key, a.values);
     }
 
+    // A shield stands once, where it was first activated. Activating it again
+    // has added to what it is told and has nothing else to add: every copy
+    // would read the same values and run the same command.
+    for (stood.items) |name| if (std.mem.eql(u8, name, a.name)) return;
+    try stood.append(arena, a.name);
+
     var found = false;
+    var nth: usize = 0;
     try path.append(arena, a.name);
     for (defs) |d| {
         if (!std.mem.eql(u8, d.name, a.name)) continue;
         found = true;
         for (d.steps) |s| switch (s) {
-            .command => |argv| try wrappers.append(arena, argv),
-            .compose => |inner| try one(arena, defs, inner, wrappers, vars, path),
+            .command => |argv| {
+                nth += 1;
+                const stands = try std.fmt.allocPrint(arena, "{s}-{d}", .{ try api.component(arena, a.name), nth });
+                const told = try arena.alloc([]const u8, argv.len);
+                for (argv, told) |word, *t| t.* = try said(arena, word, name_mark, stands);
+                try wrappers.append(arena, told);
+            },
+            .compose => |inner| try one(arena, defs, inner, wrappers, vars, path, stood),
         };
     }
     path.items.len -= 1;
@@ -325,10 +349,11 @@ fn append(
 /// The command a tool actually runs: every wrapper, outermost first, and the
 /// tool's own argv suffixed as arguments to all of them.
 ///
-/// A wrapper opening with `m8` means the m8 that is running, not whichever one
+/// A command opening with `m8` means the m8 that is running, not whichever one
 /// is on a PATH or none at all — the same rule a provider's command follows,
 /// and the reason the shields m8 ships with work on a machine where nothing
-/// has been installed.
+/// has been installed. The tool's own command is read the same way as each
+/// wrapper: its first word, and `{{M8}}` wherever it is written.
 pub fn wrap(
     arena: Allocator,
     wrappers: []const []const []const u8,
@@ -336,33 +361,39 @@ pub fn wrap(
     self: []const u8,
 ) Allocator.Error![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
-    for (wrappers) |w| for (w, 0..) |word, i| {
-        // A wrapper that is an m8 command says so as its own first word; one
-        // that mentions m8 inside a word says where. Both mean this m8.
+    for (wrappers) |w| try own(arena, &out, w, self);
+    // What a call said reaches the tool in its environment, never in these
+    // words, so the only m8 named here is one the definition wrote.
+    try own(arena, &out, argv, self);
+    return out.items;
+}
+
+/// One command's words, with what it says of m8 made to mean this one.
+fn own(arena: Allocator, out: *std.ArrayList([]const u8), words: []const []const u8, self: []const u8) Allocator.Error!void {
+    for (words, 0..) |word, i| {
+        // A command that is an m8 command says so as its own first word; one
+        // that mentions m8 anywhere else says where. Both mean this m8.
         if (i == 0 and std.mem.eql(u8, word, "m8")) {
             try out.append(arena, self);
             continue;
         }
-        try out.append(arena, try said(arena, word, self));
-    };
-    // The tool's own argv is untouched: it is not a wrapper.
-    try out.appendSlice(arena, argv);
-    return out.items;
+        try out.append(arena, try said(arena, word, self_mark, self));
+    }
 }
 
-/// One word with `{{M8}}` in it made to say where this m8 is.
+/// One word with a placeholder in it made to say what the placeholder is for.
 ///
 /// A word with none is handed back as it stands rather than copied, which is
 /// nearly every word of nearly every wrapper.
-fn said(arena: Allocator, word: []const u8, self: []const u8) Allocator.Error![]const u8 {
-    if (std.mem.indexOf(u8, word, self_mark) == null) return word;
+fn said(arena: Allocator, word: []const u8, mark: []const u8, is: []const u8) Allocator.Error![]const u8 {
+    if (std.mem.indexOf(u8, word, mark) == null) return word;
 
     var out: std.ArrayList(u8) = .empty;
     var rest = word;
-    while (std.mem.indexOf(u8, rest, self_mark)) |at| {
+    while (std.mem.indexOf(u8, rest, mark)) |at| {
         try out.appendSlice(arena, rest[0..at]);
-        try out.appendSlice(arena, self);
-        rest = rest[at + self_mark.len ..];
+        try out.appendSlice(arena, is);
+        rest = rest[at + mark.len ..];
     }
     try out.appendSlice(arena, rest);
     return out.items;
@@ -413,6 +444,27 @@ test "a code block runs through the runner its language names" {
     try testing.expectError(Error.EmptyShield, parseBody(arena, .md, "nothing runnable here", &runners));
 }
 
+test "a wrapper is told the name it stands as" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const all = [_]Definition{
+        .{ .name = "guard", .steps = &.{.{ .command = &.{ "yours", "{{SHIELD}}", "--" } }} },
+        .{ .name = "guard", .steps = &.{.{ .command = &.{ "theirs", "as={{SHIELD}}" } }} },
+        .{ .name = "odd name", .steps = &.{.{ .command = &.{ "odd", "{{SHIELD}}" } }} },
+        // Standing as another shield is standing under that one's name.
+        .{ .name = "alias", .steps = &.{.{ .compose = .{ .name = "odd name" } }} },
+    };
+    const got = try resolve(arena, &all, &.{ .{ .name = "guard" }, .{ .name = "alias" }, .{ .name = "guard" } });
+    try testing.expectEqual(@as(usize, 3), got.wrappers.len);
+    // Counted within the name, so two that share one are still told apart.
+    try testing.expectEqualStrings("guard-1", got.wrappers[0][1]);
+    try testing.expectEqualStrings("as=guard-2", got.wrappers[1][1]);
+    // And made safe to be a folder's name, which is what it becomes.
+    try testing.expectEqualStrings("odd_name-1", got.wrappers[2][1]);
+}
+
 test "a second definition of a name stacks a wrapper and cannot replace one" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
@@ -453,9 +505,8 @@ test "shields compose, and what they append to a variable accumulates" {
     };
 
     const got = try resolve(arena, &all, &.{.{ .name = "jail" }});
-    // `secure` is reached twice, so it wraps twice — which is a repeat, and a
-    // repeat of something that only subtracts means nothing.
-    try testing.expectEqual(@as(usize, 2), got.wrappers.len);
+    // `secure` is reached twice and stands once, told what both said.
+    try testing.expectEqual(@as(usize, 1), got.wrappers.len);
     try testing.expectEqual(@as(usize, 1), got.env.len);
     try testing.expectEqualStrings("__secures__", got.env[0].key);
     try testing.expectEqualStrings("private contain-writes airgap", got.env[0].value);
@@ -477,7 +528,7 @@ test "a shield that leads back to itself is a loop, and an unknown one is refuse
     try testing.expectError(Error.UnknownShield, resolve(arena, &.{}, &.{.{ .name = "nosuch" }}));
 }
 
-test "activation order is wrapping order, and a repeat changes nothing permitted" {
+test "activation order is wrapping order, and a repeat stands where the first did" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -493,10 +544,9 @@ test "activation order is wrapping order, and a repeat changes nothing permitted
     });
     // Activated first is furthest out; `ask` last would be innermost, which is
     // where it sees the bare command rather than a stack of prefixes.
-    try testing.expectEqual(@as(usize, 3), got.wrappers.len);
+    try testing.expectEqual(@as(usize, 2), got.wrappers.len);
     try testing.expectEqualStrings("outer", got.wrappers[0][0]);
     try testing.expectEqualStrings("ask", got.wrappers[1][0]);
-    try testing.expectEqualStrings("outer", got.wrappers[2][0]);
 }
 
 test "a value carries a name, and optionally a variable and what to append" {
@@ -537,12 +587,14 @@ test "a wrapper opening with m8 reaches the m8 that is running" {
         // argument is somebody's argument.
         &.{ "bash", "-c", "m8 filter out toolbox" },
     };
-    const full = try wrap(arena, &wrappers, &.{"m8"}, "/opt/m8/bin/m8");
+    const full = try wrap(arena, &wrappers, &.{ "m8", "call", "m8", "munge" }, "/opt/m8/bin/m8");
     try testing.expectEqualStrings("/opt/m8/bin/m8", full[0]);
     try testing.expectEqualStrings("bash", full[4]);
     try testing.expectEqualStrings("m8 filter out toolbox", full[6]);
-    // The tool's own argv is untouched: it is not a wrapper.
-    try testing.expectEqualStrings("m8", full[7]);
+    // The tool's own command follows the same rule: its first word, and no
+    // other.
+    try testing.expectEqualStrings("/opt/m8/bin/m8", full[7]);
+    try testing.expectEqualStrings("m8", full[9]);
 }
 
 test "the shields m8 ships with parse, and jail is the composition it claims" {
@@ -579,8 +631,9 @@ test "the shields m8 ships with parse, and jail is the composition it claims" {
     var it = std.mem.tokenizeAny(u8, secures, " ");
     while (it.next()) |name| try testing.expect(sandbox.find(name) != null);
 
-    // And jail closes the definition channel, which sandbox composes.
-    try testing.expect(got.wrappers.len > 6);
+    // And jail closes the definition channel, which sandbox composes: three
+    // filters, and the one `secure` every restriction is told to.
+    try testing.expectEqual(@as(usize, 4), got.wrappers.len);
 }
 
 test "a wrapper says where this m8 is, as its own word or inside one" {
@@ -595,7 +648,7 @@ test "a wrapper says where this m8 is, as its own word or inside one" {
         // A pipe: m8 is named inside a script it does not read.
         &.{ "bash", "-c", "\"$0\" \"$@\" | {{M8}} filter out toolbox" },
     };
-    const got = try wrap(arena, &wrappers, &.{ "grep", "-r", "x" }, self);
+    const got = try wrap(arena, &wrappers, &.{ "grep", "-r", "x", "{{M8}}", "call", "{{M8}}", "munge" }, self);
 
     try testing.expectEqualStrings(self, got[0]);
     try testing.expectEqualStrings("shield", got[1]);
@@ -603,12 +656,14 @@ test "a wrapper says where this m8 is, as its own word or inside one" {
         "\"$0\" \"$@\" | " ++ self ++ " filter out toolbox",
         got[6],
     );
-    // The tool's own argv is untouched: it is not a wrapper.
+    // The tool's own command says it the same way, as often as it needs.
     try testing.expectEqualStrings("grep", got[7]);
+    try testing.expectEqualStrings(self, got[10]);
+    try testing.expectEqualStrings(self, got[12]);
 
     // A word that never says it is handed back rather than rebuilt.
     const plain = "-c";
-    try testing.expectEqual(plain.ptr, (try said(arena, plain, self)).ptr);
+    try testing.expectEqual(plain.ptr, (try said(arena, plain, self_mark, self)).ptr);
 }
 
 test "every mention in a word is answered, not only the first" {
@@ -618,7 +673,7 @@ test "every mention in a word is answered, not only the first" {
 
     try testing.expectEqualStrings(
         "/m8 x /m8",
-        try said(arena, "{{M8}} x {{M8}}", "/m8"),
+        try said(arena, "{{M8}} x {{M8}}", self_mark, "/m8"),
     );
-    try testing.expectEqualStrings("/m8", try said(arena, "{{M8}}", "/m8"));
+    try testing.expectEqualStrings("/m8", try said(arena, "{{M8}}", self_mark, "/m8"));
 }

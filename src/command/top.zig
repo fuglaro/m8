@@ -49,7 +49,7 @@ fn run(ctx: Ctx) !u8 {
         return 1;
     }
     const lead = [_]doc.Record{.{ .sigil = .skill, .value = name }};
-    const assembled = try assembly.assemble(ctx.arena, &lead, "", ctx.in);
+    const assembled = try assembly.assemble(ctx.arena, &lead, "", ctx.in, null);
     var diag: doc.Diagnostic = .{};
     try doc.writeAll(ctx.out, ctx.mode, try doc.parse(ctx.arena, assembled.document, &diag));
     return 0;

@@ -3,9 +3,7 @@
 //! Most commands are filters over an m8 stream: they read a document on stdin
 //! and write one on stdout. Anything said to the *person* goes to the terminal
 //! instead, on its own channel, so a command that opens a UI is still a legal
-//! member of a pipeline:
-//!
-//!     m8 ask "which model?" < session.md | m8 cat
+//! member of a pipeline.
 //!
 //! Keeping interaction off stdout is the whole reason this works. A command
 //! that printed its prompt to stdout would corrupt every downstream reader.
@@ -62,23 +60,36 @@ pub const Ctx = struct {
 /// environment.
 pub const EnvVar = struct { key: []const u8, value: []const u8 };
 
+/// How a tool asks the person something: this exit status, nothing on stdout,
+/// and a stderr that opens with `ask_lead`. `EX_TEMPFAIL` — it could not
+/// finish, and is worth running again.
+pub const ask_exit = 75;
+pub const ask_lead = "QUESTION:";
+/// Who is asking follows the lead and closes with a colon: the tool itself,
+/// or a shield by the name it was told it stands as.
+pub const asks_tool = "tool";
+pub const asks_shield = "shield-";
+/// A folder of what the harness hands a call, which the call only reads.
+/// `exclamation-1` is the first thing the person answered the tool, and so on
+/// up. What they answered a shield is the same under a folder of its name.
+pub const params_var = "M8_TOOL_PARAMS";
+pub const params_dir = ".m8-tool-params";
+pub const exclamation = "exclamation-";
+
+/// A name as one path component. Whoever chose it was not choosing a
+/// folder's name, and nothing says they chose one a folder can have.
+pub fn component(arena: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error![]const u8 {
+    const out = try arena.dupe(u8, name);
+    for (out) |*c| if (!std.ascii.isAlphanumeric(c.*) and c.* != '-' and c.* != '_') {
+        c.* = '_';
+    };
+    return out;
+}
+
 /// The interaction channel. Separate from `in`/`out` by construction.
 pub const Tty = struct {
     r: *std.Io.Reader,
     w: *std.Io.Writer,
-
-    pub fn prompt(t: Tty, comptime fmt: []const u8, args: anytype) !void {
-        try t.w.print(fmt, args);
-        try t.w.flush();
-    }
-
-    pub fn line(t: Tty) !?[]const u8 {
-        const got = t.r.takeDelimiterInclusive('\n') catch |e| switch (e) {
-            error.EndOfStream => return null,
-            else => return e,
-        };
-        return std.mem.trimEnd(u8, got, "\r\n");
-    }
 };
 
 /// What a command is handed on `in`.

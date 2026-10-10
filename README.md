@@ -398,7 +398,7 @@ relitigating them.
 ## Commands
 
 ```bash
-m8 [@ADDRESS[:|-] [-- PROMPT]]
+m8 [@ADDRESS[:|-] [-p] [-v] [-- PROMPT]]
 m8 COMMAND [ARGS]
 ```
 
@@ -491,6 +491,18 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
 * If a tty is connected, interactive mode is activated,
   which streams tokens without buffering and renders
   the reply. Everything else is written as markdown.
+* `-p` after the address is pretty: the reply is rendered and
+  streamed whatever stdout is, under the 🙋 it answers.
+  * It is for whatever stands between m8 and a terminal.
+  * `m8 riff` is one. See Riffing.
+  * `m8 cat` takes it too: `m8 cat @mathy -p | less -R`.
+* `-v` after the address is verbose: a line on stderr for
+  what the run is doing.
+  * `💭 ` and the opening of a thought, said once.
+  * `📲` and a call, as `name(argument=value,…)`.
+  * Each is one line, cut where it gets long, and stays
+    the last thing said until the next.
+  * A thought kept aside as a snip is not said.
 * A first word that is not an address names a command.
 
 Every command has a page, and anything under a command
@@ -542,11 +554,16 @@ m8 top @tight-docs | m8 @mathy -- "Tidy the README."
 ```
 
 Piping is not required, and neither is a prompt when
-something was piped. With neither, a terminal collects
-lines until Ctrl-D, then shows the submitted 🙋 before
-waiting for the reply; Ctrl-D before anything was entered
-quietly cancels. An empty non-terminal input still has
-nothing to say, and m8 says so.
+something was piped. With neither, at a terminal, the
+address alone opens a conversation with it: `m8 @mathy`
+is `m8 riff m8 @mathy -p -v`. See Riffing.
+
+`-p` after the address is one message the plain way: a
+terminal collects lines until Ctrl-D, then shows the
+submitted 🙋 before waiting for the reply; Ctrl-D before
+anything was entered quietly cancels. An empty
+non-terminal input still has nothing to say, and m8 says
+so.
 
 A document is told from prose by its first line alone,
 so one that opens like a document and then goes wrong is
@@ -595,6 +612,56 @@ m8 @mathy -- hi | m8 ref | m8 @critic -- "Review that."
 
 Forking a chat is naming somewhere else to tag, and
 nothing more.
+
+### Riffing
+
+```bash
+m8 riff CMD [ARGS]         an editor pinned under CMD's output
+m8 @mathy                  at a terminal: m8 riff m8 @mathy -p -v
+m8 riff -c python3 -i -u -q    one Python, a message at a time
+m8 riff -c -s 2 python3 -i -u -q    with its last error above its prompt
+```
+
+`riff` is a conversation at a terminal, made of the command
+line rather than beside it.
+
+* Every message sent is a run of CMD.
+  * The message is its stdin.
+  * A message sent mid-run waits its turn.
+* CMD's stdout is ordinary terminal scrollback.
+  * Only CMD writes there, so it scrolls, selects and copies
+    as any output does.
+  * riff never repaints it and keeps no copy.
+* The last line CMD wrote to stderr is the status line.
+  * `-s N` is N status lines, from 1 to 8: the last N it wrote,
+    newest at the bottom.
+  * What riff says itself takes the bottom one.
+* The editor is the rows under that.
+  * It starts as one row and grows with the message, to at most
+    half the terminal.
+  * It does not shrink while a message is being written.
+  * Sending makes it one row again, before CMD says anything.
+  * Enter is a new line.
+  * Ctrl-d sends, and leaves when there is nothing to send.
+  * PgUp and PgDn move by the editor's height.
+  * Ctrl-c interrupts a run, and leaves when nothing is running.
+* `-c` is continuous: one run of CMD for every message.
+  * The first message starts it, and each is a line on its
+    stdin.
+  * Ctrl-d with nothing to send closes its stdin.
+  * CMD has to work a line at a time on a pipe, and say so as
+    it goes. Python needs `-i` for the first and `-u` for the
+    second; its `>>>` is on stderr, so it is the status line.
+* CMD has no terminal.
+  * It runs in a session of its own, so `/dev/tty` is not
+    there to open and riff keeps the one it has.
+  * A tool that asks the person does it through the ledger, so
+    the question is the last thing a run says and the next
+    message sent is the answer. See Asking the Person.
+  * `m8 riff --detached CMD` is that half alone.
+
+riff knows nothing about m8. `m8 riff sh -c 'cat; date'` is as
+much a riff as a chat is.
 
 ### Encoding
 
@@ -760,10 +827,6 @@ complained about — the end is where a program says
 why — and marks it `...` when there was more.
 
 `m8 shield` is what a 🛡 expands into. See Shields.
-
-`m8 ask` puts a question to the person and appends their
-answer to the document, so the next command in the pipe sees
-it.
 
 `munge` provides the file tools as `m8 munge read`,
 `write` and `scan`.
@@ -997,8 +1060,9 @@ writers may use blank lines between records for
 readability.
 
 Sigils are a closed set, written as one codepoint
-within U+1F300 to U+1FAFF or as `:word:`. An unknown
-sigil in either spelling is an error.
+within U+1F300 to U+1FAFF or U+2700 to U+27BF, or as
+`:word:`. An unknown sigil in either spelling is an
+error.
 
 An emoji sigil may be followed by presentation
 modifiers — a variation selector, a skin tone, or a
@@ -1059,6 +1123,8 @@ renders markdown renders them. A tty gets `m8`.
 * 🛡️ shield -> `:shield:`
 * 🏃 runner -> `:runner:`
 * 🧰 tool -> `:toolbox:`
+* ❓ question -> `:question:`
+  * ❗ exclamation -> `:exclamation:`
 
 A sigil takes a value, a content block, or both — or, for the
 one that is a fence rather than a record, neither. A 💭 without a
@@ -1072,7 +1138,7 @@ variable configuration.
 
 * Value only: 🧠 📚 🔏 🟢 💭
 * Content only: 🙋 🧭
-* Both: 🤖 🧰 📲 🧾 🚫 🛡️ 🏃
+* Both: 🤖 🧰 📲 🧾 🚫 🛡️ 🏃 ❓ ❗
 * Neither: 🔝
 
 ### Stopping Short
@@ -1271,6 +1337,8 @@ What a tool is handed:
   Anything nested, dotted or arrayed has no scalar env
   spelling and lives here instead.
 * `M8_CALL_ID`, which call this is.
+* `M8_TOOL_PARAMS`, a folder of what the harness hands
+  the call. See Asking the Person.
 
 An inherited `__<NAME>__` environment variable is available
 as a fallback when the call does not supply that argument.
@@ -1361,6 +1429,87 @@ was written, so a toolbox naming some other expander
 works the same way, and deleting `call` leaves the
 framework whole.
 
+### Asking the Person
+
+A tool that needs something from the person asks through
+the ledger, so the question and its answer are part of the
+conversation.
+
+```m8
+▐ 📲deploy,c1
+│ * target `prod`
+
+▐ ❓tool,c1
+│ deploy to prod?
+
+▐ ❗tool,c1
+│ yes
+
+▐ 🧾c1
+│ deployed
+▐ 🟢c1
+```
+
+* A tool asks by ending in a particular way.
+  * Exit status 75.
+  * Nothing on stdout.
+  * A stderr that opens `QUESTION:tool:`, with the question
+    after it.
+* A shield asks the same way, under its own name.
+  * `QUESTION:shield-ask-1:` is the first wrapper of `🛡️ask`.
+  * `{{SHIELD}}` in a shield's command is that name, `ask-1`.
+* The ❓ says who asked and of which call: `❓tool,c1`.
+* The run stops on the ❓.
+  * Calls the model made alongside it are written down
+    first, unanswered.
+  * No model is told anything: the call is still owed.
+* Whatever is said next is the ❗, to whoever asked.
+  * It takes the place of a 🙋 whenever a ledger ends in a ❓.
+  * Whoever says it is who answered. A person, a script
+    and another agent are all the same to m8.
+* The call is then run again, from the start.
+  * A tool is safe to repeat up to the point it asks.
+  * The owed calls follow it, and then the model.
+* A tool asks as many times as it needs.
+  * Each run is handed every answer so far.
+  * A tool and the shields it stands inside each ask their
+    own, and each finds only what was said to it.
+  * Questions are asked in the same order every run, which
+    is what makes the second answer the second question's.
+* Exit status 75 without a question, once answered, is the
+  tool saying no.
+  * Its result is written as any failure is.
+  * Calls made alongside it lean on each other, so the ones
+    still owed are not run. Each is closed with a 🚫 saying
+    another was refused.
+  * The conversation goes to the person, not the model, so
+    a refusal is followed by what to do instead.
+
+What the person answered is in `M8_TOOL_PARAMS`:
+
+```
+$M8_TOOL_PARAMS/exclamation-1                 the tool's first answer
+$M8_TOOL_PARAMS/exclamation-2                 its second
+$M8_TOOL_PARAMS/shield-ask-1/exclamation-1    a shield's first
+```
+
+* The folder is the call's own, and is there every run.
+  * The tool and every shield around it are handed the same
+    one.
+  * Empty is nothing answered yet.
+  * It is made from the ledger and removed after, so the
+    ledger is the only place an answer lives.
+* It is a file, so an answer is as long as it is.
+* A tool reads it and never writes it.
+  * The sandbox profile denies writing there, whatever
+    else it allows.
+  * With no sandbox it is an ordinary folder.
+
+```bash
+f="$M8_TOOL_PARAMS/exclamation-1"
+[ -f "$f" ] || { echo "QUESTION:tool: deploy to prod?" >&2; exit 75; }
+```
+
 ## Shields
 
 A shield is not a program that decides to restrict a
@@ -1431,7 +1580,7 @@ running", because a wrapper is m8 two different ways.
 
 * A wrapper whose first word is `m8` *is* an m8 command,
   and that word becomes this m8's path. `🛡️ask` is
-  `` `m8` `shield` `ask` `--` `` and nothing else.
+  `` `m8` `shield` `ask` `{{SHIELD}}` `--` `` and nothing else.
 * A wrapper that mentions m8 inside a word says `{{M8}}`
   and that becomes the path. A script is bytes m8 does
   not read, so a pipe through `m8 filter` needs somewhere
@@ -1439,8 +1588,25 @@ running", because a wrapper is m8 two different ways.
 
 Said in the argv either way, so the path reaches the
 wrapper that asked for it rather than every process
-underneath. The tool's own argv is untouched: it is not
-a wrapper.
+underneath.
+
+A tool's own command is read the same way.
+
+* A first word `m8` is this m8, so `` `m8` `call` … ``
+  runs with no m8 installed.
+* `{{M8}}` is this m8 anywhere else, which is how a
+  program `m8 call` runs is this m8 too:
+  `` `{{M8}}` `call` `{{M8}}` `munge` `read` … ``.
+* What a call said arrives in the environment, never in
+  these words, so no value a model wrote is read for it.
+
+`{{SHIELD}}` is the name a wrapper stands as.
+
+* It is the shield's name and a count from one: `ask-1`.
+  * The count separates the wrappers of a name defined
+    more than once.
+* It is who a wrapper asks the person as, and the folder
+  its answers are in. See [Asking the Person](#asking-the-person).
 
 Nothing inserts an argv0 for you. `bash -c` binds `$0`
 to the first argument after the script, which is why
@@ -1456,6 +1622,14 @@ permitted — intersection does not care — and everything
 about what a person is shown, which is why `ask` is
 worth activating last: innermost, it asks about the
 bare command rather than about a stack of prefixes.
+
+A shield stands once, however many times it is activated.
+
+* It stands where it was first activated.
+* Each later activation adds its values to what the shield
+  is told, and nothing else.
+* So `jail` is one `secure`, told every restriction, and a
+  tool's own `airgap` joins that one's list.
 
 ### Where a shield is written
 
@@ -1551,14 +1725,18 @@ Three need m8 itself:
 
 ```bash
 m8 shield secure "RESTRICTIONS" -- CMD   the profile
-m8 shield ask -- CMD                     the person
+m8 shield ask [NAME] -- CMD                     the person
 m8 shield check AGENT -- CMD             another agent
 ```
 
-`ask` puts the command to whoever is at the terminal.
-With no terminal there is nobody to ask, and the answer
-is no — a pipe or a cron job must not be a way of
-skipping the question.
+`ask` puts the command to the person as a ❓, the way any
+tool asks. See Asking the Person.
+
+* `y` or `yes` runs it.
+* Anything else does not, and the person is asked what to
+  do instead.
+* It needs no terminal, so it asks the same under a pipe,
+  a riff or anything else that can answer the conversation.
 
 `check` puts the candidate to an agent, which answers
 `allow` or explains itself. Anything else becomes
@@ -2080,3 +2258,5 @@ whatever its entry says, under its own name.
 Under `contain-env` the environment is rebuilt from
 `core/contain-env-allowed.txt` rather than inherited, and
 `HOME` and `TMPDIR` become the sandbox's own directory.
+`M8_TOOL_PARAMS` is passed whatever that file says: a tool
+that cannot find what the person answered asks for ever.

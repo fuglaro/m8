@@ -21,6 +21,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const doc = @import("m8/doc.zig");
+const ledger = @import("ledger.zig");
 
 pub const Assembled = struct {
     /// The ledger, in the spelling every file is written in.
@@ -37,9 +38,13 @@ pub fn assemble(
     lead: []const doc.Record,
     prompt: []const u8,
     piped: []const u8,
+    /// The call the lead is waiting on the person for, when it ends in a ❓.
+    asked: ?[]const u8,
 ) !Assembled {
     const is_document = piped.len > 0 and doc.detect(piped) != null;
-    const prose = if (is_document) "" else std.mem.trim(u8, piped, " \t\r\n");
+    // Kept as it was said. Whitespace is part of that, and a ledger that
+    // tidied it would no longer be what happened.
+    const prose = if (is_document) "" else piped;
 
     var records: std.ArrayList(doc.Record) = .empty;
     try records.appendSlice(arena, lead);
@@ -54,7 +59,12 @@ pub fn assemble(
     const said = if (prompt.len > 0 and prose.len > 0)
         try std.fmt.allocPrint(arena, "{s}\n{s}", .{ prompt, prose })
     else if (prompt.len > 0) prompt else prose;
-    if (said.len > 0) try records.append(arena, .{ .sigil = .user, .content = said });
+    // Said to a ledger that ends in a question, it is the answer to it.
+    const waiting = ledger.asking(records.items) orelse if (is_document) null else asked;
+    if (said.len > 0) try records.append(arena, if (waiting) |id|
+        .{ .sigil = .exclaim, .value = id, .content = said }
+    else
+        .{ .sigil = .user, .content = said });
 
     var buf: std.Io.Writer.Allocating = .init(arena);
     try doc.writeAll(&buf.writer, .md, records.items);
@@ -80,7 +90,7 @@ test "nothing piped: the lead, then the prompt" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const got = try assemble(arena, chat_lead, "hello", "");
+    const got = try assemble(arena, chat_lead, "hello", "", null);
     const r = try sigils(arena, got);
     try testing.expectEqual(@as(usize, 2), r.len);
     try testing.expectEqualStrings("mob/agent/+/last", r[0].value);
@@ -88,7 +98,7 @@ test "nothing piped: the lead, then the prompt" {
     try testing.expect(!got.said_nothing);
 
     // Neither piped nor said is nothing to say.
-    try testing.expect((try assemble(arena, chat_lead, "", "")).said_nothing);
+    try testing.expect((try assemble(arena, chat_lead, "", "", null)).said_nothing);
 }
 
 test "an m8 document piped in follows the lead as it is" {
@@ -97,7 +107,7 @@ test "an m8 document piped in follows the lead as it is" {
     const arena = a.allocator();
 
     const piped = "#### :brain:/local/tiny\n\n#### :raising_hand:\n> piped\n";
-    const got = try assemble(arena, chat_lead, "more", piped);
+    const got = try assemble(arena, chat_lead, "more", piped, null);
     const r = try sigils(arena, got);
     try testing.expectEqual(@as(usize, 4), r.len);
     try testing.expectEqualStrings("mob/agent/+/last", r[0].value);
@@ -106,7 +116,7 @@ test "an m8 document piped in follows the lead as it is" {
     try testing.expectEqualStrings("more", r[3].content.?);
 
     // With no lead it is the document alone, and a prompt is not needed.
-    const alone = try assemble(arena, &.{}, "", piped);
+    const alone = try assemble(arena, &.{}, "", piped, null);
     try testing.expectEqualStrings("/local/tiny", (try sigils(arena, alone))[0].value);
     try testing.expect(!alone.said_nothing);
 }
@@ -116,15 +126,19 @@ test "prose piped in joins the prompt rather than becoming its own record" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const got = try assemble(arena, chat_lead, "Summarize:", "line one\nline two\n");
+    const got = try assemble(arena, chat_lead, "Summarize:", "line one\nline two\n", null);
     const r = try sigils(arena, got);
     try testing.expectEqual(@as(usize, 2), r.len);
     // One 🙋, the prompt as a preamble to what was piped.
-    try testing.expectEqualStrings("Summarize:\nline one\nline two", r[1].content.?);
+    try testing.expectEqualStrings("Summarize:\nline one\nline two\n", r[1].content.?);
 
     // With no prompt it is the piped text alone.
-    const bare = try assemble(arena, chat_lead, "", "just this\n");
-    try testing.expectEqualStrings("just this", (try sigils(arena, bare))[1].content.?);
+    const bare = try assemble(arena, chat_lead, "", "just this\n", null);
+    try testing.expectEqualStrings("just this\n", (try sigils(arena, bare))[1].content.?);
+
+    // Whitespace is something said too, and is kept as it came.
+    const blank = try sigils(arena, try assemble(arena, chat_lead, "", " \n\n", null));
+    try testing.expectEqualStrings(" \n\n", blank[1].content.?);
 }
 
 test "a header-shaped prompt without a sigil stays prose" {
@@ -132,10 +146,10 @@ test "a header-shaped prompt without a sigil stays prose" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const got = try assemble(arena, chat_lead, "", "#### Should be raw because no real sigil.\n=\n");
+    const got = try assemble(arena, chat_lead, "", "#### Should be raw because no real sigil.\n=\n", null);
     const r = try sigils(arena, got);
     try testing.expectEqual(@as(usize, 2), r.len);
-    try testing.expectEqualStrings("#### Should be raw because no real sigil.\n=", r[1].content.?);
+    try testing.expectEqualStrings("#### Should be raw because no real sigil.\n=\n", r[1].content.?);
 }
 
 test "a document that opens right and then goes wrong is an error, not a prompt" {
@@ -149,5 +163,25 @@ test "a document that opens right and then goes wrong is an error, not a prompt"
         chat_lead,
         "",
         "#### :brain:/local/tiny\n\n#### :nosuchsigil:\n",
+        null,
     ));
+}
+
+test "said to a ledger that ends in a question, it is the answer" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // The lead was read and found waiting on call c1.
+    const told = try sigils(arena, try assemble(arena, chat_lead, "yes", "", "c1"));
+    try testing.expectEqual(@as(usize, 2), told.len);
+    try testing.expectEqual(doc.Sigil.exclaim, told[1].sigil);
+    try testing.expectEqualStrings("c1", told[1].value);
+    try testing.expectEqualStrings("yes", told[1].content.?);
+
+    // A document that ends in one says so itself.
+    const piped = "#### :calling:run,c2\n\n#### :question:c2\n> sure?\n";
+    const after = try sigils(arena, try assemble(arena, &.{}, "no", piped, null));
+    try testing.expectEqual(doc.Sigil.exclaim, after[2].sigil);
+    try testing.expectEqualStrings("c2", after[2].value);
 }

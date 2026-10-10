@@ -1,8 +1,9 @@
 //! The sigil table. One line kind per entry, in two spellings.
 //!
-//! The emoji spelling is one codepoint inside U+1F300..U+1FAFF, and a renderer
-//! may decorate it with presentation modifiers. That range holds no writing
-//! systems, so an unknown character there is an error rather than text. The
+//! The emoji spelling is one codepoint inside U+1F300..U+1FAFF or the dingbats,
+//! U+2700..U+27BF, and a renderer may decorate it with presentation modifiers.
+//! Neither range holds a writing system, so an unknown character there is an
+//! error rather than text. The
 //! plain spelling is `:word:`, a gemoji shortcode. The words are gemoji's and
 //! so they name the picture; the role is the enum tag beside it.
 //!
@@ -11,8 +12,8 @@
 
 const std = @import("std");
 
-pub const range_lo: u21 = 0x1F300;
-pub const range_hi: u21 = 0x1FAFF;
+/// Where a sigil's codepoint comes from: the pictographs, and the dingbats.
+pub const ranges = [_][2]u21{ .{ 0x1F300, 0x1FAFF }, .{ 0x2700, 0x27BF } };
 
 /// Separates a fixed number of fields inside a value, so the last field may
 /// hold one safely. How many fields a value has is decided by the sigil above
@@ -59,6 +60,12 @@ pub const Sigil = enum {
     // what a thing is, so what a reply hands back is inert until something
     // already trusted names it — and one sigil means one filter closes both.
     tool,
+    // ❓ is a tool asking the person something before it can go on, and ❗ is
+    // what they said back. Both name the call, so a tool that asks twice is
+    // answered twice and in order. Neither is anything a model is told: the
+    // call they stand under is answered by the tool once it has what it needs.
+    question,
+    exclaim,
 
     pub fn emoji(s: Sigil) []const u8 {
         return switch (s) {
@@ -78,6 +85,8 @@ pub const Sigil = enum {
             .shield => "\u{1F6E1}\u{FE0F}", // 🛡️
             .runner => "\u{1F3C3}", // 🏃
             .tool => "\u{1F9F0}", // 🧰
+            .question => "\u{2753}", // ❓
+            .exclaim => "\u{2757}", // ❗
         };
     }
 
@@ -103,6 +112,8 @@ pub const Sigil = enum {
             .shield => ":shield:",
             .runner => ":runner:",
             .tool => ":toolbox:",
+            .question => ":question:",
+            .exclaim => ":exclamation:",
         };
     }
 
@@ -200,14 +211,15 @@ pub fn match(mode: Mode, s: []const u8) ?Match {
     return null;
 }
 
-/// True when `s` begins with a codepoint in the reserved range. Such a
+/// True when `s` begins with a codepoint in a reserved range. Such a
 /// character that is not a known sigil is an error, never content.
 pub fn inReservedRange(s: []const u8) bool {
     if (s.len == 0) return false;
     const len = std.unicode.utf8ByteSequenceLength(s[0]) catch return false;
     if (len > s.len) return false;
     const cp = std.unicode.utf8Decode(s[0..len]) catch return false;
-    return cp >= range_lo and cp <= range_hi;
+    for (ranges) |r| if (cp >= r[0] and cp <= r[1]) return true;
+    return false;
 }
 
 // ---------------------------------------------------------------- tests
@@ -254,6 +266,8 @@ test "every plain spelling is the gemoji shortcode for its own emoji" {
         .{ .sigil = .shield, .cp = 0x1F6E1, .word = ":shield:" },
         .{ .sigil = .runner, .cp = 0x1F3C3, .word = ":runner:" },
         .{ .sigil = .tool, .cp = 0x1F9F0, .word = ":toolbox:" },
+        .{ .sigil = .question, .cp = 0x2753, .word = ":question:" },
+        .{ .sigil = .exclaim, .cp = 0x2757, .word = ":exclamation:" },
     };
     try std.testing.expectEqual(std.enums.values(Sigil).len, pins.len);
     for (pins) |pin| {

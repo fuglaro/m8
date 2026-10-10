@@ -29,11 +29,11 @@ const modules = .{
     @import("command/save.zig"),
     @import("command/top.zig"),
     @import("command/call.zig"),
-    @import("command/ask.zig"),
     @import("command/munge.zig"),
     @import("command/shield.zig"),
     @import("command/filter.zig"),
     @import("command/providers.zig"),
+    @import("command/riff.zig"),
 };
 
 pub const all = commands(modules);
@@ -224,7 +224,6 @@ const testing = std.testing;
 test "a command is found by name" {
     try testing.expect(find("cat") != null);
     try testing.expect(find("call") != null);
-    try testing.expect(find("ask") != null);
     try testing.expect(find("munge") != null);
     try testing.expect(find("--") == null);
     try testing.expect(find("nosuch") == null);

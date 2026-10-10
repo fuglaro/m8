@@ -7,6 +7,19 @@
   Providers should apply and interpret this if encountered (SHOULD apply, MUST interpret).
   This improves UX on summarised thought bubbles significantly better.
 
+* Cache breakpoint managment. 5min ttl in tool loops - upgrade to 1hr on hand to user? Options on model def? or provider directive sigils?
+
+* Jed style classifier auto-tool approval
+
+* Sub-agent mode put everything except the last :robot: message on stderr.
+
+* System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger). Make sure m8 only calls itself directly and there is a route for that
+on tool calls too.
+
+* Parallel calls to agents is one tool call! The tool distributes!
+-v also streams the tool stderr! So it can show its progress.
+
+
 ----
 
 ## Mission

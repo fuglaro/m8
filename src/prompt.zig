@@ -10,7 +10,8 @@
 //!
 //! `@` is not a command, but it sits where one would. A prompt supplied as
 //! arguments follows the `--` marker, so prose cannot be mistaken for m8
-//! syntax.
+//! syntax. `-p` before it asks for the rendered spelling whatever stdout is,
+//! and `-v` for a line on stderr as the run thinks and as it calls a tool.
 
 const std = @import("std");
 const doc = @import("m8/doc.zig");
@@ -18,6 +19,7 @@ const config = @import("config.zig");
 const address = @import("address.zig");
 const assembly = @import("assembly.zig");
 const converse = @import("converse.zig");
+const ledger = @import("ledger.zig");
 const api = @import("command/api.zig");
 const Ctx = api.Ctx;
 
@@ -34,7 +36,21 @@ fn promptWords(args: []const []const u8) ?[]const []const u8 {
 
 /// `args` are every word after `m8`: the address, followed by an optional
 /// `--` and what to say to it. None at all is the main chat.
-pub fn run(ctx: Ctx, args: []const []const u8) !u8 {
+pub fn run(given: Ctx, all: []const []const u8) !u8 {
+    // `-p` is pretty: what a terminal is written, whatever stdout is. It is
+    // how something standing between m8 and the terminal asks for the reply
+    // as a person reads it.
+    //
+    // `-v` is verbose: what the run is doing, said on stderr as it does it.
+    var pretty = false;
+    var verbose = false;
+    var args = all;
+    while (args.len > 1) : (args = args[1..]) {
+        if (std.mem.eql(u8, args[1], "-p")) pretty = true else if (std.mem.eql(u8, args[1], "-v")) verbose = true else break;
+    }
+    var ctx = given;
+    if (pretty) ctx.mode = .m8;
+
     const words = promptWords(args) orelse {
         try ctx.err.writeAll("m8: put -- before what you want to say\n");
         return 1;
@@ -44,7 +60,7 @@ pub fn run(ctx: Ctx, args: []const []const u8) !u8 {
     const io = ctx.io;
     const dirs = try config.discover(arena, io, ctx.env);
 
-    const word = if (args.len > 0) args[0] else "@";
+    const word = if (all.len > 0) all[0] else "@";
     const a = try address.typed(arena, io, dirs, word, ctx.err);
 
     if (a.suffix == .reset) {
@@ -73,7 +89,8 @@ pub fn run(ctx: Ctx, args: []const []const u8) !u8 {
     if (terminal_submission and piped.len == 0) return 0;
 
     const lead = [_]doc.Record{.{ .sigil = .agent, .value = try address.read(arena, io, dirs, a) }};
-    const assembled = try assembly.assemble(arena, &lead, prompt, piped);
+    const asked = ledger.waiting(arena, io, dirs, lead[0].value);
+    const assembled = try assembly.assemble(arena, &lead, prompt, piped, asked);
     if (assembled.said_nothing) {
         // Where the terminal will one day open a conversation in place. For
         // now there is only nothing to say, and it is said.
@@ -84,7 +101,12 @@ pub fn run(ctx: Ctx, args: []const []const u8) !u8 {
     // Terminal input was echo rather than output, and Ctrl-D can briefly leave
     // its caret notation under the cursor. Turn the submitted prose into the
     // first visible record before any provider latency begins.
-    if (terminal_submission) try showTerminalPrompt(ctx.tty, piped);
+    if (terminal_submission) {
+        if (ctx.tty) |t| {
+            try t.w.writeAll("  \n");
+            try showPrompt(t.w, piped, asked);
+        }
+    } else if (pretty) try showPrompt(ctx.out, if (piped.len > 0) piped else prompt, asked);
 
     var inner = ctx;
     inner.in = assembled.document;
@@ -95,7 +117,7 @@ pub fn run(ctx: Ctx, args: []const []const u8) !u8 {
         .a = a,
         .home = try address.home(arena, io, dirs, a, lead[0].value),
     };
-    const turn = try converse.run(inner, .{ .keep = keeping.keeper() });
+    const turn = try converse.run(inner, .{ .keep = keeping.keeper(), .verbose = verbose });
     // A run that added nothing was handed nothing to keep, and what was said
     // to it is still a turn.
     const kept = keeping.last orelse try address.tag(arena, io, dirs, a, turn);
@@ -130,25 +152,24 @@ const Keeping = struct {
     }
 };
 
-/// Acknowledge a terminal submission in the language already used for the
-/// reply. The terminal driver may echo VEOF as `^D` followed by two backspaces;
-/// two spaces overwrite that notation without assuming ANSI escapes, and the
-/// newline puts the record on a clean line.
-fn showTerminalPrompt(tty: ?api.Tty, entered: []const u8) !void {
-    const t = tty orelse return;
-    try t.w.writeAll("  \n");
-
+/// Acknowledge a submission in the language already used for the reply.
+///
+/// At a terminal the caller first overwrites what the driver echoed for VEOF:
+/// `^D` followed by two backspaces, which two spaces cover without assuming
+/// ANSI escapes, and a newline puts the record on a clean line.
+fn showPrompt(w: *std.Io.Writer, entered: []const u8, asked: ?[]const u8) !void {
     // A document is context rather than one thing the person said. Do not lie
     // about it by wrapping the whole document in a user record; the newline is
     // still the immediate acknowledgment that its Ctrl-D was received.
     if (doc.detect(entered) == null) {
-        const prose = std.mem.trim(u8, entered, " \t\r\n");
-        if (prose.len > 0) {
-            try doc.write(t.w, .m8, .{ .sigil = .user, .content = prose });
-            try t.w.writeByte('\n');
-        }
+        // Said to a question, it is the answer to it.
+        try doc.write(w, .m8, if (asked) |id|
+            .{ .sigil = .exclaim, .value = id, .content = entered }
+        else
+            .{ .sigil = .user, .content = entered });
+        try w.writeByte('\n');
     }
-    try t.w.flush();
+    try w.flush();
 }
 
 /// Read prose entered directly at a terminal. Canonical terminal input makes

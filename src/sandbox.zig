@@ -20,6 +20,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const config = @import("config.zig");
+const api = @import("command/api.zig");
 
 pub const template = @embedFile("core/mac-sandbox.sb");
 pub const env_allowed = @embedFile("core/contain-env-allowed.txt");
@@ -124,11 +125,8 @@ pub fn envPasses(src: []const u8, name: []const u8) bool {
     return false;
 }
 
-/// A directory of this call's own, for what m8 writes rather than what a tool
-/// does. The two are not the same place: a tool's TMPDIR belongs to its mob
-/// and outlives the call, so a resolved profile written there would be one
-/// name two calls at once would both write, and the loser would run under the
-/// winner's restrictions.
+/// A scratch directory for a command run under `secure` straight from a
+/// shell, where there is no mob and nothing made one.
 pub fn makeTmp(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
     const base = env.get("TMPDIR") orelse "/tmp";
     var word: [8]u8 = undefined;
@@ -142,16 +140,24 @@ pub fn makeTmp(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map
     return tmp;
 }
 
-/// `sandbox-exec -f <resolved> -D ... -- argv`
+/// What the harness hands a call is the call's to read and never to write,
+/// though it sits in the scratch a tool may write anywhere else in. Added
+/// here rather than written in the profile, so a profile somebody overrode
+/// before this existed still keeps it.
+const handed_in = "\n(deny file-write* (regex #\"(^|/)\\" ++ api.params_dir ++ "($|/)\"))\n";
+
+/// `sandbox-exec -p <resolved> -D ... -- argv`
+///
+/// The profile is handed over as text rather than as a file. One `secure`
+/// may stand inside another, and a sandbox that contains reads does not let
+/// the next `sandbox-exec` open a profile from disk.
 pub fn exec(
     arena: Allocator,
     io: std.Io,
     env: *const std.process.Environ.Map,
     argv: []const []const u8,
     active: []const []const u8,
-    /// This call's own directory, where the resolved profile is written.
-    own: []const u8,
-    /// What the profile is told TMP is: the tool's, not m8's.
+    /// What the profile is told TMP is: the tool's.
     tmp: []const u8,
 ) ![]const []const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -159,17 +165,13 @@ pub fn exec(
     const cwd = try arena.dupe(u8, buf[0..len]);
     const parent = std.fs.path.dirname(cwd) orelse "/";
 
-    const path = try std.fs.path.join(arena, &.{ own, "resolved.sb" });
-    try std.Io.Dir.cwd().writeFile(io, .{
-        .sub_path = path,
-        .data = try resolve(arena, try profile(arena, io, env), active),
-    });
-
     var full: std.ArrayList([]const u8) = .empty;
     try full.appendSlice(arena, &.{
         "sandbox-exec",
-        "-f",
-        path,
+        "-p",
+        try std.mem.concat(arena, u8, &.{
+            try resolve(arena, try profile(arena, io, env), active), handed_in,
+        }),
         "-D",
         try std.fmt.allocPrint(arena, "CWD={s}", .{cwd}),
         "-D",
@@ -200,6 +202,9 @@ pub fn contained(
         try m.put("TMPDIR", tmp);
         try m.put("HOME", tmp);
     }
+    // Not the list's to drop: without it a tool that asked the person never
+    // finds the answer, and asks again for ever.
+    if (env.get(api.params_var)) |handed| try m.put(api.params_var, handed);
     const boxed = try arena.create(std.process.Environ.Map);
     boxed.* = m;
     return boxed;

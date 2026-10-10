@@ -53,14 +53,11 @@ fn run(ctx: Ctx) !u8 {
             try ctx.err.writeAll("m8 shield secure: needs sandbox-exec, which is macOS only\n");
             return wrapping.Error.Unsupported;
         }
-        // m8's own scratch for this call, which is where the resolved profile
-        // goes. Never the tool's: that one is shared by a mob.
-        const own = try sandbox.makeTmp(ctx.arena, ctx.io, ctx.env);
         if (tmp.len == 0) {
-            tmp = own;
+            tmp = try sandbox.makeTmp(ctx.arena, ctx.io, ctx.env);
             made = true;
         }
-        full = try sandbox.exec(ctx.arena, ctx.io, ctx.env, w.argv, kernel.items, own, tmp);
+        full = try sandbox.exec(ctx.arena, ctx.io, ctx.env, w.argv, kernel.items, tmp);
     }
 
     var environ: ?*const std.process.Environ.Map = null;

@@ -2,7 +2,7 @@
 > `false`
 
 #### :shield:ask
-> `m8` `shield` `ask` `--`
+> `m8` `shield` `ask` `{{SHIELD}}` `--`
 
 #### :shield:secure
 > `bash` `-e` `-c` `exec {{M8}} shield secure "${__secures__}" -- "$@"` `bash`

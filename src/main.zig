@@ -1,6 +1,6 @@
 //! m8 — a composable shell harness.
 //!
-//!     m8 [@ADDRESS[:|-] [-- PROMPT]]
+//!     m8 [@ADDRESS[:|-] [-p] [-v] [-- PROMPT]]
 //!     m8 COMMAND [ARGS]
 //!
 //! `@` is how the command line names an address, and it sits where a command
@@ -36,11 +36,13 @@ fn overview(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 - the composable agentic shell harness
         \\
-        \\  m8 @AGENT[:|-] [-- REQUEST_MESSAGE]
+        \\  m8 @AGENT[:|-] [-p] [-v] [-- REQUEST_MESSAGE]
         \\  m8 COMMAND [ARGS]
         \\
         \\@AGENT sends a REQUEST_MESSAGE or stdin. Put `--` before a
-        \\request supplied as command-line arguments.
+        \\request supplied as command-line arguments. `-p` renders and
+        \\streams the reply even when stdout is not a terminal. `-v` says on
+        \\stderr what the run is doing: a thought opening, a tool called.
         \\
         \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
         \\on whichever chat was talked to last. A chat under an agent is a fork
@@ -118,8 +120,19 @@ pub fn main(init: std.process.Init) !u8 {
 
     // An address, or nothing at all, is the prompt. The prompt parser owns
     // the `--` separator after the address.
-    if (args.len == 0 or address.isAddress(args[0]))
+    if (args.len == 0 or address.isAddress(args[0])) {
+        // An address and nothing else, at a terminal, is a conversation: the
+        // same address again and again from an editor, which is `riff` run on
+        // this m8. `-p` is how riff asks, so with it there is no going round
+        // twice, and it is also how to say one message the plain way.
+        const word: []const u8 = if (args.len > 0) args[0] else "@";
+        if (args.len <= 1 and !std.mem.endsWith(u8, word, "-") and
+            try std.Io.File.stdin().isTty(io) and try std.Io.File.stdout().isTty(io))
+        {
+            return launched(io, arena, init, command.byPath(&.{"riff"}).?, &.{ self, word, "-p", "-v" }, self, out, err);
+        }
         return harness.run(io, arena, init.environ_map, .prompt, "", @ptrCast(args), .inherited, self, out, err);
+    }
 
     const node = command.byPath(&.{args[0]}) orelse {
         try err.print("m8: '{s}' is not a command. See m8 --help.\n", .{args[0]});

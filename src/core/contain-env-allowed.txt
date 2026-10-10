@@ -10,6 +10,9 @@
 # One name per line. A trailing * matches a prefix. Blank lines and lines
 # starting with # are ignored.
 #
+# M8_TOOL_PARAMS always survives, listed or not: it is where a tool finds what
+# the person answered it, and one that cannot find that asks for ever.
+#
 # HOME and TMPDIR are always replaced with the mob's own scratch directory, so
 # listing them does nothing. A tool gets a real writable home that says nothing
 # about you, and one that outlives the call, so a file it writes is still there

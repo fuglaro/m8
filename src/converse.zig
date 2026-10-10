@@ -35,6 +35,9 @@ pub const Options = struct {
     /// or a tool has finished saying happened, whatever becomes of the next
     /// one, so a run that dies keeps everything up to where it died.
     keep: ?Keeper = null,
+    /// Say on stderr what the run is doing: a line as a thought opens, and
+    /// one as each tool is called.
+    verbose: bool = false,
 };
 
 /// Somewhere a run is kept, a piece at a time.
@@ -135,6 +138,7 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
     // Records normally get a blank line, so writing one has to know what came
     // before it. Some records belong together and are shown touching.
     var shown: Shown = .{};
+    var status: Status = .{ .err = if (opts.verbose) ctx.err else null };
     if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);
     // The rendered spelling is only ever written for a terminal, and a
     // terminal is the only reader that can watch a reply arrive.
@@ -143,92 +147,120 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
     // A call and its answer are two records, so a ledger can arrive between
     // them. What it already asked for and never got is owed before anything
     // new is said, and nothing already answered is run a second time.
-    for (try ledger.outstanding(arena, records.items)) |asked| {
-        for (try answer(ctx, scratch, shields, offered, .{
-            .id = ledger.callId(asked.value),
-            .name = ledger.callName(asked.value),
-            .arguments = try toolbox.parseArgs(arena, .md, asked.content orelse ""),
-        })) |record| {
-            try show(arena, out, mode, &shown, record);
-            try records.append(arena, record);
-            try turn.append(arena, record);
-        }
-        try out.flush();
-        try progress.keep(arena, turn.items);
-    }
-
-    // No cap. A model that keeps calling tools is doing what it was given
-    // tools for, and where to stop is the trust model's business — `ask`
-    // already gates every call for anyone who wants that.
-    while (true) {
-        var reply: LiveReply = .{
-            .arena = arena,
-            .io = io,
-            .dirs = dirs,
-            .snips = if (opts.keep) |k| k.home else null,
-            .said = .{ .arena = arena },
-            .out = out,
-            .mode = mode,
-            .live = live,
-            .shown = &shown,
-        };
-        const request = try wire.encode(arena, records.items, .{
-            .model = def.model,
-            .params = def.params,
-            .tools = offered,
-            // A hint rather than a contract: a provider that cannot stream
-            // answers whole, and the parser reads either.
-            .stream = true,
-        });
-        const answered = try provider.run(
-            arena,
-            io,
-            argv,
-            environ,
-            request,
-            wire,
-            reply.sink(),
-            ctx.err,
-        );
-        try reply.finish();
-        try out.flush();
-
-        // A 📲 is appended below instead: a call and the answer to it belong
-        // together, and the loop that runs the tool is what knows where that
-        // is.
-        try records.appendSlice(arena, reply.said.records.items);
-        try turn.appendSlice(arena, reply.kept.items);
-        try progress.keep(arena, turn.items);
-        if (answered.calls.len == 0) break;
-        const calls = answered.calls;
-
-        for (calls) |c| {
-            const asked: doc.Record = .{
-                .sigil = .call,
-                .value = try std.fmt.allocPrint(arena, "{s},{s}", .{ c.name, c.id }),
-                // Kept in the spelling every file is written in; the reader
-                // is handed whichever one they are being written.
-                .content = try toolbox.renderArgs(arena, .md, c.arguments),
+    //
+    // A call that asked the person something is one of them: it said nothing
+    // but its question, so it is run again with whatever they answered.
+    talking: {
+        const owed = try ledger.outstanding(arena, records.items);
+        for (owed, 0..) |asked, n| {
+            const c: codec.Call = .{
+                .id = ledger.callId(asked.value),
+                .name = ledger.callName(asked.value),
+                .arguments = try toolbox.parseArgs(arena, .md, asked.content orelse ""),
             };
-            // Show the call before running it: on a terminal that is the only
-            // sign anything is happening while a tool takes its time.
-            try show(arena, out, mode, &shown, asked);
-            try out.flush();
-            try records.append(arena, asked);
-            try turn.append(arena, asked);
-
-            // The answer comes from the tool, not the model, and was already
-            // checked against what a tool may say.
-            for (try answer(ctx, scratch, shields, offered, c)) |record| {
+            const said = try ledger.exclamations(arena, records.items, c.id);
+            try status.call(arena, c);
+            var how: Went = .settled;
+            for (try answer(ctx, scratch, shields, offered, c, said, &how)) |record| {
                 try show(arena, out, mode, &shown, record);
                 try records.append(arena, record);
                 try turn.append(arena, record);
             }
+            // The person said no. Calls made together lean on each other, so
+            // none of the rest is run: each is closed saying why, and it is
+            // the person rather than the model who is waited on next.
+            if (how == .refused) for (owed[n + 1 ..]) |later| {
+                const closed = (try failure(arena, ledger.callId(later.value), "{s}", .{dropped}))[0];
+                try show(arena, out, mode, &shown, closed);
+                try records.append(arena, closed);
+                try turn.append(arena, closed);
+            };
             try out.flush();
-            // A call is kept with its answer and never ahead of it: a 📲
-            // with nothing under it is owed, and one kept before its tool had
-            // finished would be run a second time by whoever picked it up.
             try progress.keep(arena, turn.items);
+            if (how != .settled) break :talking;
+        }
+
+        // No cap. A model that keeps calling tools is doing what it was given
+        // tools for, and where to stop is the trust model's business — `ask`
+        // already gates every call for anyone who wants that.
+        while (true) {
+            var reply: LiveReply = .{
+                .arena = arena,
+                .io = io,
+                .dirs = dirs,
+                .snips = if (opts.keep) |k| k.home else null,
+                .said = .{ .arena = arena },
+                .out = out,
+                .mode = mode,
+                .live = live,
+                .shown = &shown,
+                .status = &status,
+            };
+            const request = try wire.encode(arena, records.items, .{
+                .model = def.model,
+                .params = def.params,
+                .tools = offered,
+                // A hint rather than a contract: a provider that cannot stream
+                // answers whole, and the parser reads either.
+                .stream = true,
+            });
+            const answered = try provider.run(
+                arena,
+                io,
+                argv,
+                environ,
+                request,
+                wire,
+                reply.sink(),
+                ctx.err,
+            );
+            try reply.finish();
+            try out.flush();
+
+            // A 📲 is appended below instead: a call and the answer to it belong
+            // together, and the loop that runs the tool is what knows where that
+            // is.
+            try records.appendSlice(arena, reply.said.records.items);
+            try turn.appendSlice(arena, reply.kept.items);
+            try progress.keep(arena, turn.items);
+            if (answered.calls.len == 0) break;
+            const calls = answered.calls;
+
+            for (calls, 0..) |c, n| {
+                const asked = try called(arena, c);
+                // Show the call before running it: on a terminal that is the only
+                // sign anything is happening while a tool takes its time.
+                try show(arena, out, mode, &shown, asked);
+                try out.flush();
+                try status.call(arena, c);
+                try records.append(arena, asked);
+                try turn.append(arena, asked);
+
+                // The answer comes from the tool, not the model, and was already
+                // checked against what a tool may say.
+                var how: Went = .settled;
+                const answers = try answer(ctx, scratch, shields, offered, c, &.{}, &how);
+                // A question stops the run, so the calls behind it are written
+                // down first. They are owed, and whoever picks this up with the
+                // person's answer runs them once the one that asked is through.
+                if (how == .asked) for (calls[n + 1 ..]) |later| {
+                    const waits = try called(arena, later);
+                    try show(arena, out, mode, &shown, waits);
+                    try records.append(arena, waits);
+                    try turn.append(arena, waits);
+                };
+                for (answers) |record| {
+                    try show(arena, out, mode, &shown, record);
+                    try records.append(arena, record);
+                    try turn.append(arena, record);
+                }
+                try out.flush();
+                // A call is kept with its answer and never ahead of it: a 📲
+                // with nothing under it is owed, and one kept before its tool had
+                // finished would be run a second time by whoever picked it up.
+                try progress.keep(arena, turn.items);
+                if (how == .asked) break :talking;
+            }
         }
     }
 
@@ -238,6 +270,64 @@ pub fn run(ctx: Ctx, opts: Options) ![]const doc.Record {
     try whole.appendSlice(arena, settled);
     try whole.appendSlice(arena, turn.items);
     return whole.items;
+}
+
+/// The 📲 a call is written down as.
+fn called(arena: Allocator, c: codec.Call) !doc.Record {
+    return .{
+        .sigil = .call,
+        .value = try std.fmt.allocPrint(arena, "{s},{s}", .{ c.name, c.id }),
+        // Kept in the spelling every file is written in; the reader is handed
+        // whichever one they are being written.
+        .content = try toolbox.renderArgs(arena, .md, c.arguments),
+    };
+}
+
+/// What a call is closed with when one made alongside it was refused.
+const dropped = "Not run: the person refused another call made alongside this one.";
+
+/// How a call went, for whoever decides what happens next.
+const Went = enum {
+    /// It answered, well or badly, and the model is told.
+    settled,
+    /// It asked the person something, and the run stops on the question.
+    asked,
+    /// It had asked, was answered, and gave up the same way without asking
+    /// again. The person is who it is waiting on, not the model.
+    refused,
+};
+
+/// Lay out what the person answered where a call can read it, and say where.
+///
+/// Made from the ledger each time and removed once the call is over, so the
+/// ledger is the only place an answer lives. The tool's own are at the top,
+/// and a shield's are in a folder of its name, each counted from one — so
+/// everything a call stands inside is handed the same place and finds only
+/// what was said to it.
+fn params(arena: Allocator, io: std.Io, dir: []const u8, said: []const ledger.Answer) !void {
+    try std.Io.Dir.cwd().createDirPath(io, dir);
+    for (said, 0..) |s, at| {
+        if (!asks(s.who)) continue;
+        var n: usize = 1;
+        for (said[0..at]) |earlier| {
+            if (std.mem.eql(u8, earlier.who, s.who)) n += 1;
+        }
+        const own = if (std.mem.eql(u8, s.who, api.asks_tool)) dir else try std.fs.path.join(arena, &.{ dir, s.who });
+        try std.Io.Dir.cwd().createDirPath(io, own);
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = try std.fmt.allocPrint(arena, "{s}/{s}{d}", .{ own, api.exclamation, n }),
+            .data = s.text,
+        });
+    }
+}
+
+/// Whether a name is one a question can come from: the tool, or a shield
+/// under a name that is safe to be a folder's.
+fn asks(who: []const u8) bool {
+    if (std.mem.eql(u8, who, api.asks_tool)) return true;
+    if (!std.mem.startsWith(u8, who, api.asks_shield) or who.len == api.asks_shield.len) return false;
+    for (who) |c| if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_') return false;
+    return true;
 }
 
 fn mergeEnv(arena: Allocator, vars: *std.ArrayList(api.EnvVar)) !void {
@@ -271,6 +361,9 @@ fn answer(
     shields: shield.Set,
     tools: []const toolbox.Tool,
     c: codec.Call,
+    /// What the person has answered this call's questions with so far.
+    said: []const ledger.Answer,
+    how: *Went,
 ) ![]const doc.Record {
     const arena = ctx.arena;
     const io = ctx.io;
@@ -339,6 +432,22 @@ fn answer(
     try env.appendSlice(arena, try toolbox.callEnv(arena, args, c.arguments, c.id));
     try mergeEnv(arena, &env);
 
+    // Inside the tool's scratch, so whatever can read that can read this, and
+    // named for the call, so two at once are handed their own.
+    const handed = try std.fs.path.join(arena, &.{
+        if (scratch.len > 0) scratch else ctx.env.get("TMPDIR") orelse "/tmp",
+        api.params_dir,
+        try filename(arena, c.id),
+    });
+    params(arena, io, handed, said) catch |e|
+        return failure(arena, c.id, "{s}", .{@errorName(e)});
+    defer {
+        std.Io.Dir.cwd().deleteTree(io, handed) catch {};
+        // And the folder they all go in, once nothing else is using it.
+        std.Io.Dir.cwd().deleteDir(io, std.fs.path.dirname(handed).?) catch {};
+    }
+    try env.append(arena, .{ .key = api.params_var, .value = handed });
+
     var captured: std.Io.Writer.Allocating = .init(arena);
     var err_sink: std.Io.Writer.Allocating = .init(arena);
     var tty_storage: api.TtyFiles = undefined;
@@ -362,11 +471,34 @@ fn answer(
     }, wrapped, .document) catch |e|
         return failure(arena, c.id, "{s}", .{@errorName(e)});
 
+    // A question, which is the whole of what the tool said. The call stays
+    // unanswered: it is run again once the person has said something.
+    const complaint = std.mem.trim(u8, err_sink.written(), " \t\r\n");
+    if (status == api.ask_exit and captured.written().len == 0 and
+        std.mem.startsWith(u8, complaint, api.ask_lead))
+    asked: {
+        // Who is asking comes first, so the answer is laid out for them.
+        const after = complaint[api.ask_lead.len..];
+        const end = std.mem.indexOfScalar(u8, after, ':') orelse break :asked;
+        if (!asks(after[0..end])) break :asked;
+        how.* = .asked;
+        const one = try arena.alloc(doc.Record, 1);
+        one[0] = .{
+            .sigil = .question,
+            .value = try std.fmt.allocPrint(arena, "{s},{s}", .{ after[0..end], c.id }),
+            .content = std.mem.trim(u8, after[end + 1 ..], " \t\r\n"),
+        };
+        return one;
+    }
+    if (status == api.ask_exit and said.len > 0) how.* = .refused;
+
     var diag: doc.Diagnostic = .{};
     const records = doc.parse(arena, captured.written(), &diag) catch
         return failure(arena, c.id, "the tool did not answer in m8", .{});
     if (records.len == 0) return if (status == 0)
         failure(arena, c.id, "the tool wrote nothing", .{})
+    else if (complaint.len > 0)
+        failure(arena, c.id, "Failed with exit code {d}: {s}", .{ status, complaint })
     else
         failure(arena, c.id, "the tool exited without an m8 failure", .{});
     if (!hasVerdict(records, c.id))
@@ -453,6 +585,12 @@ fn once(
     );
 }
 
+/// A call's id as one path component. A provider chooses the id, and nothing
+/// says it chose one a directory can be called.
+fn filename(arena: Allocator, id: []const u8) ![]const u8 {
+    return api.component(arena, if (id.len > 0) id else "call");
+}
+
 /// The one record that says a call could not be run. A slice, because that is
 /// what answering a call is now, and one that never got as far as the tool has
 /// nothing to put above it.
@@ -510,6 +648,101 @@ fn show(
     try doc.write(out, mode, try ledger.rendered(arena, mode, r));
 }
 
+/// What a run says it is doing, for whoever is watching it work rather than
+/// reading what it says: one line on stderr as a thought opens, and one as a
+/// tool is called. Each stays the last thing said until the next.
+///
+/// A thought is its opening and no more, said once: when a line's worth of
+/// it has arrived, or when it ends short of that. So nothing of a thought is
+/// kept past what fits on a line.
+const Status = struct {
+    err: ?*std.Io.Writer = null,
+    line: [max]u8 = undefined,
+    len: usize = 0,
+    /// A thought is arriving and its line has room left.
+    open: bool = false,
+
+    const max = 120;
+
+    fn thinking(self: *Status, yes: bool, value: []const u8) void {
+        self.len = 0;
+        self.open = yes and self.err != null;
+        if (self.open) self.add(value);
+        if (self.open) self.add(" ");
+    }
+
+    fn thought(self: *Status, bytes: []const u8) !void {
+        if (!self.open) return;
+        self.add(bytes);
+        // Full, so it is said now and cut, with the rest still to come.
+        if (!self.open) try self.say("\u{1F4AD} ", true);
+    }
+
+    /// The thought is over. One that never filled the line is said whole.
+    fn thoughtOver(self: *Status) !void {
+        if (!self.open) return;
+        self.open = false;
+        if (std.mem.trim(u8, self.line[0..self.len], " ").len > 0) try self.say("\u{1F4AD} ", false);
+    }
+
+    /// Text as one line: whatever space it has is one space, and none leads.
+    fn add(self: *Status, bytes: []const u8) void {
+        for (bytes) |b| {
+            const space = b == ' ' or b == '\n' or b == '\r' or b == '\t';
+            if (space and (self.len == 0 or self.line[self.len - 1] == ' ')) continue;
+            if (self.len == max) {
+                self.open = false;
+                return;
+            }
+            self.line[self.len] = if (space) ' ' else b;
+            self.len += 1;
+        }
+    }
+
+    fn call(self: *Status, arena: Allocator, c: codec.Call) !void {
+        if (self.err == null) return;
+        self.open = false;
+        var w: std.Io.Writer = .fixed(&self.line);
+        // Past the end of the line is cut, which a full writer says by failing.
+        const cut = if (named(arena, &w, c)) false else |_| true;
+        self.len = w.end;
+        try self.say("\u{1F4F2}", cut);
+    }
+
+    /// `edit(path=a.md,old=…`: the name, and each argument as it was given.
+    fn named(arena: Allocator, w: *std.Io.Writer, c: codec.Call) !void {
+        try w.print("{s}(", .{c.name});
+        const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, c.arguments, .{}) catch null;
+        if (parsed != null and parsed.? == .object) {
+            var it = parsed.?.object.iterator();
+            var first = true;
+            while (it.next()) |e| {
+                if (!first) try w.writeByte(',');
+                first = false;
+                try w.print("{s}=", .{e.key_ptr.*});
+                switch (e.value_ptr.*) {
+                    .string => |s| for (s) |b| try w.writeByte(if (b == '\n' or b == '\r' or b == '\t') ' ' else b),
+                    else => |v| try std.json.Stringify.value(v, .{}, w),
+                }
+            }
+        } else try w.writeAll(c.arguments);
+        try w.writeByte(')');
+    }
+
+    fn say(self: *Status, lead: []const u8, cut: bool) !void {
+        const err = self.err orelse return;
+        // A character that has only half arrived is not said yet.
+        var end = self.len;
+        while (end > 0 and self.line[end - 1] & 0xc0 == 0x80) end -= 1;
+        if (end > 0 and self.line[end - 1] >= 0xc0) {
+            const want = std.unicode.utf8ByteSequenceLength(self.line[end - 1]) catch 1;
+            end = if (end - 1 + want <= self.len) end - 1 + want else end - 1;
+        } else end = self.len;
+        try err.print("{s}{s}{s}\n", .{ lead, std.mem.trimEnd(u8, self.line[0..end], " "), if (cut) "\u{2026}" else "" });
+        try err.flush();
+    }
+};
+
 /// Bridges the provider's byte stream into the document, flushing each
 /// fragment so the text appears as it is generated rather than at the end.
 const LiveReply = struct {
@@ -522,6 +755,7 @@ const LiveReply = struct {
     mode: doc.Mode,
     live: bool,
     shown: *Shown,
+    status: *Status,
     /// Opened on the first byte. A model that only calls a tool says nothing,
     /// and an empty 🤖 above the call would be a record of nothing.
     body: ?doc.ContentWriter = null,
@@ -550,6 +784,9 @@ const LiveReply = struct {
         if (!policy.fromModel(s)) return error.ModelSaidTooMuch;
         self.pending = s;
         self.said.open(s, value);
+        // A thought kept aside follows the summary of it, and would take the
+        // summary's place: the line is for the one a person would read.
+        self.status.thinking(s == .thought and !std.mem.eql(u8, value, session.snip), value);
     }
 
     fn snipped(self: *const LiveReply) bool {
@@ -562,6 +799,7 @@ const LiveReply = struct {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
         if (bytes.len == 0) return;
         try self.said.write(bytes);
+        try self.status.thought(bytes);
         // Kept aside is kept out of sight: bound for its snip when the run is
         // kept, and otherwise hidden from a terminal alone.
         if (self.snipped() and (self.snips != null or self.mode == .m8)) return;
@@ -581,6 +819,7 @@ const LiveReply = struct {
 
     fn closeFn(ctx: *anyopaque) anyerror!void {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
+        try self.status.thoughtOver();
         if (try self.said.close()) |r| {
             const k: doc.Record = if (self.snips != null and session.isSnip(r)) .{
                 .sigil = .agent,
@@ -684,6 +923,7 @@ test "live reply separates changes of sigil" {
 
     var out: std.Io.Writer.Allocating = .init(arena);
     var shown: Shown = .{};
+    var status: Status = .{};
     var reply: LiveReply = .{
         .arena = arena,
         .io = undefined,
@@ -692,6 +932,7 @@ test "live reply separates changes of sigil" {
         .mode = .md,
         .live = false,
         .shown = &shown,
+        .status = &status,
     };
     const sink = reply.sink();
 
@@ -707,6 +948,66 @@ test "live reply separates changes of sigil" {
             "#### :thought_balloon:\n> three\n",
         out.written(),
     );
+}
+
+test "a run says what it is doing, a line at a time" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var err: std.Io.Writer.Allocating = .init(arena);
+    var shown: Shown = .{};
+    var status: Status = .{ .err = &err.writer };
+    var reply: LiveReply = .{
+        .arena = arena,
+        .io = undefined,
+        .said = .{ .arena = arena },
+        .out = &out.writer,
+        .mode = .md,
+        .live = false,
+        .shown = &shown,
+        .status = &status,
+    };
+    const sink = reply.sink();
+
+    // A short thought is said once it is over, on one line.
+    try sink.begin(.thought, "");
+    try sink.text("\n  Looking at\nthe caf\xc3");
+    try std.testing.expectEqualStrings("", err.written());
+    try sink.text("\xa9 menu");
+    try sink.end();
+    try std.testing.expectEqualStrings("\u{1F4AD} Looking at the caf\u{e9} menu\n", err.written());
+
+    // A long one is said as soon as the line is full, cut, and left alone.
+    err.clearRetainingCapacity();
+    try sink.begin(.thought, "plan");
+    try sink.text("x" ** 200);
+    const full = "\u{1F4AD} plan " ++ "x" ** (Status.max - 5) ++ "\u{2026}\n";
+    try std.testing.expectEqualStrings(full, err.written());
+    try sink.text("more");
+    try sink.end();
+    try std.testing.expectEqualStrings(full, err.written());
+
+    // What is kept aside and what is answered are not what it is doing.
+    err.clearRetainingCapacity();
+    try sink.record(.thought, session.snip, "the whole of it");
+    try sink.record(.bot, "", "answer");
+    try std.testing.expectEqualStrings("", err.written());
+
+    // A call is its name and what it was given, cut where the line ends.
+    try status.call(arena, .{ .id = "c1", .name = "edit", .arguments = "{\"path\":\"a.md\",\"n\":2,\"old\":\"one\\ntwo\"}" });
+    try std.testing.expectEqualStrings("\u{1F4F2}edit(path=a.md,n=2,old=one two)\n", err.written());
+    err.clearRetainingCapacity();
+    try status.call(arena, .{ .id = "c2", .name = "write", .arguments = "{\"text\":\"" ++ "y" ** 300 ++ "\"}" });
+    try std.testing.expectEqualStrings("\u{1F4F2}write(text=" ++ "y" ** (Status.max - 11) ++ "\u{2026}\n", err.written());
+
+    // Unasked, it says nothing.
+    var quiet: Status = .{};
+    try quiet.call(arena, .{ .id = "c3", .name = "edit", .arguments = "{}" });
+    quiet.thinking(true, "");
+    try quiet.thought("hm");
+    try quiet.thoughtOver();
 }
 
 test "a call runs into its answer" {
@@ -735,4 +1036,43 @@ test "a call runs into its answer" {
             "#### :robot:\n> done\n",
         out.written(),
     );
+}
+
+test "what the person answered is laid out for a call, and for what it stands inside" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const dir = "/private/tmp/m8-converse-params";
+    std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    try params(arena, io, dir, &.{
+        .{ .who = "shield-ask-1", .text = "yes" },
+        .{ .who = "tool", .text = "John" },
+        .{ .who = "tool", .text = "Leeds" },
+        // Nobody a question can come from, so nowhere to put it.
+        .{ .who = "shield-../up", .text = "no" },
+        .{ .who = "", .text = "no" },
+    });
+    const read = struct {
+        fn f(al: Allocator, i: std.Io, comptime path: []const u8) ![]const u8 {
+            return std.Io.Dir.cwd().readFileAlloc(i, dir ++ path, al, .limited(64));
+        }
+    }.f;
+    // Each is counted from one, whoever else was answered in between.
+    try std.testing.expectEqualStrings("yes", try read(arena, io, "/shield-ask-1/exclamation-1"));
+    try std.testing.expectEqualStrings("John", try read(arena, io, "/exclamation-1"));
+    try std.testing.expectEqualStrings("Leeds", try read(arena, io, "/exclamation-2"));
+    try std.testing.expectError(error.FileNotFound, read(arena, io, "/exclamation-3"));
+    try std.testing.expectError(error.FileNotFound, read(arena, io, "/shield-ask-1/exclamation-2"));
+    try std.testing.expect(!asks("shield-"));
+    try std.testing.expect(!asks("ask-1"));
+
+    // An id is the provider's, and is made safe to be a folder's name.
+    try std.testing.expectEqualStrings("a_b-c__", try filename(arena, "a/b-c.."));
+    try std.testing.expectEqualStrings("call", try filename(arena, ""));
 }
