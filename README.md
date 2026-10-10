@@ -652,6 +652,9 @@ line rather than beside it.
   * CMD has to work a line at a time on a pipe, and say so as
     it goes. Python needs `-i` for the first and `-u` for the
     second; its `>>>` is on stderr, so it is the status line.
+  * `-t` is `-c` with a NUL byte ending each message rather
+    than a new line, for a CMD that takes messages of more
+    than one line.
 * CMD has no terminal.
   * It runs in a session of its own, so `/dev/tty` is not
     there to open and riff keeps the one it has.

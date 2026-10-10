@@ -33,7 +33,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 riff — talk to a command from an editor pinned under its output
         \\
-        \\  m8 riff [-c] [-s N] CMD [ARGS]
+        \\  m8 riff [-c] [-t] [-s N] CMD [ARGS]
         \\
         \\Each message sent starts CMD, hands it the message on stdin, and lets
         \\its stdout scroll past as ordinary terminal scrollback. The last line
@@ -52,6 +52,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\its stdin. CMD has to work a line at a time on a pipe:
         \\
         \\  m8 riff -c python3 -i -u -q
+        \\
+        \\`-t` is `-c` with every message ended by a NUL byte rather than a
+        \\new line, for a CMD that takes messages of more than one line.
         \\
         \\`-s N` is N status lines, the last N that CMD wrote to stderr:
         \\
@@ -94,13 +97,19 @@ fn run(ctx: Ctx) !u8 {
         return std.process.replace(ctx.io, .{ .argv = argv });
     }
     // `-c` is continuous: one run of the command, sent every message.
+    // `-t` is that with a NUL ending each message, which a new line inside
+    // one cannot be taken for.
     // `-s N` is how many status lines there are.
     var continuous = false;
+    var end: u8 = '\n';
     var bars: usize = 1;
     var cmd = ctx.args;
     while (cmd.len > 0) : (cmd = cmd[1..]) {
         if (std.mem.eql(u8, cmd[0], "-c")) {
             continuous = true;
+        } else if (std.mem.eql(u8, cmd[0], "-t")) {
+            continuous = true;
+            end = 0;
         } else if (std.mem.startsWith(u8, cmd[0], "-s")) {
             // The number is the next word, or the rest of this one.
             const n = if (cmd[0].len > 2) cmd[0][2..] else if (cmd.len > 1) cmd[1] else "";
@@ -126,6 +135,7 @@ fn run(ctx: Ctx) !u8 {
         .out = ctx.out,
         .cmd = cmd,
         .continuous = continuous,
+        .end = end,
         .s = bars,
     };
 
@@ -186,6 +196,8 @@ const Riff = struct {
     /// A run is kept and sent each message, where otherwise each message is
     /// a run of its own.
     continuous: bool = false,
+    /// What ends a message handed to a continuous run.
+    end: u8 = '\n',
     top: usize = 0,
     rows: std.ArrayList(usize) = .empty,
     /// What each live row was last drawn as, so one that has not changed is
@@ -383,14 +395,14 @@ const Riff = struct {
     }
 
     /// Write the command a message. One run a message has then been told
-    /// everything; a continuous one is told a line and left listening.
+    /// everything; a continuous one is told a message and left listening.
     fn hand(r: *Riff, message: []const u8) void {
         const in = if (r.child) |*c| &c.stdin else return;
         const to = in.* orelse return;
         var buf: [4096]u8 = undefined;
         var w = to.writerStreaming(r.ctx.io, &buf);
         w.interface.writeAll(message) catch {};
-        if (r.continuous) w.interface.writeByte('\n') catch {};
+        if (r.continuous) w.interface.writeByte(r.end) catch {};
         w.interface.flush() catch {};
         if (!r.continuous) r.hang();
     }
