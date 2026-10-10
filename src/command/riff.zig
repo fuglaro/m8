@@ -155,7 +155,7 @@ fn run(ctx: Ctx) !u8 {
 /// is the command's, and `working` is a finished line so that whatever it
 /// says first takes its place. The rest are riff's alone: it has been told to
 /// stop, or it is the person's turn and this is the key that does something.
-const working = "Working...\n";
+const working = "Dispatched...\n";
 const stopping = "Stopping...";
 const waiting_empty = "Waiting (ctrl-c to cancel / ctrl-d to exit)...";
 const waiting_written = "Waiting (ctrl-d to dispatch)...";
@@ -1040,7 +1040,7 @@ test "the status line is the last line said, cut to fit" {
     // riff has the bottom line, what the command said last is one up.
     try testing.expectEqualStrings(waiting_empty, r.above(0));
     try testing.expectEqualStrings("thinking", r.above(1));
-    try testing.expectEqualStrings("Working...", r.above(2));
+    try testing.expectEqualStrings("Dispatched...", r.above(2));
     try testing.expectEqualStrings("three", r.above(3));
     try testing.expectEqualStrings("two", r.above(4));
     try testing.expectEqualStrings("", r.above(most_bars + 2));
