@@ -1720,11 +1720,18 @@ down where it applies, so what a run may not do is a
 fact about the agent rather than about how it was
 invoked.
 
-### What m8 ships
+### A shields file
 
-`core/shields.md` is an ordinary m8 document, read from
-your own config or from the copy m8 carries. What
-`jail` means is a composition you can read:
+m8 defines no shield. A name means what an agent, or
+something it includes, says it means.
+
+* `@/shields.md` is an ordinary agent holding definitions
+  and activating none of them.
+* An agent that wants them includes it with `🧠shields`.
+* A name nothing defines is refused, so a tool under one
+  does not run.
+
+What `jail` means there is a composition you can read:
 
 ```m8
 ▐ 🛡️sandbox
@@ -1822,6 +1829,8 @@ One that cannot widen, whatever it includes or is asked
 to do:
 
 ```m8
+▐ 🧠shields
+
 ▐ 🛡️jail
 
 ▐ 🧠team/helpers
@@ -1880,8 +1889,9 @@ config, and neither can become the other.
   override from your own config.
 * Read a config directory before working in it. It
   arrives with a `git clone` like anything else, and it
-  defines what runs — though never what running is
-  allowed to reach, which is `core/`, and yours alone.
+  defines what runs and what a level such as `jail`
+  composes — though never what an atom removes, which is
+  `core/`, and yours alone.
 
 ## Configs
 

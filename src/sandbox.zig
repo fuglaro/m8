@@ -35,9 +35,8 @@ pub const Restriction = struct {
 
 /// Every restriction `m8 shield secure` knows, in the order help lists them.
 ///
-/// Atoms only. `sandbox` and `jail` used to be here too, carrying their own
-/// tags so that resolving stayed one pass — they are compositions in
-/// `core/shields.md` now, which is a place you can read them.
+/// Atoms only. A level such as `sandbox` or `jail` is a composition an agent
+/// writes or includes, which is a place it can be read.
 ///
 /// `kernel` says the profile enforces it, so every descendant of the process
 /// inherits it. `contain-env` is the one m8 applies itself, when it builds the
@@ -414,8 +413,8 @@ test "a restriction leaves ordinary work alone" {
 }
 
 test "the table is atoms, so a level is a composition and not an entry" {
-    // What `jail` means is in core/shields.md, where it can be read and taken
-    // apart. Naming it here would be the same fact in two places.
+    // What `jail` means is whatever an agent's shields say, where it can be
+    // read and taken apart. Naming it here would be the same fact in two places.
     for ([_][]const u8{ "jail", "sandbox", "deny", "ask", "freeze-toolbox", "agent-check=x" }) |n|
         try testing.expect(find(n) == null);
     for ([_][]const u8{ "private", "airgap", "contain-env" }) |n|

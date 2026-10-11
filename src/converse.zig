@@ -122,14 +122,13 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     const offered = try agent.offer(arena, def);
 
     // Shields come from the ledger alone, and stack rather than replace: a
-    // second one can only tighten. What m8 ships with is underneath, so `jail`
-    // means something before any agent is read, and an agent stands on it
-    // rather than beside it.
-    const shields = try (shield.Set{
+    // second one can only tighten. m8 defines none, so a name means whatever
+    // the agent or something it includes says it does.
+    const shields: shield.Set = .{
         .defs = def.shields,
         .runners = def.runners,
         .active = def.active,
-    }).over(arena, try shield.core(arena, ctx.io, ctx.env));
+    };
 
     // Lineage names what it continues, never a pointer to it: pointers move.
     const settled = try session.settleAll(arena, io, dirs, given);

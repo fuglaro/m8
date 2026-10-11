@@ -1,18 +1,54 @@
-#### :runner:bash
-> `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
+#### :shield:deny
+> `false`
 
-#### :runner:bash raw
-> `bash` `-e` `-c` `{{CODE}}` `bash`
+#### :shield:ask
+> `m8` `shield` `ask` `{{SHIELD}}` `--`
 
-#### :toolbox:example
-> > A fenced tool uses the framing runner and answers in m8.
-> ```bash
-> printf 'hello from a tool\n'
-> ```
+#### :shield:secure
+> `bash` `-e` `-c` `exec {{M8}} shield secure "${__secures__}" -- "$@"` `bash`
 
-#### :shield:example
-> ```bash raw
-> exec "$@"
-> ```
+#### :shield:check
+> `bash` `-e` `-c` `exec {{M8}} shield check "${__checks__}" -- "$@"` `bash`
 
-#### :toolbox:example
+#### :shield:contain-reads
+> :shield:secure secures contain-reads
+
+#### :shield:private
+> :shield:secure secures private
+
+#### :shield:contain-writes
+> :shield:secure secures contain-writes
+
+#### :shield:no-writes
+> :shield:secure secures no-writes
+
+#### :shield:airgap
+> :shield:secure secures airgap
+
+#### :shield:no-loop
+> :shield:secure secures no-loop
+
+#### :shield:no-edit-git
+> :shield:secure secures no-edit-git
+
+#### :shield:no-edit-m8-st8
+> :shield:secure secures no-edit-m8-st8
+
+#### :shield:contain-env
+> :shield:secure secures contain-env
+
+#### :shield:freeze-toolbox
+> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} exclude --sigil toolbox --sigil brain --sigil books`
+
+#### :shield:sandbox
+> :shield:freeze-toolbox
+> :shield:private
+> :shield:contain-writes
+> :shield:no-loop
+> :shield:no-edit-git
+> :shield:no-edit-m8-st8
+> :shield:contain-env
+
+#### :shield:jail
+> :shield:sandbox
+> :shield:airgap

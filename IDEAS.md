@@ -4,10 +4,15 @@
 
 * Cody needs to be able to have sub-agents so it isn't a token burner.
 * m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
+* Shields:
+  * cody got shields straight inside no ref inclusion - should have to be explicit.
+  * do agents under tools not need to write to state? no-edit-m8-st8? allow for subagent call which has it's own tools but not other tools?
+    separate areas?
 
 * Review everything again on the mission statement in the README.md.
 
 ## Framework
+
 
 * Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
 * Cache breakpoint managment:
@@ -15,6 +20,8 @@
   * Options on model def? or provider directive sigils? Or just do in providers?
 * System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger).
 * Token amounts as ignored metadata lines?
+
+
   * Do they belong in history at all?
 
 
@@ -24,6 +31,7 @@
   * How would it apply without? 🧰 rendered from a server, per the README?
   * Generic MCP wrapper launcher/runner tool (one for local one for remote).
   * Test with Blender. Test with web service.
+  * See MCP_RESEARCH.md
 
 ## Commands and UX
 
@@ -40,16 +48,16 @@
 ### MAYBE: Attachments
 
 * Why maybe - a new sigil against a closed set; could a reference do it?
-
-* Images and other binaries.
-* Sent by reference.
-* Needs a sigil or reference form.
-* Must respect the sandbox.
-* Media workflows -> gen image -> see image -> show image (colored ascii rendering).
-  Maybe with a text-image format we find/make??? Custom markdown? ```palettemap...
-  Leveraging unicode colors as a LUT??? Needs to be reasonably
-  cross-common-font compatible so constraining to some common standardised ones
-  is crucial - if even possible. 2 char wide grid?
+* Media:
+  * Images and other binaries.
+  * Sent by reference.
+  * Needs a sigil or reference form.
+  * Must respect the sandbox.
+  * Media workflows -> gen image -> see image -> show image (colored ascii rendering).
+    Maybe with a text-image format we find/make??? Custom markdown? ```palettemap...
+    Leveraging unicode colors as a LUT??? Needs to be reasonably
+    cross-common-font compatible so constraining to some common standardised ones
+    is crucial - if even possible. 2 char wide grid?
 
 ### Tool loop de-opinion
 
@@ -65,10 +73,12 @@
 * riff needs the gap between steps.
  * a 🙋 slipped in before the next call runs
 
-### Hooks
+### Hooks and Orchistration
 
 * MAYBE: Hooks: Auto-action on response - if max_tokens on robot reply, auto compress/etc.
   - Wrapper command on responses? similar to shields?
+* Enough hooks to support a Herdr setup: https://github.com/herdrdev/herdr
+  * Env vars will do it.
 
 ### MAYBE: Codec-specific metadata sigil
 
@@ -115,6 +125,8 @@
 * A chat spawner usable as a tool.
 
 ### Principle
+
+
 
 * Keep arguments simple; complexity lives in the mob definition.
 * Anything a mob can say is not also sayable in arguments.

@@ -22,7 +22,6 @@ const Allocator = std.mem.Allocator;
 const api = @import("command/api.zig");
 const doc = @import("m8/doc.zig");
 const sigil = @import("m8/sigil.zig");
-const config = @import("config.zig");
 const markdown = @import("m8/markdown.zig");
 const Mode = sigil.Mode;
 const argname = @import("command/argname.zig");
@@ -104,35 +103,7 @@ pub const Set = struct {
     defs: []const Definition = &.{},
     runners: []const Runner = &.{},
     active: []const Activation = &.{},
-
-    /// One set standing on another. `under` comes first, so what it defines is
-    /// in hand before anything above it is read and what it turned on wraps
-    /// further out.
-    pub fn over(a: Set, arena: Allocator, under: Set) Allocator.Error!Set {
-        return .{
-            .defs = try std.mem.concat(arena, Definition, &.{ under.defs, a.defs }),
-            .runners = try std.mem.concat(arena, Runner, &.{ under.runners, a.runners }),
-            .active = try std.mem.concat(arena, Activation, &.{ under.active, a.active }),
-        };
-    }
 };
-
-/// The shields m8 ships with, or whichever `core/shields.md` overrides them.
-///
-/// They are written in the language rather than built in, so what `jail` means
-/// is a composition anyone can read, override, or take apart — and the profile
-/// underneath keeps only the restrictions it cannot express as composition.
-pub const default = @embedFile("core/shields.md");
-
-pub fn core(
-    arena: Allocator,
-    io: std.Io,
-    env: *const std.process.Environ.Map,
-) !Set {
-    const src = (try config.core(arena, io, env, "shields.md")) orelse default;
-    var diag: doc.Diagnostic = .{};
-    return project(arena, .md, try doc.parse(arena, src, &diag));
-}
 
 /// The 🛡 and 🏃 in a document, in the order they were written.
 pub fn project(
@@ -351,8 +322,8 @@ fn append(
 ///
 /// A command opening with `m8` means the m8 that is running, not whichever one
 /// is on a PATH or none at all — the same rule a provider's command follows,
-/// and the reason the shields m8 ships with work on a machine where nothing
-/// has been installed. The tool's own command is read the same way as each
+/// and the reason a shield written as an m8 command works on a machine where
+/// nothing has been installed. The tool's own command is read the same way as each
 /// wrapper: its first word, and `{{M8}}` wherever it is written.
 pub fn wrap(
     arena: Allocator,
@@ -595,46 +566,6 @@ test "a wrapper opening with m8 reaches the m8 that is running" {
     // other.
     try testing.expectEqualStrings("/opt/m8/bin/m8", full[7]);
     try testing.expectEqualStrings("m8", full[9]);
-}
-
-test "the shields m8 ships with parse, and jail is the composition it claims" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-
-    var diag: doc.Diagnostic = .{};
-    const set = try project(arena, .md, try doc.parse(arena, default, &diag));
-
-    // Nothing is turned on by shipping it. A default that activated itself
-    // would be an opinion, and this file is meant to hold none.
-    try testing.expectEqual(@as(usize, 0), set.active.len);
-
-    const got = try resolve(arena, set.defs, &.{.{ .name = "jail" }});
-    var secures: []const u8 = "";
-    for (got.env) |v| if (std.mem.eql(u8, v.key, "__secures__")) {
-        secures = v.value;
-    };
-    for ([_][]const u8{
-        "private",     "contain-writes", "no-loop",
-        "no-edit-git", "no-edit-m8-st8", "contain-env",
-        "airgap",
-    }) |want| {
-        if (std.mem.indexOf(u8, secures, want) == null) {
-            std.debug.print("jail is missing '{s}' (got '{s}')\n", .{ want, secures });
-            return error.TestUnexpectedResult;
-        }
-    }
-
-    // Every restriction it names is one the profile has a line for, so a
-    // shipped level cannot ask for something `m8 shield secure` would refuse.
-    const sandbox = @import("sandbox.zig");
-    var it = std.mem.tokenizeAny(u8, secures, " ");
-    while (it.next()) |name| try testing.expect(sandbox.find(name) != null);
-
-    // And jail closes the definition channel, which sandbox composes: the
-    // pipe that takes definitions out, and the one `secure` every restriction
-    // is told to.
-    try testing.expectEqual(@as(usize, 2), got.wrappers.len);
 }
 
 test "a wrapper says where this m8 is, as its own word or inside one" {

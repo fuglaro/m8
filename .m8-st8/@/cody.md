@@ -7,6 +7,8 @@
 > `read` to read files with pagination (~100 lines),
 > and `edit` to edit scoped across read pages.
 
+#### :brain:shields
+
 #### :shield:freeze-toolbox
 #### :shield:no-edit-m8-st8
 #### :shield:no-edit-git
