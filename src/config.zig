@@ -3,15 +3,9 @@
 //! Config directories are searched nearest first: every `.m8-st8/` from the
 //! working directory upward, the way git finds `.git`, then the user's own.
 //!
-//! `core/` is the exception. It holds the files that decide what a restriction
-//! *means* — the sandbox profile and the environment allowlist — and a
-//! project directory arrives with `git clone`, so only the user's own config
-//! is consulted for it.
-//!
-//! A file is taken from the nearest directory that has one. `providers.json`
-//! lives in `core/` with the rest, because a provider is a command that runs
-//! on your machine and a project arrives with a `git clone`. Mobs travel with
-//! agents; providers are yours.
+//! `core/` is searched the same way. A file is taken from the nearest
+//! directory that has one, and `providers.json` is merged through all of them,
+//! so running m8 in a directory trusts the config found from it.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -41,8 +35,7 @@ pub fn discover(arena: Allocator, io: std.Io, env: *const std.process.Environ.Ma
 pub const dir_name = ".m8-st8";
 pub const user_dir_name = "m8-st8";
 
-/// The user's own config directory, if there is one. Separate from `discover`
-/// because `core/` is read only from here.
+/// The user's own config directory, if there is one.
 pub fn userDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const u8 {
     if (env.get("XDG_CONFIG_HOME")) |xdg| {
         return try std.fs.path.join(arena, &.{ xdg, user_dir_name });
@@ -52,39 +45,41 @@ pub fn userDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const 
     return null;
 }
 
-/// The user's `core/`, if there is one. Where a provider command written as
-/// a relative name is looked for.
-pub fn coreDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const u8 {
-    const base = (try userDir(arena, env)) orelse return null;
-    return try std.fs.path.join(arena, &.{ base, "core" });
+/// Every `core/` there could be, nearest first. Where a provider command
+/// written as a relative name is looked for.
+pub fn coreDirs(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const []const u8 {
+    const dirs = try discover(arena, io, env);
+    const out = try arena.alloc([]const u8, dirs.len);
+    for (dirs, out) |d, *o| o.* = try std.fs.path.join(arena, &.{ d, "core" });
+    return out;
 }
 
-/// Read a file from `core/` in the user's config directory. Null when there is
-/// none, which means the copy compiled into the binary is used instead.
+/// Every `core/` file of a name that is there to read, nearest first.
+pub fn coreFiles(
+    arena: Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+    name: []const u8,
+) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (try coreDirs(arena, io, env)) |dir| {
+        const path = try std.fs.path.join(arena, &.{ dir, name });
+        _ = std.Io.Dir.cwd().statFile(io, path, .{}) catch continue;
+        try out.append(arena, path);
+    }
+    return out.items;
+}
+
+/// Read the nearest `core/` file of a name. Null when there is none.
 pub fn core(
     arena: Allocator,
     io: std.Io,
     env: *const std.process.Environ.Map,
     name: []const u8,
 ) !?[]const u8 {
-    const base = (try userDir(arena, env)) orelse return null;
-    const path = try std.fs.path.join(arena, &.{ base, "core", name });
-    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file)) catch null;
-}
-
-/// Where a `core/` file is read from, when there is one to read. Null when
-/// nothing is there and the copy compiled in is what is used — which is what
-/// a help page says instead of naming a file that does not exist.
-pub fn coreFile(
-    arena: Allocator,
-    io: std.Io,
-    env: *const std.process.Environ.Map,
-    name: []const u8,
-) !?[]const u8 {
-    const base = (try coreDir(arena, env)) orelse return null;
-    const path = try std.fs.path.join(arena, &.{ base, name });
-    _ = std.Io.Dir.cwd().statFile(io, path, .{}) catch return null;
-    return path;
+    for (try coreFiles(arena, io, env, name)) |path|
+        return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file)) catch continue;
+    return null;
 }
 
 fn exists(io: std.Io, path: []const u8) bool {
@@ -195,25 +190,28 @@ pub fn read(arena: Allocator, io: std.Io, dirs: []const []const u8, rel: []const
     return null;
 }
 
-/// The providers, from `core/`.
+/// The providers, from every `core/providers.json`.
 ///
-/// A whole-file override like the other core files: yours replaces the
-/// built-in one rather than adding to it, so what runs is what you wrote and
-/// nothing you did not. The default is compiled in, which is what makes
-/// `toy` there before anything is configured.
+/// They compose through the stack: each file adds its entries, and the nearest
+/// entry of a name is the one that stands. m8 defines none.
 pub fn providers(
     arena: Allocator,
     io: std.Io,
     env: *const std.process.Environ.Map,
 ) !std.json.ObjectMap {
-    const bytes = (try core(arena, io, env, "providers.json")) orelse default_providers;
-    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
-    if (parsed != .object) return .empty;
-    return parsed.object;
+    var merged: std.json.ObjectMap = .empty;
+    for (try coreFiles(arena, io, env, "providers.json")) |path| {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file));
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
+        if (parsed != .object) continue;
+        var it = parsed.object.iterator();
+        while (it.next()) |e| {
+            if (merged.contains(e.key_ptr.*)) continue;
+            try merged.put(arena, e.key_ptr.*, e.value_ptr.*);
+        }
+    }
+    return merged;
 }
-
-/// The providers m8 ships with. Overridden whole by `core/providers.json`.
-pub const default_providers = @embedFile("core/providers.json");
 
 // ---------------------------------------------------------------- tests
 

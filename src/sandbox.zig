@@ -13,9 +13,8 @@
 //! carry their own tags, so resolving stays a single pass with no lookup
 //! table.
 //!
-//! Both files may be overridden from `core/` in the user's own config, and
-//! only from there: a project directory arrives with `git clone`, and these
-//! two files decide what a restriction means rather than what runs under it.
+//! Both files may be overridden from a `core/`, nearest first like any other
+//! config.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -96,8 +95,8 @@ fn dropped(line: []const u8, active: []const []const u8) bool {
     return false;
 }
 
-/// The profile to use: `core/mac-sandbox.sb` from the user's config if there
-/// is one, otherwise the copy compiled in.
+/// The profile to use: the nearest `core/mac-sandbox.sb` if there is one,
+/// otherwise the copy compiled in.
 pub fn profile(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
     return (try config.core(arena, io, env, "mac-sandbox.sb")) orelse template;
 }

@@ -1,6 +1,0 @@
-{
-  "toy": {
-    "cmd": ["m8", "providers", "toy"],
-    "api": "m8"
-  }
-}

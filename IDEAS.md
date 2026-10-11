@@ -5,7 +5,6 @@
 * Cody needs to be able to have sub-agents so it isn't a token burner.
 * m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
 * Shields:
-  * cody got shields straight inside no ref inclusion - should have to be explicit.
   * do agents under tools not need to write to state? no-edit-m8-st8? allow for subagent call which has it's own tools but not other tools?
     separate areas?
 
@@ -126,8 +125,6 @@
 
 ### Principle
 
-
-
 * Keep arguments simple; complexity lives in the mob definition.
 * Anything a mob can say is not also sayable in arguments.
 
@@ -229,8 +226,6 @@
     * Providers:
       * Setups for Anthropic, OpenAI, Google.
       * ...
-    * Example provider setups give instructional errors when a secret is missing.
-      * e.g. telling the person to run the openai cli to set up.
     * OS specific sandbox helpers.
 * Clean out inbuilt defaults unless they are really really minimal.
   * Clean out

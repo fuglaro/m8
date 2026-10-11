@@ -142,18 +142,18 @@ pub fn environment(
 /// `m8` means the m8 that is running, so a provider reaches this build rather
 /// than whichever one happens to be on a PATH — or none at all. After that it
 /// reads like a shell: an absolute path is one, a name that names a file in
-/// `core/` is that file, and a bare word is searched for.
+/// a `core/` is that file, nearest first, and a bare word is searched for.
 pub fn resolve(
     arena: Allocator,
     io: std.Io,
     self: []const u8,
-    core_dir: ?[]const u8,
+    core_dirs: []const []const u8,
     cmd: []const []const u8,
 ) ![]const []const u8 {
     if (cmd.len == 0) return Error.NoCommand;
 
     var out: std.ArrayList([]const u8) = .empty;
-    try out.append(arena, try locate(arena, io, self, core_dir, cmd[0]));
+    try out.append(arena, try locate(arena, io, self, core_dirs, cmd[0]));
     try out.appendSlice(arena, cmd[1..]);
     return out.items;
 }
@@ -162,13 +162,13 @@ fn locate(
     arena: Allocator,
     io: std.Io,
     self: []const u8,
-    core_dir: ?[]const u8,
+    core_dirs: []const []const u8,
     first: []const u8,
 ) ![]const u8 {
     if (std.mem.eql(u8, first, "m8")) return self;
     if (first.len > 0 and first[0] == '/') return first;
 
-    if (core_dir) |dir| {
+    for (core_dirs) |dir| {
         const path = try std.fs.path.join(arena, &.{ dir, first });
         if (look(io, path)) |found| {
             // Named a file that is there but cannot be run: say so rather
@@ -294,6 +294,10 @@ pub fn run(
         },
         else => return Error.ProviderFailed,
     }
+    // A provider that answered may still have had something to say, such as
+    // a credential it could not find.
+    const aside = std.mem.trimEnd(u8, said, "\n");
+    if (aside.len > 0) try err.print("m8: provider: {s}\n", .{aside});
     return reply;
 }
 
@@ -375,26 +379,26 @@ test "a command is found the way a shell would find it" {
     const self = "/opt/m8/bin/m8";
     try testing.expectEqualStrings(
         self,
-        (try resolve(arena, io, self, core_dir, &.{ "m8", "providers", "url" }))[0],
+        (try resolve(arena, io, self, &.{core_dir}, &.{ "m8", "providers", "url" }))[0],
     );
     // An absolute path is one.
-    try testing.expectEqualStrings("/bin/sh", (try resolve(arena, io, self, core_dir, &.{"/bin/sh"}))[0]);
+    try testing.expectEqualStrings("/bin/sh", (try resolve(arena, io, self, &.{core_dir}, &.{"/bin/sh"}))[0]);
     // A file in core/ is that file.
-    try testing.expectEqualStrings(runnable, (try resolve(arena, io, self, core_dir, &.{"runnable"}))[0]);
+    try testing.expectEqualStrings(runnable, (try resolve(arena, io, self, &.{core_dir}, &.{"runnable"}))[0]);
     // There, but not runnable, is an error rather than a fall-through.
     try testing.expectError(
         Error.CommandNotExecutable,
-        resolve(arena, io, self, core_dir, &.{"plain"}),
+        resolve(arena, io, self, &.{core_dir}, &.{"plain"}),
     );
     // A bare name that is not in core/ is left for PATH.
-    try testing.expectEqualStrings("curl", (try resolve(arena, io, self, core_dir, &.{"curl"}))[0]);
+    try testing.expectEqualStrings("curl", (try resolve(arena, io, self, &.{core_dir}, &.{"curl"}))[0]);
     // A path that is neither absolute nor in core/ has nowhere left to look.
     try testing.expectError(
         Error.CommandNotFound,
-        resolve(arena, io, self, core_dir, &.{"nope/missing"}),
+        resolve(arena, io, self, &.{core_dir}, &.{"nope/missing"}),
     );
     // Arguments are carried through untouched.
-    const full = try resolve(arena, io, self, core_dir, &.{ "m8", "providers", "url" });
+    const full = try resolve(arena, io, self, &.{core_dir}, &.{ "m8", "providers", "url" });
     try testing.expectEqual(@as(usize, 3), full.len);
     try testing.expectEqualStrings("providers", full[1]);
 }

@@ -115,7 +115,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
 
     // The command is found once, before anything is said, so a provider that
     // is not there fails before a turn is half made.
-    const argv = try provider.resolve(arena, io, ctx.self, try config.coreDir(arena, ctx.env), p.cmd);
+    const argv = try provider.resolve(arena, io, ctx.self, try config.coreDirs(arena, io, ctx.env), p.cmd);
     const environ = try provider.environment(arena, p, ctx.env);
 
     // Only what a blockless 🧰 named, and the last definition of a name wins.
@@ -577,7 +577,7 @@ fn once(
     return provider.run(
         ctx.arena,
         ctx.io,
-        try provider.resolve(ctx.arena, ctx.io, ctx.self, try config.coreDir(ctx.arena, ctx.env), p.cmd),
+        try provider.resolve(ctx.arena, ctx.io, ctx.self, try config.coreDirs(ctx.arena, ctx.io, ctx.env), p.cmd),
         try provider.environment(ctx.arena, p, ctx.env),
         request,
         wire,

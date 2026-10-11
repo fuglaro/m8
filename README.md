@@ -1885,13 +1885,14 @@ config, and neither can become the other.
   agent that constrains it. Without it, every other
   restriction is advisory as of the next run.
 * `core/` is denied to every secured process, always
-  and untagged, which is what makes the profile safe to
-  override from your own config.
-* Read a config directory before working in it. It
-  arrives with a `git clone` like anything else, and it
-  defines what runs and what a level such as `jail`
-  composes — though never what an atom removes, which is
-  `core/`, and yours alone.
+  and untagged, so a tool cannot rewrite what a
+  restriction means.
+* Running m8 in a directory trusts the config found from
+  it.
+  * It arrives with a `git clone` like anything else.
+  * It defines what runs, what a shield means, and which
+    command a provider is.
+  * Read it first.
 
 ## Configs
 
@@ -1901,12 +1902,15 @@ working directory and searching outwards:
 * `./.m8-st8/` and every `.m8-st8/` above it
 * `$XDG_CONFIG_HOME/m8-st8/` else `~/.config/m8-st8/`
 
-`core/` is the exception. It holds the files that decide
-what a restriction *means* and what a provider *is*, and it is
-read from your own config only — a project folder arrives
-with a `git clone`, and a provider is a command that runs
-on your machine. Each is a whole-file override of the copy
-m8 ships with, not a merge.
+`core/` holds what a restriction *means* and what a provider
+*is*, and is searched the same way.
+
+* `providers.json` composes through the stack: every file
+  adds its entries, and the nearest entry of a name stands.
+* `mac-sandbox.sb` and `contain-env-allowed.txt` are taken
+  whole from the nearest directory that has one, else from
+  the copy m8 carries.
+* m8 carries no providers.
 
 Authored names live under `@/`, so `@mathy` on the command
 line is `@/mathy.md` on disk. Generated state lives in the
@@ -2199,9 +2203,9 @@ The first word of `cmd` is looked for in order:
 * `m8` is the m8 that is running, so a provider reaches this
   build rather than whichever one is on a `PATH`, or none.
 * An absolute path is one.
-* A name that names a file in `core/` is that file — and if
-  it is not executable, that is an error rather than a
-  fall-through to something else of the same name.
+* A name that names a file in a `core/` is that file, nearest
+  first — and if it is not executable, that is an error rather
+  than a fall-through to something else of the same name.
 * A bare word is searched for on `PATH`.
 * Anything else fails.
 
@@ -2212,9 +2216,7 @@ in `core/`, and is reached as `["my-provider"]`.
 
 A provider declaring `api: "m8"` is handed the ledger itself
 rather than a projection of it — 🧰 with its command and its 🛡
-included — and answers in the same language. It is trusted
-with that because a provider command lives in `core/`, which
-a cloned project cannot reach.
+included — and answers in the same language.
 
 Worth knowing in both directions: it is more capable, and it
 means a shim that forwards what it receives will forward your
@@ -2234,10 +2236,6 @@ provider is still jailed, because it is a descendant of a
 jailed process; what the rule buys is that a jailed *agent*
 can still reach its own model, since an agent's shields are
 applied to its tools rather than to m8.
-
-Trust is held where the command is written down. `core/` is
-read from your own config only, so a project cannot define
-what runs. **Mobs travel with agents; providers are yours.**
 
 Worked entries for oMLX, Anthropic and a ChatGPT plan
 are in [docs/providers.md](docs/providers.md).
@@ -2260,15 +2258,17 @@ there is nobody piping one, so it says what it is instead
 of waiting for an end of file that is not coming — which
 makes `m8 providers url` a third way to that page.
 
-`m8 providers` also lists the providers this machine has,
-naming the file they came from. Which models any of them
+`m8 providers` also lists the providers configured here,
+naming the files they came from. Which models any of them
 serves is not in that list and is not missing: that is the
 ledger's business, written on the 🧠 that names one, so
 nothing in a config has to be kept in step with what a
 provider offers. `toy` is the exception, because its
 models are m8's own.
 
-`toy` speaks m8 and answers without a network, which is
+`toy` is configured like any other, with the first entry of
+the `core/providers.json` above. It speaks m8 and answers
+without a network, which is
 what makes the loop, tool calling, and picking up a call that
 was never answered testable rather than only demonstrable:
 

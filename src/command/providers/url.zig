@@ -307,7 +307,7 @@ fn headerName(ctx: Ctx, named: []const u8) ![]const u8 {
 ///
 /// A command that fails or answers with nothing leaves its header off
 /// entirely, so a machine with no key configured still reaches a provider
-/// that wants none. Every plausible command ends in a newline, and a value
+/// that wants none. Its stderr is passed on, which is how it says what to do. Every plausible command ends in a newline, and a value
 /// still holding one after trimming is header injection rather than a header,
 /// so it is dropped.
 fn ran(ctx: Ctx, cmd: []const u8) !?[]const u8 {
@@ -316,6 +316,9 @@ fn ran(ctx: Ctx, cmd: []const u8) !?[]const u8 {
     const r = std.process.run(ctx.arena, ctx.io, .{
         .argv = &.{ "sh", "-c", cmd },
     }) catch return null;
+    // What the command complained about is for whoever is setting it up.
+    ctx.err.writeAll(r.stderr) catch {};
+    ctx.err.flush() catch {};
     switch (r.term) {
         .exited => |code| if (code != 0) return null,
         else => return null,

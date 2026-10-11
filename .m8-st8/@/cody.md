@@ -10,7 +10,6 @@
 #### :brain:shields
 
 #### :shield:freeze-toolbox
-#### :shield:no-edit-m8-st8
 #### :shield:no-edit-git
 
 #### :shield:workbench

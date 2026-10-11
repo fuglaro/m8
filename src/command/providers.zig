@@ -132,15 +132,17 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
 /// exception, because its models are m8's own — see `m8 providers toy
 /// --help`.
 pub fn configured(ctx: Ctx, w: *std.Io.Writer) !void {
-    const from = try config.coreFile(ctx.arena, ctx.io, ctx.env, "providers.json");
-    try w.print("\nproviders ({s}):\n\n", .{from orelse "the copy m8 ships with"});
+    const from = try config.coreFiles(ctx.arena, ctx.io, ctx.env, "providers.json");
+    try w.writeAll("\nproviders, nearest first:\n\n");
+    for (from) |path| try w.print("  {s}\n", .{path});
+    if (from.len > 0) try w.writeAll("\n");
 
     const entries = config.providers(ctx.arena, ctx.io, ctx.env) catch {
         try w.writeAll("  (providers.json could not be read)\n");
         return;
     };
     if (entries.count() == 0) {
-        try w.writeAll("  (none: providers.json names no provider)\n");
+        try w.writeAll("  (none: no core/providers.json names a provider)\n");
         return;
     }
 
@@ -170,8 +172,6 @@ test "the page for a provider command lists what it reads" {
     defer a.deinit();
     const arena = a.allocator();
 
-    // Nothing to find a config with, so what is listed is the copy compiled
-    // in rather than whatever is on the machine running the tests.
     var env: std.process.Environ.Map = .init(arena);
     var out: std.Io.Writer.Allocating = .init(arena);
     const ctx: Ctx = .{
@@ -189,7 +189,7 @@ test "the page for a provider command lists what it reads" {
     try help(ctx, &out.writer);
     for (subs) |s| try testing.expect(std.mem.indexOf(u8, out.written(), s.name) != null);
     // The providers that are actually configured, which is what `send` takes.
-    try testing.expect(std.mem.indexOf(u8, out.written(), "toy") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "providers, nearest first") != null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_") != null);
 
     var url_page: std.Io.Writer.Allocating = .init(arena);
