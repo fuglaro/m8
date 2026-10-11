@@ -13,10 +13,12 @@
 # M8_EXCLAMATION_* always survives, listed or not: it is what the person
 # answered a tool, and one that cannot find that asks for ever.
 #
-# HOME and TMPDIR are always replaced with the mob's own scratch directory, so
-# listing them does nothing. A tool gets a real writable home that says nothing
-# about you, and one that outlives the call, so a file it writes is still there
+# TMPDIR is always replaced with the mob's own scratch directory, so listing
+# it does nothing. It outlives the call, so a file a tool writes is still there
 # for the call that reads it.
+#
+# HOME passes as it was handed over. A shield that moves it has already done
+# so, and one that has not leaves a tool its real home.
 
 # --- m8's own namespace. Not inherited from a machine so much as said by the
 #     call: __name__, ____, and M8_CALL_ID are how a tool is handed what it
@@ -29,6 +31,7 @@ M8_CALL_ID
 
 # --- finding and running things ---
 PATH
+HOME
 
 # --- text handling. m8 is UTF-8 with emoji throughout, and a tool running
 #     under LC_ALL=C will mangle it on the way back ---

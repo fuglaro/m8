@@ -37,6 +37,9 @@
 #### :shield:contain-env
 > :shield:secure secures contain-env
 
+#### :shield:contain-home
+> `bash` `-c` `HOME=$TMPDIR exec "$0" "$@"`
+
 #### :shield:freeze-toolbox
 > `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} exclude --sigil toolbox --sigil brain --sigil books`
 
@@ -48,6 +51,7 @@
 > :shield:no-edit-git
 > :shield:no-edit-m8-st8
 > :shield:contain-env
+> :shield:contain-home
 
 #### :shield:jail
 > :shield:sandbox

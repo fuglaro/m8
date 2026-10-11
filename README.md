@@ -1741,6 +1741,7 @@ What `jail` means there is a composition you can read:
 │ 🛡️no-edit-git
 │ 🛡️no-edit-m8-st8
 │ 🛡️contain-env
+│ 🛡️contain-home
 
 ▐ 🛡️jail
 │ 🛡️sandbox
@@ -1770,6 +1771,14 @@ read, overridden or taken apart — and a value `secure`
 does not recognise is refused rather than ignored, so
 not understanding what was asked for is never a reason
 to apply less than was asked for.
+
+`contain-home` is not an atom. It is a wrapper that points
+`HOME` at the mob's scratch before the tool starts:
+
+```m8
+▐ 🛡️contain-home
+│ `bash` `-c` `HOME=$TMPDIR exec "$0" "$@"`
+```
 
 `freeze-toolbox` is written in the language too, and
 shows what the mechanism buys. A tool may hand back 🧰
@@ -2357,8 +2366,12 @@ The two m8 ships with read `M8_PROVIDER_URL` and
 --help` says what each is for. A provider you write reads
 whatever its entry says, under its own name.
 
-Under `contain-env` the environment is rebuilt from
-`core/contain-env-allowed.txt` rather than inherited, and
-`HOME` and `TMPDIR` become the sandbox's own directory.
+Every tool is handed the mob's scratch as `TMPDIR`, and its
+`HOME` is left alone.
+
+* `contain-home` is a shield written in the language that
+  points `HOME` at that scratch.
+* Under `contain-env` the environment is rebuilt from
+  `core/contain-env-allowed.txt` rather than inherited.
 `M8_EXCLAMATION_*` is passed whatever that file says: a tool
 that cannot find what the person answered asks for ever.

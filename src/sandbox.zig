@@ -173,9 +173,8 @@ pub fn exec(
     return full.items;
 }
 
-/// The environment rebuilt from the allowlist rather than inherited. HOME and
-/// TMPDIR become the run's own directory: somewhere real to write that says
-/// nothing about whose machine this is.
+/// The environment rebuilt from the allowlist rather than inherited. TMPDIR
+/// becomes the run's own directory, which is what the profile was told it is.
 pub fn contained(
     arena: Allocator,
     io: std.Io,
@@ -191,10 +190,7 @@ pub fn contained(
         if (envPasses(rules, e.key_ptr.*) or std.mem.startsWith(u8, e.key_ptr.*, api.exclamation))
             try m.put(e.key_ptr.*, e.value_ptr.*);
     }
-    if (tmp.len > 0) {
-        try m.put("TMPDIR", tmp);
-        try m.put("HOME", tmp);
-    }
+    if (tmp.len > 0) try m.put("TMPDIR", tmp);
     const boxed = try arena.create(std.process.Environ.Map);
     boxed.* = m;
     return boxed;
@@ -311,8 +307,9 @@ test "the env allowlist passes what it names and nothing else" {
     try testing.expect(envPasses(env_allowed, "LC_ALL")); // trailing *
     try testing.expect(envPasses(env_allowed, "LC_CTYPE"));
     try testing.expect(!envPasses(env_allowed, "SSH_AUTH_SOCK"));
-    try testing.expect(!envPasses(env_allowed, "HOME")); // substituted, not passed
-    try testing.expect(!envPasses(env_allowed, "TMPDIR"));
+    // Home passes as it was handed over: moving it is a shield's business.
+    try testing.expect(envPasses(env_allowed, "HOME"));
+    try testing.expect(!envPasses(env_allowed, "TMPDIR")); // substituted, not passed
     try testing.expect(!envPasses(env_allowed, "AWS_SECRET_ACCESS_KEY"));
     // A comment naming a variable must not act as a rule.
     try testing.expect(!envPasses(env_allowed, "XPC_FLAGS"));

@@ -429,13 +429,9 @@ fn answer(
 
     var env: std.ArrayList(api.EnvVar) = .empty;
     try env.appendSlice(arena, stood.env);
-    // The mob's scratch, and a home that is not the person's for whatever
-    // wants to drop a dotfile beside what it wrote. Both are made by m8, so a
-    // tool neither creates one nor finds a trailing slash on it.
-    if (scratch.len > 0) {
-        try env.append(arena, .{ .key = "TMPDIR", .value = scratch });
-        try env.append(arena, .{ .key = "HOME", .value = scratch });
-    }
+    // The mob's scratch. It is made by m8, so a tool neither creates one nor
+    // finds a trailing slash on it.
+    if (scratch.len > 0) try env.append(arena, .{ .key = "TMPDIR", .value = scratch });
     // What the tool's own definition adds, which is neither the machine's nor
     // the call's and so is written down once rather than supplied every time.
     if (tool.env_vars.len > 0) {
