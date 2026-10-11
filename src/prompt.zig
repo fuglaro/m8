@@ -1,12 +1,18 @@
 //! `m8 @ADDRESS [-- WORDS]` — the pipeline written once.
 //!
-//!     echo WORDS | m8 cat @ADDRESS | m8 send | m8 tag @ADDRESS
+//!     m8 ref @ADDRESS WORDS | m8 send | m8 tag @ADDRESS
+//!     m8 reset --to @ADDRESS @
 //!
 //! is what this does, and it is kept exactly that: the same assembly, the
-//! same run, the same tag. The one difference is that it is one process, so
-//! the reply is shown as it arrives and tagged as it goes — a turn for every
-//! model call and every tool call, each naming the one before — rather than
-//! once there is a whole run to keep.
+//! same run, the same tag, and the main chat left following what was talked
+//! to. The one difference is that it is one process, so the reply is shown
+//! as it arrives and tagged as it goes — a turn for every model call and
+//! every tool call, each naming the one before — rather than once there is a
+//! whole run to keep.
+//!
+//! This is the shorthand, and the only place the main chat follows along. A
+//! trailing `:` is `--no-advance`, a trailing `-` is `m8 reset`, and a
+//! document piped in follows the address as it is.
 //!
 //! `@` is not a command, but it sits where one would. A prompt supplied as
 //! arguments follows the `--` marker, so prose cannot be mistaken for m8
@@ -20,6 +26,7 @@ const address = @import("address.zig");
 const assembly = @import("assembly.zig");
 const converse = @import("converse.zig");
 const ledger = @import("ledger.zig");
+const Keeping = @import("keeping.zig").Keeping;
 const api = @import("command/api.zig");
 const Ctx = api.Ctx;
 
@@ -68,7 +75,9 @@ pub fn run(given: Ctx, all: []const []const u8) !u8 {
             try ctx.err.writeAll("m8: a reset says nothing, so nothing goes after it\n");
             return 1;
         }
+        // The fresh chat is also the one being talked to now.
         try address.reset(arena, io, dirs, a);
+        try address.follow(arena, io, dirs, .{ .kind = .main }, a);
         return 0;
     }
 
@@ -88,7 +97,7 @@ pub fn run(given: Ctx, all: []const []const u8) !u8 {
     // not ask m8 to wait for a message in the first place.
     if (terminal_submission and piped.len == 0) return 0;
 
-    const lead = [_]doc.Record{.{ .sigil = .agent, .value = try address.read(arena, io, dirs, a) }};
+    const lead = [_]doc.Record{.{ .sigil = .agent, .value = try address.found(arena, io, dirs, a, ctx.err) }};
     const asked = ledger.waiting(arena, io, dirs, lead[0].value);
     const assembled = try assembly.assemble(arena, &lead, prompt, piped, asked);
     if (assembled.said_nothing) {
@@ -115,42 +124,16 @@ pub fn run(given: Ctx, all: []const []const u8) !u8 {
         .io = io,
         .dirs = dirs,
         .a = a,
+        .moving = .{ .mover = .prompt },
         .home = try address.home(arena, io, dirs, a, lead[0].value),
     };
     const turn = try converse.run(inner, .{ .keep = keeping.keeper(), .verbose = verbose });
-    // A run that added nothing was handed nothing to keep, and what was said
-    // to it is still a turn.
-    const kept = keeping.last orelse try address.tag(arena, io, dirs, a, turn);
+    const kept = try keeping.finish(turn);
 
     try ctx.out.writeByte('\n');
     try doc.write(ctx.out, ctx.mode, .{ .sigil = .agent, .value = kept });
     return 0;
 }
-
-/// Tags a run a piece at a time, so the address moves with every model call
-/// and every tool call rather than once at the end. Each piece is a turn
-/// naming the one before it, which is all a chat ever was.
-const Keeping = struct {
-    arena: std.mem.Allocator,
-    io: std.Io,
-    dirs: []const []const u8,
-    a: address.Address,
-    /// Where every piece of this run is kept: each continues the one before
-    /// it, so the folder the first goes in is the folder they all do.
-    home: []const u8,
-    last: ?[]const u8 = null,
-
-    fn keeper(self: *Keeping) converse.Keeper {
-        return .{ .ctx = self, .home = self.home, .keep = keep };
-    }
-
-    fn keep(ctx: *anyopaque, piece: []const doc.Record) anyerror![]const u8 {
-        const self: *Keeping = @ptrCast(@alignCast(ctx));
-        const name = try address.tag(self.arena, self.io, self.dirs, self.a, piece);
-        self.last = name;
-        return name;
-    }
-};
 
 /// Acknowledge a submission in the language already used for the reply.
 ///

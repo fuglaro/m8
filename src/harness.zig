@@ -45,7 +45,7 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
     var ctx: api.Ctx = .{
         .arena = arena,
         .io = io,
-        .mode = mode(io),
+        .mode = if (c.terminal) mode(io) else .md,
         .env = init.environ_map,
         .self = self,
         .args = args,
@@ -94,7 +94,12 @@ pub fn run(
     const ctx: api.Ctx = .{
         .arena = arena,
         .io = io,
-        .mode = mode(io),
+        .mode = switch (reach) {
+            .prompt => mode(io),
+            .call => |c| if (c.terminal) mode(io) else .md,
+            // A program of its own decides for itself.
+            .spawn => .md,
+        },
         .env = env,
         .self = self,
         .args = &.{},
@@ -151,7 +156,7 @@ fn m8Path(
     return launch.sibling(arena, me, "m8");
 }
 
-/// The spelling to write in, decided once and carried into every writer.
+/// The spelling a terminal is written, for the few that ask what stdout is.
 pub fn mode(io: std.Io) doc.Mode {
     return if (std.Io.File.stdout().isTty(io) catch false) .m8 else .md;
 }
@@ -182,6 +187,9 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
         error.NoMainChat => try err.writeAll("m8: pick an agent with `m8 @agent`\n"),
         error.NothingToReset => try err.writeAll(
             "m8: only a chat resets; the main chat, a turn and a model have no parent to go back to\n",
+        ),
+        error.FollowLoops => try err.writeAll(
+            "m8: that would have a chat follow something that leads back to it\n",
         ),
         // Already said, in terms of what was typed.
         error.Said => {},

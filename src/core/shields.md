@@ -37,19 +37,8 @@
 #### :shield:contain-env
 > :shield:secure secures contain-env
 
-#### :shield:filter-toolbox
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} filter out toolbox`
-
-#### :shield:filter-brain
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} filter out brain`
-
-#### :shield:filter-books
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} filter out books`
-
 #### :shield:freeze-toolbox
-> :shield:filter-toolbox
-> :shield:filter-brain
-> :shield:filter-books
+> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} exclude --sigil toolbox --sigil brain --sigil books`
 
 #### :shield:sandbox
 > :shield:freeze-toolbox

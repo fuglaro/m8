@@ -185,6 +185,16 @@ fn modifierLen(s: []const u8) usize {
     return i;
 }
 
+/// The sigil a plain name spells: its shortcode without the colons, which is
+/// how a command line names one. `robot`, `brain`, `toolbox`.
+pub fn named(name: []const u8) ?Sigil {
+    for (std.enums.values(Sigil)) |s| {
+        const w = s.word();
+        if (std.mem.eql(u8, w[1 .. w.len - 1], name)) return s;
+    }
+    return null;
+}
+
 /// A matched sigil and the bytes it occupied. That is not always the length of
 /// its own spelling, so the value behind it starts at `len`, never at
 /// `sigil.text(mode).len`.

@@ -8,7 +8,7 @@
 //! arguments and yours. A bare `m8` is `m8 @`, the main chat.
 //!
 //! Every other command is `m8 COMMAND ARGS` with stdin, and resolves whatever
-//! it names itself: `m8 cat @mathy`. So there is one kind of command, and the
+//! it names itself: `m8 ref @mathy`. So there is one kind of command, and the
 //! `@` prompt is the pipeline of them written once.
 //!
 //! `--help` is a process-level option: `m8 --help` is the overview and
@@ -16,8 +16,9 @@
 //! own arguments, so no command has to remember to answer it and no two answer
 //! it differently.
 //!
-//! A terminal is written the rendered spelling and everything else markdown,
-//! decided once here and carried into every writer.
+//! The `@` prompt writes a terminal the rendered spelling and everything else
+//! markdown. A command writes markdown whatever stdout is, and `m8 render` is
+//! how a document becomes the rendered spelling.
 //!
 //! Everything the process does hangs off one arena. A run is short: read a
 //! document, transform it, write it, exit. Nothing outlives that, so nothing
@@ -53,11 +54,13 @@ fn overview(w: *std.Io.Writer) !void {
         \\  m8 @mathy/aside -- "A different thought."
         \\
         \\Every command reads stdin and writes stdout, so the same thing is a
-        \\pipeline too:
+        \\pipeline too. A command writes markdown whatever stdout is, and takes
+        \\options where `@` takes marks:
         \\
-        \\  echo "And in one sentence?" | m8 cat @ | m8 send | m8 tag @
-        \\  m8 cat @mathy | m8 encode openai-completions >request.json
+        \\  m8 ref @ "And in one sentence?" | m8 send | m8 tag @
+        \\  m8 ref @mathy | m8 encode openai-completions >request.json
         \\  m8 decode openai-completions local <request.json | m8 send
+        \\  m8 query @mathy "And in one sentence?"
         \\
     );
     try overviewCommands(w);

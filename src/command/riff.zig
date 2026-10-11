@@ -24,6 +24,8 @@ pub const command: api.Command = .{
     .name = "riff",
     .summary = "run a command per message, from an editor pinned under its output",
     .takes = .nothing,
+    // It draws on one, so it has to know there is one.
+    .terminal = true,
     .run = run,
     .help = help,
 };

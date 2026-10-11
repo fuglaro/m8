@@ -1,14 +1,13 @@
 //! `top` — name a file for what it says about itself.
 //!
-//! `cat` names a file for what it says, as a 🧠. This names it as a 📚, which
-//! expands to the file's top, so a skill joins a chat by being piped in front
-//! of it rather than by a mark of its own on the command line.
+//! `ref` names a file for what it says, as a 🧠. This names it as a 📚, which
+//! expands to the file's top, so a skill joins a chat by being written in
+//! front of it rather than by a mark of its own on the command line.
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
 const config = @import("../config.zig");
 const address = @import("../address.zig");
-const assembly = @import("../assembly.zig");
 const session = @import("../session.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
@@ -16,6 +15,7 @@ const Ctx = api.Ctx;
 pub const command: api.Command = .{
     .name = "top",
     .summary = "name a file for what it says about itself",
+    .takes = .nothing,
     .run = run,
     .help = help,
 };
@@ -27,11 +27,15 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  m8 top @SKILL
         \\
-        \\Writes a 📚 naming SKILL, and then whatever was piped in, the same way
-        \\`m8 cat` does with a 🧠. A 📚 expands to the file's top — what sits
-        \\between its two 🔝 — so that is what joins the ledger.
+        \\Writes a 📚 naming SKILL, and nothing else. A 📚 expands to the
+        \\file's top — what sits between its two 🔝 — so that is what joins
+        \\a ledger it is written into.
         \\
         \\  m8 top @tight-docs | m8 @mathy -- "tidy the README"
+        \\  { m8 top @tight-docs; m8 ref @mathy "tidy the README"; } | m8 send
+        \\
+        \\It goes straight to the agent's own file. A chat has no top, and
+        \\neither has a model.
         \\
     );
 }
@@ -48,9 +52,6 @@ fn run(ctx: Ctx) !u8 {
         try ctx.err.print("m8: no agent named '{s}'\n", .{name});
         return 1;
     }
-    const lead = [_]doc.Record{.{ .sigil = .skill, .value = name }};
-    const assembled = try assembly.assemble(ctx.arena, &lead, "", ctx.in, null);
-    var diag: doc.Diagnostic = .{};
-    try doc.writeAll(ctx.out, ctx.mode, try doc.parse(ctx.arena, assembled.document, &diag));
+    try doc.write(ctx.out, ctx.mode, .{ .sigil = .skill, .value = name });
     return 0;
 }

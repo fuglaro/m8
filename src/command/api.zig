@@ -15,8 +15,10 @@ const doc = @import("../m8/doc.zig");
 pub const Ctx = struct {
     arena: Allocator,
     io: std.Io,
-    /// The spelling to write in. Rendered for a terminal, markdown otherwise,
-    /// which is the same choice every m8 writer makes.
+    /// The spelling to write in. Markdown for every command, whatever stdout
+    /// is, so a command says the same thing to a terminal as to a pipe. Only
+    /// the `@` prompt and a command marked `terminal` are handed the rendered
+    /// spelling when stdout is one.
     mode: doc.Mode,
     /// The environment, for a command that spawns something.
     env: *const std.process.Environ.Map,
@@ -94,7 +96,7 @@ pub const Tty = struct {
 ///
 /// Every command is `m8 CMD ARGS` with stdin, and none of them is handed a
 /// name the command line resolved for it: a command that wants one takes it
-/// as an argument and resolves it itself, which is how `m8 cat @mathy` works.
+/// as an argument and resolves it itself, which is how `m8 ref @mathy` works.
 ///
 /// So the one question is whether stdin is the command's to read. Most read
 /// it whole. `call` and anything else that hands stdin to a child must not,
@@ -127,6 +129,10 @@ pub const Command = struct {
     summary: []const u8,
     /// Whether `in` is filled with stdin.
     takes: Takes = .stdin,
+    /// Whether it is handed the rendered spelling when stdout is a terminal.
+    /// Almost nothing is: a command that answered a terminal differently
+    /// would be two commands, and only one of them could be piped.
+    terminal: bool = false,
     /// The exit status. A filter returns 0; `call` returns whatever it ran.
     run: *const fn (Ctx) anyerror!u8,
     /// This command at length: what it takes, what it answers with, and

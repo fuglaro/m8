@@ -28,8 +28,8 @@ const Ctx = api.Ctx;
 
 pub const Options = struct {
     /// Write the ledger that arrived ahead of what the run adds, so what goes
-    /// out is the whole turn. What `send` does under a pipe; a terminal is
-    /// only ever shown the reply.
+    /// out is the whole turn. What `send` does; the `@` prompt shows only
+    /// what the run adds.
     echo_given: bool = false,
     /// Keep the run as it goes rather than once it is over. What a provider
     /// or a tool has finished saying happened, whatever becomes of the next

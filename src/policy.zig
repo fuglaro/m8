@@ -27,8 +27,8 @@ pub fn fromModel(s: Sigil) bool {
 /// A tool answers with 🧾 as it speaks and 🟢 or 🚫 when it stops. It may also
 /// hand back definitions — that is how a toolmaker works.
 ///
-/// Closing that door is a 🛡 rather than a rule here. `freeze-toolbox` stacks
-/// a filter per sigil that opens it, so what is closed is written down in the
+/// Closing that door is a 🛡 rather than a rule here. `freeze-toolbox` names
+/// every sigil that opens it, so what is closed is written down in the
 /// language and can be read, composed, or taken apart. Including an agent or a
 /// skill *is* a way to acquire a toolbox, which is why that shield names 🧠 and
 /// 📚 alongside 🧰 rather than resolving them to see what they carry.

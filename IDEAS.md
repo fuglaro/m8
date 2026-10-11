@@ -353,14 +353,37 @@ Current system:
 * Cody needs to be able to have sub-agents so it isn't a token burner.
 * Validate and document common workflow can be reasonably composed with components.
 * Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
+* Add reasonable shields to cody.
 
 
 
-## BITTY ISSUES
+
+## DONE
 
 ```
 >>> m8 cat @pagey/+/NOFILEHERE
 ▐ 🧠pagey/+/NOFILEHERE
 ```
 
-* DONE: No blank lines between recipt, green circle, call sigils, just like we did across though_balloons.
+* all of the below render in non-pretty raw form unless stated otherwise.
+* none of the below advance the main chat except when calling `m8 tag @` directly.
+* `m8 tag @chat`: as today but instead of accepting trailing:, --no-advance.
+* `m8 ref @chat`: shows the referenced turn, or itself if it exists as a turn or new agent or model (or fails).
+* `m8 ref @chat "hi"`: appends relevant message to shown output.
+* `echo "hi" | m8 ref @chat`: appends relevant message to shown output.
+* `m8 ref "$(m8 @x -- hi)"`: pulls trailing reference or fails.
+* `m8 render`: renders from stdin to pretty form.
+* `m8 render -r`: renders from stdin to raw form.
+* cat is removed.
+* `m8 ref @chat | m8 quote`: Pull last robot/question message from chat unwrapped from m8 syntax.
+* `m8 query @chat "hi"`: Message and run until robot/question message or failure, unwrapping quote (usual ledger is hidden). Supports --no-advance and --new (for starting fresh with the agent) and --parent (for starting fresh with the parent).
+* `m8 query -v @chat "hi"`: Includes thought and tool summaries on stderr.
+* `m8 query -vv @chat "hi"`: Includes full ledger on stderr.
+* top drops stdin joining, rendering, and being cat's twin.
+* `m8 reset @chat`: resets the chat (takes --new, and `--to unsettled-target`).
+* send -> ignores terminal and now gives the whole turn always
+
+Adjustments: How about ref not supporting trailing extraction and instead having m8 tail to get the last sigil because everywhere we want to use it, we expect
+the last sigil to be the ref m8 ref "@$(m8 @x -- hi | m8 tail --value)" and then maybe it's not quote, it's m8 tail --sigil robot --sigil question
+--block
+

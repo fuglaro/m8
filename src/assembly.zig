@@ -1,5 +1,6 @@
 //! Assembling a ledger: what an address reads as, whatever was piped in, and
-//! the prompt, in that order.
+//! the prompt, in that order. This is the `@` prompt's; `m8 ref` is the same
+//! with nothing piped but prose.
 //!
 //!   nothing piped   LEAD → prompt
 //!   m8 piped        LEAD → the document → prompt
@@ -54,17 +55,9 @@ pub fn assemble(
         try records.appendSlice(arena, try doc.parse(arena, piped, &diag));
     }
 
-    // The prompt and whatever prose was piped are one thing said, not two: a
-    // prompt in front of piped text is a preamble to it.
-    const said = if (prompt.len > 0 and prose.len > 0)
-        try std.fmt.allocPrint(arena, "{s}\n{s}", .{ prompt, prose })
-    else if (prompt.len > 0) prompt else prose;
     // Said to a ledger that ends in a question, it is the answer to it.
     const waiting = ledger.asking(records.items) orelse if (is_document) null else asked;
-    if (said.len > 0) try records.append(arena, if (waiting) |id|
-        .{ .sigil = .exclaim, .value = id, .content = said }
-    else
-        .{ .sigil = .user, .content = said });
+    if (try said(arena, prompt, prose, waiting)) |r| try records.append(arena, r);
 
     var buf: std.Io.Writer.Allocating = .init(arena);
     try doc.writeAll(&buf.writer, .md, records.items);
@@ -72,6 +65,22 @@ pub fn assemble(
         .document = buf.written(),
         .said_nothing = piped.len == 0 and prompt.len == 0,
     };
+}
+
+/// What was said, as the record it is: a 🙋, or the ❗ that answers whoever
+/// `waiting` names. Null when nothing was.
+///
+/// The prompt and whatever prose was piped are one thing said, not two: a
+/// prompt in front of piped text is a preamble to it.
+pub fn said(arena: Allocator, prompt: []const u8, prose: []const u8, waiting: ?[]const u8) !?doc.Record {
+    const text = if (prompt.len > 0 and prose.len > 0)
+        try std.fmt.allocPrint(arena, "{s}\n{s}", .{ prompt, prose })
+    else if (prompt.len > 0) prompt else prose;
+    if (text.len == 0) return null;
+    return if (waiting) |id|
+        .{ .sigil = .exclaim, .value = id, .content = text }
+    else
+        .{ .sigil = .user, .content = text };
 }
 
 // ---------------------------------------------------------------- tests

@@ -408,10 +408,10 @@ test "a line of inline code is an argv, and prose is not" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const argv = (try inlineArgv(arena, "`bash` `-euo` `pipefail` `-c` `\"$0\" \"$@\" | m8 filter`")).?;
+    const argv = (try inlineArgv(arena, "`bash` `-euo` `pipefail` `-c` `\"$0\" \"$@\" | m8 exclude`")).?;
     try testing.expectEqual(@as(usize, 5), argv.len);
     try testing.expectEqualStrings("bash", argv[0]);
-    try testing.expectEqualStrings("\"$0\" \"$@\" | m8 filter", argv[4]);
+    try testing.expectEqualStrings("\"$0\" \"$@\" | m8 exclude", argv[4]);
 
     try testing.expect((try inlineArgv(arena, "just some words")) == null);
 }
@@ -585,12 +585,12 @@ test "a wrapper opening with m8 reaches the m8 that is running" {
         &.{ "m8", "shield", "ask", "--" },
         // Only the first word, and only of a wrapper. An `m8` that is an
         // argument is somebody's argument.
-        &.{ "bash", "-c", "m8 filter out toolbox" },
+        &.{ "bash", "-c", "m8 exclude --sigil toolbox" },
     };
     const full = try wrap(arena, &wrappers, &.{ "m8", "call", "m8", "munge" }, "/opt/m8/bin/m8");
     try testing.expectEqualStrings("/opt/m8/bin/m8", full[0]);
     try testing.expectEqualStrings("bash", full[4]);
-    try testing.expectEqualStrings("m8 filter out toolbox", full[6]);
+    try testing.expectEqualStrings("m8 exclude --sigil toolbox", full[6]);
     // The tool's own command follows the same rule: its first word, and no
     // other.
     try testing.expectEqualStrings("/opt/m8/bin/m8", full[7]);
@@ -631,9 +631,10 @@ test "the shields m8 ships with parse, and jail is the composition it claims" {
     var it = std.mem.tokenizeAny(u8, secures, " ");
     while (it.next()) |name| try testing.expect(sandbox.find(name) != null);
 
-    // And jail closes the definition channel, which sandbox composes: three
-    // filters, and the one `secure` every restriction is told to.
-    try testing.expectEqual(@as(usize, 4), got.wrappers.len);
+    // And jail closes the definition channel, which sandbox composes: the
+    // pipe that takes definitions out, and the one `secure` every restriction
+    // is told to.
+    try testing.expectEqual(@as(usize, 2), got.wrappers.len);
 }
 
 test "a wrapper says where this m8 is, as its own word or inside one" {
@@ -646,14 +647,14 @@ test "a wrapper says where this m8 is, as its own word or inside one" {
         // An m8 command: the first word is the whole of it.
         &.{ "m8", "shield", "ask", "--" },
         // A pipe: m8 is named inside a script it does not read.
-        &.{ "bash", "-c", "\"$0\" \"$@\" | {{M8}} filter out toolbox" },
+        &.{ "bash", "-c", "\"$0\" \"$@\" | {{M8}} exclude --sigil toolbox" },
     };
     const got = try wrap(arena, &wrappers, &.{ "grep", "-r", "x", "{{M8}}", "call", "{{M8}}", "munge" }, self);
 
     try testing.expectEqualStrings(self, got[0]);
     try testing.expectEqualStrings("shield", got[1]);
     try testing.expectEqualStrings(
-        "\"$0\" \"$@\" | " ++ self ++ " filter out toolbox",
+        "\"$0\" \"$@\" | " ++ self ++ " exclude --sigil toolbox",
         got[6],
     );
     // The tool's own command says it the same way, as often as it needs.

@@ -1,15 +1,20 @@
 //! `tag` — keep a turn, and point an address at it.
 //!
-//! The one command that moves a chat. A document that is one 🧠 already names
-//! a turn, so the address is pointed at it and nothing is written; anything
-//! else is kept as a new turn and pointed at. Either way what comes out is
-//! the 🧠 of the turn now pointed at, and nothing else — it is a ref being
-//! written, and the line is its receipt.
+//! The one command that moves a chat on. A document that is one 🧠 already
+//! names a turn, so the address is pointed at it and nothing is written;
+//! anything else is kept as a new turn and pointed at. Either way what comes
+//! out is the 🧠 of the turn now pointed at, and nothing else — it is a ref
+//! being written, and the line is its receipt.
+//!
+//! It moves what it names. The main chat is moved by naming it, and by the
+//! `@` prompt, and by nothing else — so an agent run from a tool keeps its
+//! own chats without taking over whoever is at the terminal.
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
 const config = @import("../config.zig");
 const address = @import("../address.zig");
+const session = @import("../session.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
 
@@ -25,38 +30,49 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 tag — keep a turn, and point an address at it
         \\
-        \\  m8 tag @ADDRESS[:]
+        \\  m8 tag [--no-advance] @ADDRESS
         \\
         \\A document that is one 🧠 names a turn already, so the address is
         \\pointed at it and nothing is written. Anything else is kept as a new
         \\turn and pointed at. What comes out is the 🧠 now pointed at.
         \\
-        \\  m8 cat @mathy | m8 send | m8 tag @mathy     what m8 @mathy does
-        \\  m8 cat @mathy | m8 tag @mathy/aside          fork a chat
-        \\  m8 cat @ | m8 send | m8 tag @mathy/other     keep a run elsewhere
+        \\  m8 ref @mathy "hi" | m8 send | m8 tag @mathy    carry mathy on
+        \\  m8 ref @mathy | m8 tag @mathy/aside             fork a chat
+        \\  m8 ref @ "hi" | m8 send | m8 tag @mathy/other   keep a run elsewhere
         \\
-        \\  @chat     the turn goes in the chat's +/, the chat points at it,
-        \\            and the main chat points at the chat
-        \\  @         the chat the main chat points at, as above; or, when it
-        \\            points at a turn, the main chat itself
-        \\  @turn     the turn goes beside its parent, and the main chat
-        \\  @/model   points at it
+        \\  @chat     the turn goes in the chat's +/, and the chat points at it
+        \\  @         the chat the main chat follows, as above; or, when it
+        \\            names a turn, the main chat itself
+        \\  @turn     the turn goes beside its parent, and nothing is pointed
+        \\  @/model   at it
         \\
-        \\A trailing `:` keeps the turn and moves nothing, which is what a
-        \\side question is.
+        \\`--no-advance` keeps the turn where it would have gone and moves
+        \\nothing, which is what a side question is.
+        \\
+        \\Only `@` moves the main chat. `m8 reset --to @chat @` puts it on a
+        \\chat, which is what `m8 @chat` does as it goes.
         \\
     );
 }
 
 fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len != 1) {
-        try ctx.err.writeAll("m8 tag: name one address to point\n");
+    var args = ctx.args;
+    var moving: address.Moving = .{};
+    if (args.len > 0 and std.mem.eql(u8, args[0], "--no-advance")) {
+        moving.stay = true;
+        args = args[1..];
+    }
+    if (args.len != 1 or !address.isAddress(args[0])) {
+        try ctx.err.writeAll("m8 tag: name one @ADDRESS to point, after `--no-advance` if nothing is to move\n");
         return 1;
     }
     const dirs = try config.discover(ctx.arena, ctx.io, ctx.env);
-    const a = try address.typed(ctx.arena, ctx.io, dirs, ctx.args[0], ctx.err);
-    if (a.suffix == .reset) {
-        try ctx.err.writeAll("m8 tag: a reset is `m8 @ADDRESS-`, not something to tag\n");
+    const a = try address.typed(ctx.arena, ctx.io, dirs, args[0], ctx.err);
+    if (a.suffix != .none) {
+        try ctx.err.writeAll(
+            "m8 tag: the address carries no `:` or `-`; " ++
+                "those are `m8 tag --no-advance` and `m8 reset`\n",
+        );
         return 1;
     }
 
@@ -67,7 +83,17 @@ fn run(ctx: Ctx) !u8 {
     var diag: doc.Diagnostic = .{};
     const records = try doc.parse(ctx.arena, ctx.in, &diag);
 
-    const turn = try address.tag(ctx.arena, ctx.io, dirs, a, records);
+    // A lone 🧠 is pointed at rather than kept, so it has to be there: a chat
+    // pointed at a turn nobody kept would read as nothing.
+    if (records.len == 1 and records[0].sigil == .agent and records[0].content == null) {
+        const named = try session.settle(ctx.arena, ctx.io, dirs, records[0].value);
+        if (session.isTurn(named) and !try session.exists(ctx.arena, ctx.io, dirs, named)) {
+            try ctx.err.print("m8: no turn named '{s}'\n", .{named});
+            return 1;
+        }
+    }
+
+    const turn = try address.tag(ctx.arena, ctx.io, dirs, a, records, moving);
     try doc.write(ctx.out, ctx.mode, .{ .sigil = .agent, .value = turn });
     return 0;
 }

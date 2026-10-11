@@ -7,13 +7,17 @@
 #
 # Blank lines and lines starting with # are ignored.
 
-cat
+ref
+send
+tag
+query
+reset
+tail
+exclude
+render
 encode
 decode
 parse
-send
-tag
-ref
 save
 top
 call
@@ -22,7 +26,6 @@ shield
 shield secure
 shield ask
 shield check
-filter
 providers
 providers url
 providers toy

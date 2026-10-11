@@ -19,19 +19,22 @@ pub const Takes = api.Takes;
 
 /// The commands, as the modules that hold them.
 const modules = .{
-    @import("command/cat.zig"),
+    @import("command/ref.zig"),
+    @import("command/send.zig"),
+    @import("command/tag.zig"),
+    @import("command/query.zig"),
+    @import("command/reset.zig"),
+    @import("command/tail.zig"),
+    @import("command/exclude.zig"),
+    @import("command/render.zig"),
     @import("command/encode.zig"),
     @import("command/decode.zig"),
     @import("command/parse.zig"),
-    @import("command/send.zig"),
-    @import("command/tag.zig"),
-    @import("command/ref.zig"),
     @import("command/save.zig"),
     @import("command/top.zig"),
     @import("command/call.zig"),
     @import("command/munge.zig"),
     @import("command/shield.zig"),
-    @import("command/filter.zig"),
     @import("command/providers.zig"),
     @import("command/riff.zig"),
 };
@@ -222,7 +225,7 @@ pub fn named(
 const testing = std.testing;
 
 test "a command is found by name" {
-    try testing.expect(find("cat") != null);
+    try testing.expect(find("ref") != null);
     try testing.expect(find("call") != null);
     try testing.expect(find("munge") != null);
     try testing.expect(find("--") == null);
@@ -251,7 +254,7 @@ test "no two commands share a name" {
 }
 
 test "the tree gives every command a program spelling" {
-    try testing.expectEqualStrings("m8-cat", byPath(&.{"cat"}).?.program);
+    try testing.expectEqualStrings("m8-ref", byPath(&.{"ref"}).?.program);
     try testing.expectEqualStrings("m8-munge", byPath(&.{"munge"}).?.program);
     // Munge's operations belong to one command, not split programs.
     try testing.expect(byPath(&.{ "munge", "read" }) == null);

@@ -30,7 +30,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\Writes the document on stdin as @/AGENT.md in the nearest config
         \\directory, over whatever was there, and answers with its 🧠.
         \\
-        \\  m8 cat @ | m8 encode m8 | m8 save @notes     a chat, flattened
+        \\  m8 ref @ | m8 encode m8 | m8 save @notes     a chat, flattened
         \\  echo "#### :brain:/local/tiny" | m8 save @tiny
         \\
         \\An agent is authored, so it is a name of your own: not a turn, not a

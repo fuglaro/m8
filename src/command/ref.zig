@@ -1,21 +1,29 @@
-//! `ref` — the 🧠 a document ends on, and nothing else.
+//! `ref` — the 🧠 an address reads as, and what is said to it.
 //!
-//! What `m8 @x -- hi` writes is the reply and then the 🧠 of the turn it kept,
-//! which is what a person or a script wants to read. What the next command
-//! wants is often the reference alone, and this is how one becomes the other.
+//! It is how a chat gets into a pipe. The address is settled to the turn it
+//! has got to, never the chat's own name, so what comes out is a snapshot
+//! that stays put when the chat moves on — and a reference rather than a
+//! copy, which is what lets `tag` point at it without keeping it again.
 //!
-//! Only a document that ends on a 🧠 has one. A turn `send` wrote was never
-//! kept, and the only 🧠 in it is the parent it continues — taking that would
-//! answer with somewhere else, so it is refused instead.
+//! What is named is looked for. A 🧠 written for a turn nobody kept would be
+//! the ledger saying something that did not happen.
+//!
+//! Anything said follows the 🧠, as arguments or on stdin. Stdin is always
+//! prose here: a document that should follow an address is concatenated after
+//! this one, which is all a document needs.
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
+const config = @import("../config.zig");
+const address = @import("../address.zig");
+const assembly = @import("../assembly.zig");
+const ledger = @import("../ledger.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "ref",
-    .summary = "the 🧠 a document ends on, and nothing else",
+    .summary = "the 🧠 an address reads as, and what is said to it",
     .run = run,
     .help = help,
 };
@@ -23,84 +31,58 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 ref — the 🧠 a document ends on, and nothing else
+        \\m8 ref — the 🧠 an address reads as, and what is said to it
         \\
-        \\  m8 ref
+        \\  m8 ref @ADDRESS [MESSAGE]
         \\
-        \\`m8 @x -- hi` writes the reply and then the 🧠 of the turn it kept. This
-        \\keeps that last 🧠 alone, which is what a command wanting a reference
-        \\is handed.
+        \\Writes the 🧠 that address reads as now — the turn a chat has got
+        \\to, not the chat's name, so it stays put when the chat moves on. A
+        \\turn, a model, and an agent nobody has talked to yet read as
+        \\themselves. A turn or an agent that is not there is an error.
         \\
-        \\  m8 @x -- hi | m8 ref | m8 tag @y          fork the new turn into y
-        \\  m8 @x -- hi | m8 ref | m8 @y -- "review that"    hand y the conversation
+        \\  m8 ref @mathy | m8 send | m8 tag @mathy
+        \\  m8 ref @mathy | m8 tag @mathy/aside        fork, with nothing said
+        \\  m8 ref @mathy | m8 encode                  the whole chat, flat
         \\
-        \\A document that ends on anything else has nothing to reference: a
-        \\turn `m8 send` wrote was never kept, so tag it first.
+        \\A MESSAGE follows the 🧠 as a 🙋, or as the ❗ that answers a chat
+        \\waiting on a question. Every word after the address is the message,
+        \\so none of them is read as an option. Stdin is prose and joins it.
+        \\
+        \\  m8 ref @mathy "and in one sentence?" | m8 send | m8 tag @mathy
+        \\  echo "and in one sentence?" | m8 ref @mathy | m8 send
+        \\
+        \\A document follows an address by being written after it:
+        \\
+        \\  { m8 ref @mathy; echo "#### :brain:/local/tiny"; } | m8 send
+        \\
+        \\What `m8 @x` wrote ends on the 🧠 of the turn it kept, and `m8 tail`
+        \\takes that out:
+        \\
+        \\  m8 ref "@$(m8 @x -- hi | m8 tail --value)" "review that" | m8 send
         \\
     );
 }
 
 fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len > 0) {
-        try ctx.err.writeAll("m8 ref: takes no arguments; `m8 cat @x` is an address's 🧠\n");
+    if (ctx.args.len == 0 or !address.isAddress(ctx.args[0])) {
+        try ctx.err.writeAll("m8 ref: name one @ADDRESS, and then anything to say to it\n");
         return 1;
     }
-    if (ctx.in.len == 0 or doc.detect(ctx.in) == null) {
-        try ctx.err.writeAll("m8 ref: pipe in a document that ends on a 🧠\n");
+    const dirs = try config.discover(ctx.arena, ctx.io, ctx.env);
+    const a = try address.typed(ctx.arena, ctx.io, dirs, ctx.args[0], ctx.err);
+    if (a.suffix != .none) {
+        try ctx.err.writeAll("m8 ref: an address to read carries no `:` or `-`\n");
         return 1;
     }
-    var diag: doc.Diagnostic = .{};
-    const records = try doc.parse(ctx.arena, ctx.in, &diag);
-    const last = records[records.len - 1];
-    if (last.sigil != .agent or last.content != null) {
-        try ctx.err.writeAll(
-            "m8 ref: this does not end on a 🧠, so there is nothing to reference; tag it first\n",
-        );
-        return 1;
-    }
-    try doc.write(ctx.out, ctx.mode, last);
+
+    const name = try address.found(ctx.arena, ctx.io, dirs, a, ctx.err);
+    var records: std.ArrayList(doc.Record) = .empty;
+    try records.append(ctx.arena, .{ .sigil = .agent, .value = name });
+
+    const prompt = try std.mem.join(ctx.arena, " ", ctx.args[1..]);
+    const asked = ledger.waiting(ctx.arena, ctx.io, dirs, name);
+    if (try assembly.said(ctx.arena, prompt, ctx.in, asked)) |r| try records.append(ctx.arena, r);
+
+    try doc.writeAll(ctx.out, ctx.mode, records.items);
     return 0;
-}
-
-// ---------------------------------------------------------------- tests
-
-const testing = std.testing;
-
-fn call(arena: std.mem.Allocator, in: []const u8, out: *std.Io.Writer, err: *std.Io.Writer) !u8 {
-    var env: std.process.Environ.Map = .init(arena);
-    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
-    defer threaded.deinit();
-    return run(.{
-        .arena = arena,
-        .io = threaded.io(),
-        .mode = .md,
-        .env = &env,
-        .args = &.{},
-        .in = in,
-        .out = out,
-        .err = err,
-        .tty = null,
-    });
-}
-
-test "what m8 @ writes becomes its 🧠 alone" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    var out: std.Io.Writer.Allocating = .init(a.allocator());
-    var err: std.Io.Writer.Allocating = .init(a.allocator());
-
-    const said = "#### :robot:\n> hi\n\n#### :brain:x/+/abcdefghij\n";
-    try testing.expectEqual(@as(u8, 0), try call(a.allocator(), said, &out.writer, &err.writer));
-    try testing.expectEqualStrings("#### :brain:x/+/abcdefghij\n", out.written());
-}
-
-test "a turn nobody kept has no reference, even with its parent in it" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    var out: std.Io.Writer.Allocating = .init(a.allocator());
-    var err: std.Io.Writer.Allocating = .init(a.allocator());
-
-    const sent = "#### :brain:x/+/parent\n\n#### :raising_hand:\n> hi\n\n#### :robot:\n> hi\n";
-    try testing.expectEqual(@as(u8, 1), try call(a.allocator(), sent, &out.writer, &err.writer));
-    try testing.expectEqualStrings("", out.written());
 }

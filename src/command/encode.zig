@@ -75,7 +75,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\The ledger arrives on stdin, with every 🧠 expanded into what it
         \\names. What comes out is one api's view of it.
         \\
-        \\  m8 cat @mathy | m8 encode m8 >ledger.md
+        \\  m8 ref @mathy | m8 encode m8 >ledger.md
         \\  m8 encode openai-completions <ledger.md >request.json
         \\
         \\Encoding is total and loses whatever the target cannot say, which is

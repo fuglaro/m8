@@ -141,6 +141,48 @@ pub fn isAgent(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []c
     return (try config.where(arena, io, dirs, try config.nameFile(arena, name))) != null;
 }
 
+/// Whether a turn, a chat's pointer or an agent is a file that is there.
+pub fn exists(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []const u8) !bool {
+    return (try config.where(arena, io, dirs, try config.nameFile(arena, name))) != null;
+}
+
+/// Whether reading `from` would come to read `ptr`.
+///
+/// A pointer may name another pointer, and that is the one way a chain of
+/// them can close on itself. Asked before `ptr` is pointed at `from`, so the
+/// loop is refused rather than found later by whoever reads it. The walk is
+/// the one `head` makes: a chat with no pointer of its own is read through
+/// the nearest one above it.
+pub fn leadsTo(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    from: []const u8,
+    ptr: []const u8,
+) ReadError!bool {
+    var at = from;
+    // Nothing else writes a pointer to a pointer, so a chain this long is a
+    // loop that was written by hand.
+    var steps: usize = 0;
+    while (steps < 4096) : (steps += 1) {
+        if (!isPointer(at)) return false;
+        if (std.mem.eql(u8, at, ptr)) return true;
+        if (std.mem.eql(u8, at, main)) {
+            at = (try deref(arena, io, dirs, main)) orelse return false;
+            continue;
+        }
+        var chat = chatOf(at);
+        at = while (true) {
+            const p = try pointerOf(arena, chat);
+            if (std.mem.eql(u8, p, ptr)) return true;
+            if (try deref(arena, io, dirs, p)) |got| break got;
+            if (try isAgent(arena, io, dirs, chat)) return false;
+            chat = std.fs.path.dirname(chat) orelse return false;
+        };
+    }
+    return true;
+}
+
 /// Where a chat has got to.
 ///
 /// A chat with no pointer of its own reads as its parent's head, which is the

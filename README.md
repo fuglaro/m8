@@ -43,6 +43,7 @@ The mission:
     bug, not a gap.
 * Opinionated on form, and nothing else.
   * Capability by composition, never a plugin api.
+* Sugar at the surface, and only there.
 * Small enough for a distribution to carry for thirty
   years.
 
@@ -467,9 +468,17 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
   makes that fresh chat the main chat, and reads as its
   parent again; only a chat has a parent to go back to.
 * It is a pipeline written once. `m8 @mathy -- hi` is
-  `echo hi | m8 cat @mathy | m8 send | m8 tag @mathy`,
-  except that the reply is shown as it arrives and
-  tagged as it goes. See Composing and Turns and chats.
+  `m8 ref @mathy hi | m8 send | m8 tag @mathy` and then
+  `m8 reset --to @mathy @`, except that the reply is
+  shown as it arrives and tagged as it goes. See
+  Composing and Turns and chats.
+* It is the shorthand, and every part of it has a plain
+  form underneath.
+  * `--`, `:` and `-` are marks a person types.
+  * A command takes a message as arguments, `--no-advance`
+    for `:`, and `m8 reset` for `-`.
+  * So a tool calling an agent passes parameters, and
+    carries no mark through one.
 * What an address reads as is appended as the 🧠 it
   settles on — the turn a chat has got to, never the
   chat — so a saved turn names its parent instead of
@@ -495,7 +504,11 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
   streamed whatever stdout is, under the 🙋 it answers.
   * It is for whatever stands between m8 and a terminal.
   * `m8 riff` is one. See Riffing.
-  * `m8 cat` takes it too: `m8 cat @mathy -p | less -R`.
+* Only `m8 @` asks what stdout is.
+  * Every command writes markdown to a terminal and a pipe
+    alike, so it is one command and not two.
+  * `m8 render` is the rendered spelling for any document:
+    `m8 ref @mathy | m8 encode | m8 render | less -R`.
 * `-v` after the address is verbose: a line on stderr for
   what the run is doing.
   * `💭 ` and the opening of a thought, said once.
@@ -528,9 +541,9 @@ of a document.
 
 ### Assembling
 
-`m8 @ADDRESS` and `m8 cat @ADDRESS` build a ledger from
-three things: what the address reads as, whatever was
-piped in, and the prompt, in that order.
+`m8 @ADDRESS` builds a ledger from three things: what
+the address reads as, whatever was piped in, and the
+prompt, in that order.
 
 ```
 nothing piped   ADDRESS → prompt
@@ -577,38 +590,91 @@ what `m8 @` does is a pipeline too, and each step can be
 had on its own:
 
 ```bash
-m8 cat @mathy | m8 send | m8 tag @mathy      what m8 @mathy does
-m8 cat @mathy | m8 tag @mathy/aside          fork, with nothing said
-m8 cat @ | m8 send | m8 tag @mathy/other     keep a run somewhere else
-m8 cat @ | m8 encode m8 | m8 save @notes     a chat, flattened into an agent
-m8 @mathy -- hi | m8 ref | m8 @critic -- "Review that."
+m8 ref @mathy hi | m8 send | m8 tag @mathy      what m8 @mathy -- hi does
+m8 ref @mathy | m8 tag @mathy/aside             fork, with nothing said
+m8 ref @ hi | m8 send | m8 tag @mathy/other     keep a run somewhere else
+m8 ref @ | m8 encode | m8 save @notes           a chat, flattened into an agent
+m8 ref @mathy | m8 encode | m8 render           a chat, as a person reads it
+m8 query @critic/job "Review that."             the reply alone, as text
 ```
 
-* `cat @X` writes the 🧠 that X reads as now, then
-  whatever was piped in. It names the turn rather than
-  the chat, so it is a snapshot that stays put when the
-  chat moves on.
+* `ref @X` writes the 🧠 that X reads as now.
+  * It names the turn rather than the chat, so it is a
+    snapshot that stays put when the chat moves on.
+  * It is a reference and not a copy, which is what lets
+    `tag` point at it without keeping it again.
+  * What it names is looked for: a turn or an agent that
+    is not there is an error, not a 🧠 for nothing.
+  * Words after the address are a message, and follow as
+    a 🙋 — or as the ❗ a chat waiting on a question is owed.
+  * Stdin is prose and joins the message.
 * `send` runs a ledger and writes the turn: the ledger
   as it arrived and whatever the run added. It keeps
   nothing, so one run can be kept wherever it is
   tagged, or nowhere.
-* `tag @X` keeps a turn and points X at it. A document
-  that is one 🧠 already names a turn and is pointed at
-  without writing anything; anything else is kept as a
-  new turn. Its output is the 🧠 now pointed at, and
-  nothing else — a ref was written, and that is its
-  receipt.
+* `tag @X` keeps a turn and points X at it.
+  * A document that is one 🧠 already names a turn and is
+    pointed at without writing anything.
+  * Anything else is kept as a new turn.
+  * Its output is the 🧠 now pointed at, and nothing
+    else — a ref was written, and that is its receipt.
+  * `--no-advance` keeps the turn and moves nothing.
+* `reset @X` takes a chat's pointer away, so it reads as
+  its parent again.
+  * `--new` starts it from the agent it is under, whatever
+    the chats above it have got to.
+  * `--to @Y` has it follow Y as named, unsettled:
+    `m8 reset --to @mathy @` puts the main chat on mathy.
+  * Something that would lead back to itself is refused.
+* `tail` writes the last record of a document, or with
+  `--sigil` the last of some kind.
+  * `--value` is the rest of its header line, and
+    `--block` is its block as the text it holds.
+  * A record with neither is an error, not an empty line.
+  * Nothing is resolved; `m8 encode` expands a 🧠 first.
+* `exclude --sigil S` writes a document back with every
+  record of the kinds named gone. See Shields.
+* `render` writes a document in the rendered spelling, and
+  `render -r` writes markdown back, which is how to check
+  that a document parses.
+* `query @X MESSAGE` is the pipeline written once more,
+  for whatever has parameters rather than a command line.
+  * It says the message, runs, keeps the run, and writes
+    the reply or the question as text.
+  * `-v` says on stderr what the run is doing, and `-vv`
+    writes the whole turn there.
+  * `--no-advance`, `--new` and `--parent` say where it
+    starts and whether anything moves.
 * `save @X` writes a document as an agent, over whatever
   was there. An agent is authored, so changing one from a
   pipe is the same as editing its file.
-* `top @X` is `cat`'s twin for 📚: it names a file for
-  what it says about itself. See Tops.
-* `ref` keeps the 🧠 a document ends on, and nothing
-  else. `m8 @X` writes the reply and then that 🧠, which
-  is what a person reads; `ref` is how it becomes what
-  the next command is handed. A turn `send` wrote was
-  never kept and ends on no 🧠, so it has nothing to
-  reference until it is tagged.
+* `top @X` is `ref`'s twin for 📚: it names a file for
+  what it says about itself, and nothing else. See Tops.
+
+A document follows an address by being written after it,
+which is all a document needs:
+
+```bash
+{ m8 ref @mathy hi; echo "#### :brain:/local/tiny"; } | m8 send
+{ m8 top @tight-docs; m8 ref @mathy "Tidy the README."; } | m8 send
+```
+
+What `m8 @X` writes ends on the 🧠 of the turn it kept,
+and `tail` is how that becomes what the next command is
+handed:
+
+```bash
+m8 ref "@$(m8 @mathy -- hi | m8 tail --value)" "Review that." | m8 send
+```
+
+A turn `send` wrote was never kept and ends on no 🧠, so
+`tail --value` has nothing to hand on until it is tagged.
+
+The main chat follows the `@` prompt and nothing else. A
+command moves the chat it names, and moves the main chat
+only when `@` is what it names — so an agent run from a
+tool keeps its own chats and never takes over the
+conversation of whoever is at the terminal.
 
 Forking a chat is naming somewhere else to tag, and
 nothing more.
@@ -696,13 +762,13 @@ name any of them. With no format named, `m8 encode` uses
 how a chat becomes one flat document.
 
 ```bash
-m8 cat @mathy | m8 encode m8
-m8 cat @mathy | m8 encode m8 >full-ledger-copy.md
+m8 ref @mathy | m8 encode m8
+m8 ref @mathy | m8 encode m8 >full-ledger-copy.md
 m8 decode m8 <full-ledger-copy.md      # the null operation
 ```
 
 ```bash
-m8 cat @mathy | m8 encode openai-completions
+m8 ref @mathy | m8 encode openai-completions
 m8 encode openai-completions <full-ledger-copy.md >openai.json
 m8 decode openai-completions <openai.json
 ```
@@ -784,7 +850,7 @@ into the records it adds to one. With it, the whole loop is
 something you can watch happen:
 
 ```bash
-echo "Say hi." | m8 cat @mathy \
+m8 ref @mathy "Say hi." \
   | m8 encode openai-completions \
   | m8 providers url \
   | m8 parse openai-completions
@@ -1216,9 +1282,8 @@ possible, and must interpret a value-only 💭 as thought text when reading it.
 * A snip goes beside the turn that names it, in its `+/`.
 * `m8 @` keeps one as it arrives.
   * The 🧠 shown is the file written.
-* `m8 send` keeps nothing, so its pipe carries the `💭snip` whole.
+* `m8 send` keeps nothing, so what it writes carries the `💭snip` whole.
   * `tag` writes the snip with the turn.
-  * On a terminal, `send` shows the header alone.
 
 ### Tops
 
@@ -1241,7 +1306,7 @@ about itself, rather than what it says.
 Two sigils reach into another file and the mark decides
 which half comes back. 🧠 wants what the file says; 📚
 wants what it says about itself. On the command line
-those are `m8 cat @` and `m8 top @`.
+those are `m8 ref @` and `m8 top @`.
 
 A file with no 🔝 is all body and has no top at all, so
 📚 naming one yields nothing rather than the whole of
@@ -1586,7 +1651,7 @@ running", because a wrapper is m8 two different ways.
   `` `m8` `shield` `ask` `{{SHIELD}}` `--` `` and nothing else.
 * A wrapper that mentions m8 inside a word says `{{M8}}`
   and that becomes the path. A script is bytes m8 does
-  not read, so a pipe through `m8 filter` needs somewhere
+  not read, so a pipe through `m8 exclude` needs somewhere
   to write where m8 is.
 
 Said in the argv either way, so the path reaches the
@@ -1697,21 +1762,19 @@ does not recognise is refused rather than ignored, so
 not understanding what was asked for is never a reason
 to apply less than was asked for.
 
-`freeze-toolbox` is a composition too, and shows what
-the mechanism buys. A tool may hand back 🧰 records —
-that is how a toolmaker works — and closing that
-channel is three filters rather than a rule:
+`freeze-toolbox` is written in the language too, and
+shows what the mechanism buys. A tool may hand back 🧰
+records — that is how a toolmaker works — and closing
+that channel is a pipe rather than a rule:
 
 ```m8
 ▐ 🛡️freeze-toolbox
-│ 🛡️filter-toolbox
-│ 🛡️filter-brain
-│ 🛡️filter-books
+│ `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} exclude --sigil toolbox --sigil brain --sigil books`
 ```
 
-Each is a pipe through `m8 filter out SIGIL`. Both
-forms of 🧰 go with the one filter, which is the point
-of their sharing a sigil: there is no spelling of
+`m8 exclude` takes out every record of the kinds it is
+told. Both forms of 🧰 go with the one name, which is the
+point of their sharing a sigil: there is no spelling of
 "define but do not offer" for a reply to reach for.
 Including an agent or a skill *is* a way to acquire a
 toolbox, so 🧠 and 📚 are named alongside 🧰 rather
@@ -1875,10 +1938,18 @@ that same folder would hide the agent without
 anyone saying so, so that is an error naming both.
 
 An agent needs no way to spawn another. Calling one is
-already a command — `m8 @team/reviewer` starts it fresh,
-and addressing a chat carries one on — so a 🧰 whose
-command is that *is* a subagent, standing inside
-whatever shields that 🧰 does.
+already a command, so a 🧰 whose command is that *is* a
+subagent, standing inside whatever shields that 🧰 does.
+
+* `m8 query --new @team/reviewer/job MESSAGE` starts one
+  fresh, from the agent as it is written.
+* The same without `--new` carries that chat on, which
+  is also how a question it asked is answered.
+* `--no-advance` asks and keeps no chat to carry on.
+* What comes back is the reply as text, so the caller is
+  handed an answer and not a ledger.
+* The main chat is not moved, so the conversation at the
+  terminal stays where it was.
 
 ### Turns and chats
 
@@ -1927,6 +1998,20 @@ parent's head. That is the whole of forking and
 resetting: a new chat starts wherever its parent
 is, and a reset one goes back to following it. The
 parent of an agent's own chat is the agent.
+
+A chat's `+.md` usually names a turn, and may name two
+other things.
+
+* The agent itself, which is what `m8 reset --new` writes:
+  the chat reads as the agent, whatever the chats above
+  it have got to.
+* Another chat, which is what `m8 reset --to` writes: it
+  is followed, and reads as wherever that chat gets to
+  until it is itself moved on.
+* The main chat on a chat is the second of those.
+* A chat following something that leads back to it is
+  the one loop a pointer could make, and is refused when
+  it is asked for.
 
 The 🧠 printed after a reply is not part of the
 turn. It is the line you would write to continue
@@ -2202,7 +2287,7 @@ is replayed through it. Nothing is kept between calls because
 there is nowhere to keep it — so the chat is the save file,
 forking a chat forks the world, and two runs of the same words
 cannot differ. Saving is not implemented and does not need to
-be: `m8 cat @ | m8 encode m8 >save.md` already is one, and
+be: `m8 ref @ | m8 encode m8 >save.md` already is one, and
 `m8 tag @zork <save.md` is the restore.
 
 The first thing you say is not played. It is hashed, and the

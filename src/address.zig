@@ -9,9 +9,11 @@
 //! `@`, `:brain:` and 🧠 all mark one, so a 🧠 line pasted back in names what
 //! it printed. A trailing `:` asks without moving anything, and a trailing
 //! `-` takes a chat's pointer away so that it reads as its parent again.
+//! Both suffixes belong to the `@` prompt; a command says the same with an
+//! option, so nothing has to carry a mark through a parameter.
 //!
-//! Resetting a chat also makes that fresh chat the main chat, so `@cody-`
-//! leaves the main conversation at cody's parent rather than at its old turn.
+//! The main chat follows the `@` prompt and nothing else. A command moves the
+//! chat it names, and moves the main chat only when that is what it names.
 //!
 //! An authored name is a path under `@/`, and the folder part is the mob —
 //! until the walk meets an agent file, after which every word is a chat under
@@ -48,6 +50,10 @@ pub const Error = error{
     AgentShadowed,
     /// A reset of something that has no pointer of its own to take away.
     NothingToReset,
+    /// A turn that was named and is not there.
+    UnknownTurn,
+    /// A pointer told to follow something that leads back to it.
+    FollowLoops,
 };
 
 /// Anything a diagnosis needs that an error name cannot carry.
@@ -157,6 +163,64 @@ pub fn read(arena: Allocator, io: std.Io, dirs: []const []const u8, a: Address) 
     };
 }
 
+/// The same, and looked for. A turn is a file, so one that is named and not
+/// there is said here rather than handed on as a 🧠 for nothing.
+///
+/// A model is not looked for: its mark is the whole of what makes it one, and
+/// which models a provider has is the provider's to say.
+pub fn found(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    a: Address,
+    err: *std.Io.Writer,
+) ![]const u8 {
+    const name = try read(arena, io, dirs, a);
+    if (session.isTurn(name) and !try session.exists(arena, io, dirs, name)) {
+        try err.print("m8: no turn named '{s}'\n", .{name});
+        return error.Said;
+    }
+    return name;
+}
+
+/// The agent a chat is under: the first agent met walking down its name.
+pub fn agentOf(arena: Allocator, io: std.Io, dirs: []const []const u8, chat: []const u8) ![]const u8 {
+    var it = std.mem.splitScalar(u8, chat, '/');
+    var end: usize = 0;
+    while (it.next()) |seg| {
+        end += seg.len;
+        if (try session.isAgent(arena, io, dirs, chat[0..end])) return chat[0..end];
+        end += 1;
+    }
+    return error.UnknownAgent;
+}
+
+/// Where a chat starts from when it is not carried on.
+pub const Start = enum {
+    /// Where it has got to.
+    head,
+    /// Its parent's head, which is what a chat with no pointer reads as.
+    parent,
+    /// The agent it is under, whatever any chat above it has got to.
+    new,
+};
+
+/// What a chat reads as when started from `start`. Only a chat has anywhere
+/// else to start from than where it is.
+pub fn readFrom(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    a: Address,
+    start: Start,
+) ![]const u8 {
+    if (start == .head) return read(arena, io, dirs, a);
+    if (a.kind != .chat) return Error.NothingToReset;
+    const agent = try agentOf(arena, io, dirs, a.name);
+    if (start == .new or std.mem.eql(u8, agent, a.name)) return agent;
+    return session.head(arena, io, dirs, std.fs.path.dirname(a.name).?);
+}
+
 /// Where a turn tagged at this address is kept.
 ///
 /// A turn goes in the `+` of the chat it advances. One that advances no chat
@@ -185,41 +249,96 @@ fn attached(arena: Allocator, io: std.Io, dirs: []const []const u8) !?[]const u8
     return session.chatOf(got);
 }
 
+/// Who is moving something, which is what decides how much moves.
+pub const Mover = enum {
+    /// The `@` prompt. The main chat goes wherever it talks.
+    prompt,
+    /// A command. It moves what it names and leaves the main chat where it
+    /// is, so an agent run by a tool never takes over the conversation of
+    /// whoever is at the terminal.
+    command,
+};
+
+/// What a tag moves.
+pub const Moving = struct {
+    mover: Mover = .command,
+    /// Keep the turn and move nothing, which is what a side question is.
+    stay: bool = false,
+};
+
 /// Move whatever this address moves to `turn`.
 ///
-/// A chat moves, and the main chat is attached to it. The main chat attached
-/// to a chat moves that chat; anything else moves the main chat itself, which
-/// is then detached. `:` moves nothing.
+/// A chat moves. The main chat attached to a chat moves that chat, and
+/// detached it moves itself. For the `@` prompt the main chat also follows:
+/// it is attached to a chat that was talked to, and pointed at the turn when
+/// a turn or a model was.
 pub fn advance(
     arena: Allocator,
     io: std.Io,
     dirs: []const []const u8,
     a: Address,
     turn: []const u8,
+    moving: Moving,
 ) !void {
-    if (a.suffix == .oneshot) return;
+    if (moving.stay or a.suffix == .oneshot) return;
     switch (a.kind) {
         .chat => {
             const ptr = try session.pointerOf(arena, a.name);
             try session.point(arena, io, dirs, ptr, turn);
-            try session.point(arena, io, dirs, session.main, ptr);
+            if (moving.mover == .prompt) try session.point(arena, io, dirs, session.main, ptr);
         },
         .main => if (try attached(arena, io, dirs)) |chat|
             try session.point(arena, io, dirs, try session.pointerOf(arena, chat), turn)
         else
             try session.point(arena, io, dirs, session.main, turn),
-        .model, .turn => try session.point(arena, io, dirs, session.main, turn),
+        .model, .turn => if (moving.mover == .prompt)
+            try session.point(arena, io, dirs, session.main, turn),
     }
 }
 
-/// Reset a chat to its parent, and make that fresh chat the main chat. Only a
-/// chat has one of its own to take: the main chat has no parent to read as, and
-/// a turn or a model is not a chat.
+/// Reset a chat to its parent. Only a chat has a pointer of its own to take:
+/// the main chat has no parent to read as, and a turn or a model is not a
+/// chat.
 pub fn reset(arena: Allocator, io: std.Io, dirs: []const []const u8, a: Address) !void {
     if (a.kind != .chat) return Error.NothingToReset;
-    const ptr = try session.pointerOf(arena, a.name);
-    try session.unpoint(arena, io, dirs, ptr);
-    try session.point(arena, io, dirs, session.main, ptr);
+    try session.unpoint(arena, io, dirs, try session.pointerOf(arena, a.name));
+}
+
+/// Reset a chat to the agent it is under, so it reads as that agent whatever
+/// the chats above it have got to.
+pub fn renew(arena: Allocator, io: std.Io, dirs: []const []const u8, a: Address) !void {
+    if (a.kind != .chat) return Error.NothingToReset;
+    const agent = try agentOf(arena, io, dirs, a.name);
+    try session.point(arena, io, dirs, try session.pointerOf(arena, a.name), agent);
+}
+
+/// Point a chat, or the main chat, at `target` as it is named.
+///
+/// Nothing is settled, which is the difference from tagging a 🧠: a chat
+/// named here is followed, so what points at it reads as wherever that chat
+/// gets to. It is how the main chat is attached to a chat.
+///
+/// A pointer that names a pointer is the one place a loop can be written, so
+/// one that would lead back to itself is refused before it is.
+pub fn follow(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    a: Address,
+    target: Address,
+) !void {
+    const ptr = switch (a.kind) {
+        .main => session.main,
+        .chat => try session.pointerOf(arena, a.name),
+        .model, .turn => return Error.NothingToReset,
+    };
+    const named = switch (target.kind) {
+        .main => session.main,
+        .chat => try session.pointerOf(arena, target.name),
+        .model, .turn => target.name,
+    };
+    if (try session.leadsTo(arena, io, dirs, named, ptr)) return Error.FollowLoops;
+    try session.point(arena, io, dirs, ptr, named);
 }
 
 /// Keep `records` as a turn tagged at `a`, and move what `a` moves.
@@ -233,6 +352,7 @@ pub fn tag(
     dirs: []const []const u8,
     a: Address,
     records: []const doc.Record,
+    moving: Moving,
 ) ![]const u8 {
     const settled = try session.settleAll(arena, io, dirs, records);
     const turn = if (settled.len == 1 and settled[0].sigil == .agent and settled[0].content == null)
@@ -245,7 +365,7 @@ pub fn tag(
         try session.write(arena, io, dirs, name, settled);
         break :blk name;
     };
-    try advance(arena, io, dirs, a, turn);
+    try advance(arena, io, dirs, a, turn, moving);
     return turn;
 }
 
@@ -330,7 +450,7 @@ test "a chat named like an agent beside it is said, not chosen" {
     try testing.expectEqualStrings("team/lead/plan", lead.name);
 }
 
-test "tagging keeps a turn in the chat it advances, and moves main with it" {
+test "tagging keeps a turn in the chat it advances, and the prompt takes main with it" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -342,12 +462,13 @@ test "tagging keeps a turn in the chat it advances, and moves main with it" {
     try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
     const dirs = [_][]const u8{f.dir};
     var d: Diagnostic = .{};
+    const prompt: Moving = .{ .mover = .prompt };
 
     const chat = try resolve(arena, f.io, &dirs, "@mob/agent/c1", &d);
     const turn = try tag(arena, f.io, &dirs, chat, &.{
         .{ .sigil = .agent, .value = try read(arena, f.io, &dirs, chat) },
         .{ .sigil = .user, .content = "hi" },
-    });
+    }, prompt);
     try testing.expect(std.mem.startsWith(u8, turn, "mob/agent/c1/+/"));
     try testing.expectEqualStrings(turn, try read(arena, f.io, &dirs, chat));
     try testing.expectEqualStrings("mob/agent/c1/+", (try session.deref(arena, f.io, &dirs, session.main)).?);
@@ -357,33 +478,171 @@ test "tagging keeps a turn in the chat it advances, and moves main with it" {
     const next = try tag(arena, f.io, &dirs, main, &.{
         .{ .sigil = .agent, .value = turn },
         .{ .sigil = .user, .content = "more" },
-    });
+    }, .{});
     try testing.expectEqualStrings(next, try read(arena, f.io, &dirs, chat));
 
-    // A one-shot is kept beside nothing new and moves nothing.
+    // A one-shot is kept beside nothing new and moves nothing, whether the
+    // prompt wrote it as a `:` or a command was told to stay.
     const side = try resolve(arena, f.io, &dirs, "@mob/agent/c1:", &d);
     const aside = try tag(arena, f.io, &dirs, side, &.{
         .{ .sigil = .agent, .value = next },
         .{ .sigil = .user, .content = "by the way" },
-    });
+    }, prompt);
     try testing.expect(std.mem.startsWith(u8, aside, "mob/agent/c1/+/"));
+    try testing.expectEqualStrings(next, try read(arena, f.io, &dirs, chat));
+    const stayed = try tag(arena, f.io, &dirs, chat, &.{
+        .{ .sigil = .agent, .value = next },
+        .{ .sigil = .user, .content = "and another" },
+    }, .{ .stay = true });
+    try testing.expect(std.mem.startsWith(u8, stayed, "mob/agent/c1/+/"));
     try testing.expectEqualStrings(next, try read(arena, f.io, &dirs, chat));
 
     // A turn named outright detaches main, and a lone 🧠 is pointed at.
     const ref = try resolve(arena, f.io, &dirs, try std.fmt.allocPrint(arena, "@{s}", .{aside}), &d);
     try testing.expectEqualStrings(aside, try tag(arena, f.io, &dirs, ref, &.{
         .{ .sigil = .agent, .value = aside },
-    }));
+    }, prompt));
     try testing.expectEqualStrings(aside, (try session.deref(arena, f.io, &dirs, session.main)).?);
 
     // Forking is naming somewhere else to tag.
     const fork = try resolve(arena, f.io, &dirs, "@mob/agent/c2", &d);
-    _ = try tag(arena, f.io, &dirs, fork, &.{.{ .sigil = .agent, .value = aside }});
+    _ = try tag(arena, f.io, &dirs, fork, &.{.{ .sigil = .agent, .value = aside }}, .{});
     try testing.expectEqualStrings(aside, try read(arena, f.io, &dirs, fork));
 
     // Resetting reads as the parent again, and only a chat has one.
     try reset(arena, f.io, &dirs, fork);
     try testing.expectEqualStrings("mob/agent", try read(arena, f.io, &dirs, fork));
-    try testing.expectEqualStrings("mob/agent", try read(arena, f.io, &dirs, main));
     try testing.expectError(Error.NothingToReset, reset(arena, f.io, &dirs, main));
+}
+
+test "a command moves the chat it names and leaves the main chat alone" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-address-command");
+    defer f.deinit();
+    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "mob/critic.md", "#### :brain:/local/tiny\n");
+    const dirs = [_][]const u8{f.dir};
+    var d: Diagnostic = .{};
+
+    // Somebody is at the terminal, talking to one agent.
+    const mine = try resolve(arena, f.io, &dirs, "@mob/agent", &d);
+    const said = try tag(arena, f.io, &dirs, mine, &.{
+        .{ .sigil = .agent, .value = "mob/agent" },
+        .{ .sigil = .user, .content = "hi" },
+    }, .{ .mover = .prompt });
+    try testing.expectEqualStrings("mob/agent/+", (try session.deref(arena, f.io, &dirs, session.main)).?);
+
+    // A tool runs another. Its chat moves; whose conversation it is does not.
+    const sub = try resolve(arena, f.io, &dirs, "@mob/critic/job", &d);
+    const job = try tag(arena, f.io, &dirs, sub, &.{
+        .{ .sigil = .agent, .value = "mob/critic" },
+        .{ .sigil = .user, .content = "review that" },
+    }, .{});
+    try testing.expectEqualStrings(job, try read(arena, f.io, &dirs, sub));
+    try testing.expectEqualStrings("mob/agent/+", (try session.deref(arena, f.io, &dirs, session.main)).?);
+    try testing.expectEqualStrings(said, try read(arena, f.io, &dirs, try resolve(arena, f.io, &dirs, "@", &d)));
+
+    // Nor does naming a turn, which a command only keeps something beside.
+    const turn = try resolve(arena, f.io, &dirs, try std.fmt.allocPrint(arena, "@{s}", .{job}), &d);
+    _ = try tag(arena, f.io, &dirs, turn, &.{.{ .sigil = .agent, .value = job }}, .{});
+    try testing.expectEqualStrings("mob/agent/+", (try session.deref(arena, f.io, &dirs, session.main)).?);
+}
+
+test "a chat starts from where it is, from its parent, or from its agent" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-address-start");
+    defer f.deinit();
+    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
+    const dirs = [_][]const u8{f.dir};
+    var d: Diagnostic = .{};
+
+    const own = try resolve(arena, f.io, &dirs, "@mob/agent", &d);
+    const talked = try tag(arena, f.io, &dirs, own, &.{
+        .{ .sigil = .agent, .value = "mob/agent" },
+        .{ .sigil = .user, .content = "hi" },
+    }, .{});
+    const job = try resolve(arena, f.io, &dirs, "@mob/agent/job", &d);
+    const done = try tag(arena, f.io, &dirs, job, &.{
+        .{ .sigil = .agent, .value = talked },
+        .{ .sigil = .user, .content = "more" },
+    }, .{});
+
+    try testing.expectEqualStrings(done, try readFrom(arena, f.io, &dirs, job, .head));
+    // A chat nobody has used reads as its parent, which has been talked to.
+    try testing.expectEqualStrings(talked, try readFrom(arena, f.io, &dirs, job, .parent));
+    // The agent is what nobody has said anything to.
+    try testing.expectEqualStrings("mob/agent", try readFrom(arena, f.io, &dirs, job, .new));
+    try testing.expectEqualStrings("mob/agent", try readFrom(arena, f.io, &dirs, own, .parent));
+    try testing.expectError(
+        Error.NothingToReset,
+        readFrom(arena, f.io, &dirs, try resolve(arena, f.io, &dirs, "@", &d), .new),
+    );
+
+    // Renewing writes that down, so the chat reads as its agent from then on.
+    try renew(arena, f.io, &dirs, job);
+    try testing.expectEqualStrings("mob/agent", try read(arena, f.io, &dirs, job));
+    try reset(arena, f.io, &dirs, job);
+    try testing.expectEqualStrings(talked, try read(arena, f.io, &dirs, job));
+}
+
+test "following is unsettled, and never leads back to itself" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-address-follow");
+    defer f.deinit();
+    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
+    const dirs = [_][]const u8{f.dir};
+    var d: Diagnostic = .{};
+
+    const main = try resolve(arena, f.io, &dirs, "@", &d);
+    const one = try resolve(arena, f.io, &dirs, "@mob/agent/one", &d);
+    const two = try resolve(arena, f.io, &dirs, "@mob/agent/two", &d);
+    const first = try tag(arena, f.io, &dirs, one, &.{
+        .{ .sigil = .agent, .value = "mob/agent" },
+        .{ .sigil = .user, .content = "hi" },
+    }, .{});
+
+    // The main chat is put on a chat by following it.
+    try follow(arena, f.io, &dirs, main, one);
+    try testing.expectEqualStrings("mob/agent/one/+", (try session.deref(arena, f.io, &dirs, session.main)).?);
+    try testing.expectEqualStrings(first, try read(arena, f.io, &dirs, main));
+
+    // A chat following a chat reads as wherever that one gets to.
+    try follow(arena, f.io, &dirs, two, one);
+    const second = try tag(arena, f.io, &dirs, one, &.{
+        .{ .sigil = .agent, .value = first },
+        .{ .sigil = .user, .content = "more" },
+    }, .{});
+    try testing.expectEqualStrings(second, try read(arena, f.io, &dirs, two));
+
+    // Straight back, round through another, and through a chat that only
+    // reads as the one above it.
+    try testing.expectError(Error.FollowLoops, follow(arena, f.io, &dirs, one, one));
+    try testing.expectError(Error.FollowLoops, follow(arena, f.io, &dirs, one, two));
+    try testing.expectError(Error.FollowLoops, follow(arena, f.io, &dirs, one, main));
+    const under = try resolve(arena, f.io, &dirs, "@mob/agent/one/under", &d);
+    try testing.expectError(Error.FollowLoops, follow(arena, f.io, &dirs, one, under));
+    try testing.expectEqualStrings(second, try read(arena, f.io, &dirs, one));
+
+    // A turn that was named has to be there.
+    var err: std.Io.Writer.Allocating = .init(arena);
+    const gone = try resolve(arena, f.io, &dirs, "@mob/agent/+/nothinghere", &d);
+    try testing.expectError(error.Said, found(arena, f.io, &dirs, gone, &err.writer));
+    try testing.expectEqualStrings("m8: no turn named 'mob/agent/+/nothinghere'\n", err.written());
+    const kept = try resolve(arena, f.io, &dirs, try std.fmt.allocPrint(arena, "@{s}", .{first}), &d);
+    try testing.expectEqualStrings(first, try found(arena, f.io, &dirs, kept, &err.writer));
 }

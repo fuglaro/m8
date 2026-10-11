@@ -1,6 +1,6 @@
-//! `filter` — read m8 and write it back with one kind of record gone.
+//! `exclude` — read m8 and write it back with some kinds of record gone.
 //!
-//! A line at a time, and never more than one line held. A filter sits in the
+//! A line at a time, and never more than one line held. It sits in the
 //! middle of a shield's pipe, where what comes through it is whatever a tool
 //! decided to say — which may be more than there is memory for. Reading the
 //! document whole to decide which records to drop would put a ceiling on a
@@ -10,10 +10,9 @@
 //! first line, and every line under it is quoted, so knowing whether to write
 //! this line is one bool and the sigil that set it.
 //!
-//! One sigil per invocation, and nothing clever. Composition is what a shield
-//! is for, so `m8 filter out toolbox` does exactly that and a shield that also
-//! wants 🧠 and 📚 gone stacks another filter rather than asking this one to
-//! have an opinion about what a reference might be carrying.
+//! Which kinds go is named, and nothing clever is done about what they hold.
+//! A shield that wants 🧠 and 📚 gone as well as 🧰 says so, rather than this
+//! having an opinion about what a reference might be carrying.
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
@@ -22,15 +21,15 @@ const api = @import("api.zig");
 const Ctx = api.Ctx;
 
 pub const Error = error{
-    /// No `out`, or nothing after it.
+    /// No `--sigil`, or nothing after one.
     NothingNamed,
     /// A word that is not a sigil in the plain spelling.
     UnknownSigil,
 };
 
 pub const command: api.Command = .{
-    .name = "filter",
-    .summary = "write a document back with one kind of record gone",
+    .name = "exclude",
+    .summary = "write a document back with some kinds of record gone",
     // Stdin is this command's own, because it reads it as it arrives rather
     // than being handed all of it.
     .takes = .nothing,
@@ -41,17 +40,16 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 filter — write a document back with one kind of record gone
+        \\m8 exclude — write a document back with some kinds of record gone
         \\
-        \\  m8 filter out SIGIL
+        \\  m8 exclude --sigil SIGIL [--sigil SIGIL]...
         \\
         \\SIGIL is a sigil's plain spelling without the colons: `toolbox`,
-        \\`brain`, `books`. One kind per invocation, so a shield that wants
-        \\several stacks several:
+        \\`brain`, `books`. It is the other half of `m8 tail --sigil`, which
+        \\keeps one record where this drops every one of a kind.
         \\
         \\  ▐ 🛡️freeze-toolbox
-        \\  │ 🛡️filter-toolbox
-        \\  │ 🛡️filter-brain
+        \\  │ `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} exclude --sigil toolbox --sigil brain --sigil books`
         \\
         \\Read a line at a time and never holding more than one, so a tool may
         \\say more than there is memory for and this will not be what stops it.
@@ -67,24 +65,25 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
 }
 
 fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len < 2 or !std.mem.eql(u8, ctx.args[0], "out")) {
-        try ctx.err.writeAll("m8 filter: say what to take out, as `m8 filter out SIGIL`\n");
+    var wanted: std.ArrayList(sigil.Sigil) = .empty;
+    var i: usize = 0;
+    while (i < ctx.args.len) : (i += 2) {
+        if (!std.mem.eql(u8, ctx.args[i], "--sigil") or i + 1 == ctx.args.len) break;
+        try wanted.append(ctx.arena, sigil.named(ctx.args[i + 1]) orelse {
+            try ctx.err.print("m8 exclude: '{s}' is not a sigil\n", .{ctx.args[i + 1]});
+            return Error.UnknownSigil;
+        });
+    }
+    if (wanted.items.len == 0 or i < ctx.args.len) {
+        try ctx.err.writeAll("m8 exclude: say what to take out, as `m8 exclude --sigil SIGIL`\n");
         return Error.NothingNamed;
     }
-
-    const wanted = for (std.enums.values(sigil.Sigil)) |s| {
-        const w = s.word();
-        if (std.mem.eql(u8, w[1 .. w.len - 1], ctx.args[1])) break s;
-    } else {
-        try ctx.err.print("m8 filter: '{s}' is not a sigil\n", .{ctx.args[1]});
-        return Error.UnknownSigil;
-    };
 
     var buf: [64 * 1024]u8 = undefined;
     const in = std.Io.File.stdin();
     if (try in.isTty(ctx.io)) return 0;
     var r = in.readerStreaming(ctx.io, &buf);
-    return through(ctx, &r.interface, wanted);
+    return through(ctx, &r.interface, wanted.items);
 }
 
 /// The state is one bool: whether the record being read is one to drop.
@@ -92,7 +91,7 @@ fn run(ctx: Ctx) !u8 {
 /// Which spelling the document is in is settled by its first line, the same
 /// way it is settled anywhere else, and a line that is not a header belongs to
 /// whatever header last claimed one.
-fn through(ctx: Ctx, r: *std.Io.Reader, wanted: sigil.Sigil) !u8 {
+fn through(ctx: Ctx, r: *std.Io.Reader, wanted: []const sigil.Sigil) !u8 {
     var mode: ?doc.Mode = null;
     var dropping = false;
 
@@ -138,7 +137,7 @@ fn through(ctx: Ctx, r: *std.Io.Reader, wanted: sigil.Sigil) !u8 {
         const head = doc.header(mode.?);
         if (std.mem.startsWith(u8, line, head)) {
             const m = sigil.match(mode.?, line[head.len..]);
-            dropping = m != null and m.?.sigil == wanted;
+            dropping = if (m) |found| std.mem.indexOfScalar(sigil.Sigil, wanted, found.sigil) != null else false;
         }
 
         if (!dropping) try ctx.out.writeAll(raw);
@@ -152,8 +151,12 @@ fn through(ctx: Ctx, r: *std.Io.Reader, wanted: sigil.Sigil) !u8 {
 
 const testing = std.testing;
 
-/// Run the filter over some bytes, the way a shield's pipe does.
+/// Run it over some bytes, the way a shield's pipe does.
 fn filtered(arena: std.mem.Allocator, in: []const u8, wanted: sigil.Sigil) ![]const u8 {
+    return without(arena, in, &.{wanted});
+}
+
+fn without(arena: std.mem.Allocator, in: []const u8, wanted: []const sigil.Sigil) ![]const u8 {
     var r: std.Io.Reader = .fixed(in);
     var out: std.Io.Writer.Allocating = .init(arena);
     var err: std.Io.Writer.Allocating = .init(arena);
@@ -199,5 +202,18 @@ test "text goes through whole, and a record still goes" {
     try testing.expectEqualStrings(
         "#### :robot:\n> kept\n",
         try filtered(arena, "#### :toolbox:x\n> gone\n\n#### :robot:\n> kept\n", .tool),
+    );
+}
+
+test "every kind named goes, and nothing else" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const said = "#### :toolbox:x\n> gone\n\n#### :receipt:c1\n> kept\n\n" ++
+        "#### :brain:somebody\n\n#### :books:skill\n\n#### :green_circle:c1\n";
+    try testing.expectEqualStrings(
+        "#### :receipt:c1\n> kept\n\n#### :green_circle:c1\n",
+        try without(arena, said, &.{ .tool, .agent, .skill }),
     );
 }
