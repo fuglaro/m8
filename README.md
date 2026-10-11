@@ -475,7 +475,7 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
 * It is the shorthand, and every part of it has a plain
   form underneath.
   * `--`, `:` and `-` are marks a person types.
-  * A command takes a message as arguments, `--no-advance`
+  * A command takes a message as one argument, `--no-advance`
     for `:`, and `m8 reset` for `-`.
   * So a tool calling an agent passes parameters, and
     carries no mark through one.
@@ -605,9 +605,11 @@ m8 query @critic/job "Review that."             the reply alone, as text
     `tag` point at it without keeping it again.
   * What it names is looked for: a turn or an agent that
     is not there is an error, not a 🧠 for nothing.
-  * Words after the address are a message, and follow as
-    a 🙋 — or as the ❗ a chat waiting on a question is owed.
-  * Stdin is prose and joins the message.
+  * One argument after the address is a message, and follows
+    as a 🙋 — or as the ❗ a chat waiting on a question is owed.
+  * `--piped` reads stdin as prose and says that too.
+    Without it stdin is left alone, so a `ref` run by a
+    tool never waits on a pipe that is not its own.
 * `send` runs a ledger and writes the turn: the ledger
   as it arrived and whatever the run added. It keeps
   nothing, so one run can be kept wherever it is
@@ -645,6 +647,7 @@ m8 query @critic/job "Review that."             the reply alone, as text
     writes the whole turn there.
   * `--no-advance`, `--new` and `--parent` say where it
     starts and whether anything moves.
+  * `--piped` reads stdin as prose, as it does for `ref`.
 * `save @X` writes a document as an agent, over whatever
   was there. An agent is authored, so changing one from a
   pipe is the same as editing its file.
@@ -2002,9 +2005,10 @@ parent of an agent's own chat is the agent.
 A chat's `+.md` usually names a turn, and may name two
 other things.
 
-* The agent itself, which is what `m8 reset --new` writes:
-  the chat reads as the agent, whatever the chats above
-  it have got to.
+* The agent itself, which is what `m8 reset --new` writes
+  when a chat above has moved on: the chat reads as the
+  agent all the same. Where taking the `+.md` away already
+  reads as the agent, that is all `--new` does.
 * Another chat, which is what `m8 reset --to` writes: it
   is followed, and reads as wherever that chat gets to
   until it is itself moved on.

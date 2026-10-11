@@ -20,13 +20,6 @@ const sigil = @import("../m8/sigil.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
 
-pub const Error = error{
-    /// No `--sigil`, or nothing after one.
-    NothingNamed,
-    /// A word that is not a sigil in the plain spelling.
-    UnknownSigil,
-};
-
 pub const command: api.Command = .{
     .name = "exclude",
     .summary = "write a document back with some kinds of record gone",
@@ -71,12 +64,12 @@ fn run(ctx: Ctx) !u8 {
         if (!std.mem.eql(u8, ctx.args[i], "--sigil") or i + 1 == ctx.args.len) break;
         try wanted.append(ctx.arena, sigil.named(ctx.args[i + 1]) orelse {
             try ctx.err.print("m8 exclude: '{s}' is not a sigil\n", .{ctx.args[i + 1]});
-            return Error.UnknownSigil;
+            return 1;
         });
     }
     if (wanted.items.len == 0 or i < ctx.args.len) {
         try ctx.err.writeAll("m8 exclude: say what to take out, as `m8 exclude --sigil SIGIL`\n");
-        return Error.NothingNamed;
+        return 1;
     }
 
     var buf: [64 * 1024]u8 = undefined;

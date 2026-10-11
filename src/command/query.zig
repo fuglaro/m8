@@ -7,8 +7,8 @@
 //! as it goes and a run that dies keeps everything up to where it died.
 //!
 //! It is the form of the `@` prompt that something with parameters calls: an
-//! address, then the message, and options in front where a message can never
-//! be mistaken for one. What comes back is text, with the ledger kept out of
+//! address, then the message as one argument, and options in front where a
+//! message can never be mistaken for one. What comes back is text, with the ledger kept out of
 //! the way, which is what a 🧰 running an agent wants to hand its caller.
 //!
 //! The main chat is left where it is, so an agent run this way from a tool
@@ -28,8 +28,9 @@ const Ctx = api.Ctx;
 pub const command: api.Command = .{
     .name = "query",
     .summary = "say something to a chat, and answer with what it said back",
-    // Its message is its arguments. Run by a tool, stdin is whatever that
-    // tool was handed, which is not this command's to wait on.
+    // Its message is its argument. Run by a tool, stdin is whatever that tool
+    // was handed, which is not this command's to wait on unless `--piped`
+    // says it is.
     .takes = .nothing,
     .run = run,
     .help = help,
@@ -40,7 +41,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 query — say something to a chat, and answer with what it said back
         \\
-        \\  m8 query [-v | -vv] [--no-advance] [--new | --parent] @ADDRESS MESSAGE
+        \\  m8 query [-v | -vv] [--no-advance] [--new | --parent] [--piped] @ADDRESS [MESSAGE]
         \\
         \\Says MESSAGE to the address, runs until it replies or asks, keeps
         \\the run, and writes the reply as the text it is. The ledger is not
@@ -49,12 +50,13 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 query @mathy "What is a Riemann sphere?"
         \\  m8 query @critic/job-1 "Review that."        a chat of its own
         \\
-        \\Every word after the address is the message, so one that opens
+        \\MESSAGE is the one argument after the address, so one that opens
         \\with a dash is still the message. Options go before the address.
         \\
         \\  --no-advance   keep the run and move nothing: a side question
         \\  --new          start from the agent, not from where the chat is
         \\  --parent       start from where the chat's parent is
+        \\  --piped        read stdin as prose, and say it after the MESSAGE
         \\  -v             on stderr, a line as it thinks and as it calls a tool
         \\  -vv            on stderr, the whole turn as it is made
         \\
@@ -82,8 +84,9 @@ fn run(ctx: Ctx) !u8 {
     var whole = false;
     var moving: address.Moving = .{};
     var start: address.Start = .head;
+    var piped = false;
 
-    // Options end at the address. Everything after it is what was said.
+    // Options end at the address. The one argument after it is what was said.
     var i: usize = 0;
     while (i < ctx.args.len and !address.isAddress(ctx.args[i])) : (i += 1) {
         const arg = ctx.args[i];
@@ -93,6 +96,8 @@ fn run(ctx: Ctx) !u8 {
             whole = true;
         } else if (std.mem.eql(u8, arg, "--no-advance")) {
             moving.stay = true;
+        } else if (std.mem.eql(u8, arg, "--piped")) {
+            piped = true;
         } else if (std.mem.eql(u8, arg, "--new") and start == .head) {
             start = .new;
         } else if (std.mem.eql(u8, arg, "--parent") and start == .head) {
@@ -102,8 +107,8 @@ fn run(ctx: Ctx) !u8 {
             return 1;
         }
     }
-    if (i == ctx.args.len) {
-        try ctx.err.writeAll("m8 query: name one @ADDRESS, and then what to say to it\n");
+    if (i == ctx.args.len or ctx.args.len > i + 2) {
+        try ctx.err.writeAll("m8 query: name one @ADDRESS, and then one MESSAGE to say to it\n");
         return 1;
     }
 
@@ -126,9 +131,11 @@ fn run(ctx: Ctx) !u8 {
     else
         try address.readFrom(arena, io, dirs, a, start);
 
-    const prompt = try std.mem.join(arena, " ", ctx.args[i + 1 ..]);
-    const said = (try assembly.said(arena, prompt, "", ledger.waiting(arena, io, dirs, name))) orelse {
-        try ctx.err.writeAll("m8 query: say something after the address\n");
+    const prompt = if (ctx.args.len == i + 2) ctx.args[i + 1] else "";
+    var in_buf: [64 * 1024]u8 = undefined;
+    const prose = if (piped) try api.readDocument(io, arena, &in_buf) else "";
+    const said = (try assembly.said(arena, prompt, prose, ledger.waiting(arena, io, dirs, name))) orelse {
+        try ctx.err.writeAll("m8 query: say something after the address, or pipe it in with `--piped`\n");
         return 1;
     };
     const given = [_]doc.Record{ .{ .sigil = .agent, .value = name }, said };

@@ -8,9 +8,11 @@
 //! What is named is looked for. A 🧠 written for a turn nobody kept would be
 //! the ledger saying something that did not happen.
 //!
-//! Anything said follows the 🧠, as arguments or on stdin. Stdin is always
-//! prose here: a document that should follow an address is concatenated after
-//! this one, which is all a document needs.
+//! Anything said follows the 🧠, as one argument. Stdin is read only when
+//! `--piped` asks for it, so this never waits on a pipe somebody else is
+//! holding open, and never takes input that was meant for whatever ran it.
+//! What it reads is always prose: a document that should follow an address is
+//! concatenated after this one, which is all a document needs.
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
@@ -24,6 +26,8 @@ const Ctx = api.Ctx;
 pub const command: api.Command = .{
     .name = "ref",
     .summary = "the 🧠 an address reads as, and what is said to it",
+    // Stdin is read when `--piped` says to, and is otherwise left alone.
+    .takes = .nothing,
     .run = run,
     .help = help,
 };
@@ -33,7 +37,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 ref — the 🧠 an address reads as, and what is said to it
         \\
-        \\  m8 ref @ADDRESS [MESSAGE]
+        \\  m8 ref [--piped] @ADDRESS [MESSAGE]
         \\
         \\Writes the 🧠 that address reads as now — the turn a chat has got
         \\to, not the chat's name, so it stays put when the chat moves on. A
@@ -45,11 +49,15 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 ref @mathy | m8 encode                  the whole chat, flat
         \\
         \\A MESSAGE follows the 🧠 as a 🙋, or as the ❗ that answers a chat
-        \\waiting on a question. Every word after the address is the message,
-        \\so none of them is read as an option. Stdin is prose and joins it.
+        \\waiting on a question. It is one argument, and whatever it opens
+        \\with it is never read as an option.
+        \\
+        \\`--piped` reads stdin as prose and says that too, after the MESSAGE
+        \\when there is one. Without it stdin is not touched.
         \\
         \\  m8 ref @mathy "and in one sentence?" | m8 send | m8 tag @mathy
-        \\  echo "and in one sentence?" | m8 ref @mathy | m8 send
+        \\  echo "and in one sentence?" | m8 ref --piped @mathy | m8 send
+        \\  m8 ref --piped @mathy "Summarize:" <notes.txt | m8 send
         \\
         \\A document follows an address by being written after it:
         \\
@@ -64,12 +72,18 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
 }
 
 fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len == 0 or !address.isAddress(ctx.args[0])) {
-        try ctx.err.writeAll("m8 ref: name one @ADDRESS, and then anything to say to it\n");
+    var args = ctx.args;
+    const piped = args.len > 0 and std.mem.eql(u8, args[0], "--piped");
+    if (piped) args = args[1..];
+    if (args.len == 0 or args.len > 2 or !address.isAddress(args[0])) {
+        try ctx.err.writeAll(
+            "m8 ref: name one @ADDRESS, after `--piped` if stdin is said to it, " ++
+                "and then one MESSAGE if anything is\n",
+        );
         return 1;
     }
     const dirs = try config.discover(ctx.arena, ctx.io, ctx.env);
-    const a = try address.typed(ctx.arena, ctx.io, dirs, ctx.args[0], ctx.err);
+    const a = try address.typed(ctx.arena, ctx.io, dirs, args[0], ctx.err);
     if (a.suffix != .none) {
         try ctx.err.writeAll("m8 ref: an address to read carries no `:` or `-`\n");
         return 1;
@@ -79,9 +93,11 @@ fn run(ctx: Ctx) !u8 {
     var records: std.ArrayList(doc.Record) = .empty;
     try records.append(ctx.arena, .{ .sigil = .agent, .value = name });
 
-    const prompt = try std.mem.join(ctx.arena, " ", ctx.args[1..]);
+    const prompt = if (args.len == 2) args[1] else "";
+    var buf: [64 * 1024]u8 = undefined;
+    const prose = if (piped) try api.readDocument(ctx.io, ctx.arena, &buf) else "";
     const asked = ledger.waiting(ctx.arena, ctx.io, dirs, name);
-    if (try assembly.said(ctx.arena, prompt, ctx.in, asked)) |r| try records.append(ctx.arena, r);
+    if (try assembly.said(ctx.arena, prompt, prose, asked)) |r| try records.append(ctx.arena, r);
 
     try doc.writeAll(ctx.out, ctx.mode, records.items);
     return 0;

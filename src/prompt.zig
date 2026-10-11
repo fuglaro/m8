@@ -1,6 +1,6 @@
 //! `m8 @ADDRESS [-- WORDS]` — the pipeline written once.
 //!
-//!     m8 ref @ADDRESS WORDS | m8 send | m8 tag @ADDRESS
+//!     m8 ref --piped @ADDRESS WORDS | m8 send | m8 tag @ADDRESS
 //!     m8 reset --to @ADDRESS @
 //!
 //! is what this does, and it is kept exactly that: the same assembly, the

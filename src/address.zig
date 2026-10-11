@@ -306,10 +306,18 @@ pub fn reset(arena: Allocator, io: std.Io, dirs: []const []const u8, a: Address)
 
 /// Reset a chat to the agent it is under, so it reads as that agent whatever
 /// the chats above it have got to.
+///
+/// Taking the pointer away is enough whenever the chat would then read as
+/// the agent anyway, and that is what is done: a chat with no pointer says
+/// nothing that could go stale. Only when something above it has moved on is
+/// the agent written down, because nothing else would say it.
 pub fn renew(arena: Allocator, io: std.Io, dirs: []const []const u8, a: Address) !void {
     if (a.kind != .chat) return Error.NothingToReset;
     const agent = try agentOf(arena, io, dirs, a.name);
-    try session.point(arena, io, dirs, try session.pointerOf(arena, a.name), agent);
+    const ptr = try session.pointerOf(arena, a.name);
+    if (std.mem.eql(u8, try readFrom(arena, io, dirs, a, .parent), agent))
+        return session.unpoint(arena, io, dirs, ptr);
+    try session.point(arena, io, dirs, ptr, agent);
 }
 
 /// Point a chat, or the main chat, at `target` as it is named.
@@ -588,11 +596,26 @@ test "a chat starts from where it is, from its parent, or from its agent" {
         readFrom(arena, f.io, &dirs, try resolve(arena, f.io, &dirs, "@", &d), .new),
     );
 
-    // Renewing writes that down, so the chat reads as its agent from then on.
+    // Renewing writes that down, because the chat above has moved on and
+    // nothing else would say it.
     try renew(arena, f.io, &dirs, job);
     try testing.expectEqualStrings("mob/agent", try read(arena, f.io, &dirs, job));
+    try testing.expectEqualStrings("mob/agent", (try session.deref(arena, f.io, &dirs, "mob/agent/job/+")).?);
     try reset(arena, f.io, &dirs, job);
     try testing.expectEqualStrings(talked, try read(arena, f.io, &dirs, job));
+
+    // Where taking the pointer away already reads as the agent, that is all
+    // it does: the agent's own chat, and then a chat under it.
+    try renew(arena, f.io, &dirs, own);
+    try testing.expectEqualStrings("mob/agent", try read(arena, f.io, &dirs, own));
+    try testing.expect(try session.deref(arena, f.io, &dirs, "mob/agent/+") == null);
+    _ = try tag(arena, f.io, &dirs, job, &.{
+        .{ .sigil = .agent, .value = "mob/agent" },
+        .{ .sigil = .user, .content = "again" },
+    }, .{});
+    try renew(arena, f.io, &dirs, job);
+    try testing.expectEqualStrings("mob/agent", try read(arena, f.io, &dirs, job));
+    try testing.expect(try session.deref(arena, f.io, &dirs, "mob/agent/job/+") == null);
 }
 
 test "following is unsettled, and never leads back to itself" {
