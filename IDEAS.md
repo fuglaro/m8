@@ -2,56 +2,40 @@
 
 ## TODO (Upcoming and WIP)
 
-* Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
 * Cody needs to be able to have sub-agents so it isn't a token burner.
-* Jed style classifier auto-tool approval?
-* System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger).
 * m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
-* Token amounts as ignored metadata lines?
-  * Do they belong in history at all?
 
-----
-
-## Mission
-
-Review everything again on the mission statement in the README.md
-
-## Layers
-
-* Framework - form; holds no opinion.
-* Distribution - shipped defaults; the operator's to replace.
-* Fun - proof the form holds.
-
-
+* Review everything again on the mission statement in the README.md.
 
 ## Framework
 
-* Validate and document common workflow can be reasonably composed with components.
-* Cache breakpoint managment. 5min ttl in tool loops - upgrade to 1hr on hand to user? Options on model def? or provider directive sigils? Or just do in providers?
+* Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
+* Cache breakpoint managment:
+  * 5min ttl in tool loops - upgrade to 1hr on hand to user?
+  * Options on model def? or provider directive sigils? Or just do in providers?
+* System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger).
+* Token amounts as ignored metadata lines?
+  * Do they belong in history at all?
 
-### Format spec apart from the Zig
 
-* The moat is the data model and format collapse, not the CLI.
-* A second implementation is the proof.
-* Pieces:
-  * fixtures - every sigil, shortcodes, malformed headers, codec vectors
-  * invariants - `parse(render(parse(x)))`, `decode(encode(l))`
-  * invariants - streamed == complete, single == split
-  * a tiny reader in Python or shell
-* Make a skill agents to understand manipulating themselves
-  dropped into core defaults.
+### Tools
 
-### Smallest stable public surface
+* MAYBE: MCP - generic runner tool; output schemas.
+  * How would it apply without? 🧰 rendered from a server, per the README?
+  * Generic MCP wrapper launcher/runner tool (one for local one for remote).
+  * Test with Blender. Test with web service.
 
-* Decide what is supported long term:
-  * ledger grammar
-  * filesystem layout
-  * command names
-  * provider stdin/stdout contract
-  * tool contract
-* Everything else marked experimental.
-* Durability is the appeal, so the promise has to be explicit.
+## Commands and UX
 
+* Threads - like `git log --graph --decorate --oneline --all`.
+  * dangling turns, forks, dates
+  * structure first, summaries later
+* List agents.
+  * Listing agents and mobs - or just `ls`?
+  * Separate out where skills are stored to distinguishable when listing.
+* Errors that say where.
+  * path, record, line, value, include lineage
+  * `m8: BadEnvironmentName` alone costs a hunt.
 
 ### MAYBE: Attachments
 
@@ -67,7 +51,38 @@ Review everything again on the mission statement in the README.md
   cross-common-font compatible so constraining to some common standardised ones
   is crucial - if even possible. 2 char wide grid?
 
+### Tool loop de-opinion
 
+* Find a way to elegantly express triggering each tool call rather than loop.
+* The loop is hard-wired in converse; make it the default, not the only shape.
+* It should be composable either way.
+* The pieces already exist:
+ * a turn can end on an owed 📲 - the ledger carries unanswered calls
+ * m8 already picks an owed call up and answers it
+* The loop is just those two steps, repeated.
+ * the main command line keeps it as the sensible default
+ * anything else composes the steps its own way
+* riff needs the gap between steps.
+ * a 🙋 slipped in before the next call runs
+
+### Hooks
+
+* MAYBE: Hooks: Auto-action on response - if max_tokens on robot reply, auto compress/etc.
+  - Wrapper command on responses? similar to shields?
+
+### MAYBE: Codec-specific metadata sigil
+
+* Consider shifting 🔏 into a promoted codec-metadata arbitrary sigil.
+
+### Loose ends
+
+* `m8 @teamA/` - who is the lead?
+* MAYBE: `{mob}` magic tool parameter - same mob, `/suffix` if not top level.
+* Where is progress recorded?
+* Match workstreams to agents and mob chats.
+* Mob -> swarm? Or swarm for something else.
+* The TUI - tmux sessions? dmux wrapped?
+  * tmux is shield-dangerous; see riff.
 
 
 
@@ -120,49 +135,53 @@ Review everything again on the mission statement in the README.md
 * MAYBE: Agents advertise themselves as subagents.
 * MAYBE: Skill-finder minion - auto-post 🙋?
 
-### Hooks
 
-* MAYBE: Hooks: Auto-action on response - if max_tokens on robot reply, auto compress/etc.
-  - Wrapper command on responses? similar to shields?
 
-### MAYBE: Codec-specific metadata sigil
+## Sandbox and Cross-OS
 
-* Consider shifting 🔏 into a promoted codec-metadata arbitrary sigil.
-
-### Loose ends
-
-* `m8 @teamA/` - who is the lead?
-* MAYBE: `{mob}` magic tool parameter - same mob, `/suffix` if not top level.
-* Where is progress recorded?
-* Match workstreams to agents and mob chats.
-* Mob -> swarm? Or swarm for something else.
-* The TUI - tmux sessions? dmux wrapped?
-  * tmux is shield-dangerous; see riff.
-
-### Tool loop de-opinion
-
-* Find a way to elegantly express triggering each tool call rather than loop.
-* The loop is hard-wired in converse; make it the default, not the only shape.
-* It should be composable either way.
-* The pieces already exist:
- * a turn can end on an owed 📲 - the ledger carries unanswered calls
- * m8 already picks an owed call up and answers it
-* The loop is just those two steps, repeated.
- * the main command line keeps it as the sensible default
- * anything else composes the steps its own way
-* riff needs the gap between steps.
- * a 🙋 slipped in before the next call runs
+* Windows - anything that contains falls back to deny.
+  * @ - not great ":"?
+* Linux - like Windows first, own containment later.
+* `core/` unwritable by tools on macOS only.
+  * `mac-sandbox.sb:169`
+* A real process-exec filter, not `(allow process-exec)`.
 
 
 
+## Distribution
 
+### Docs
 
+* Completely redo the README succinct and clear and well described.
+* Active demo - easiest way to have text-only animation of a play.
+  - Hi m8, can you give yourself a tool to connect to this MCP.
+  - First use useful.
+* Webassembly build of active demo? Running Zork? Elisa?
+* Replay ledger demo system.
+* Can this be in github or does it need to be hosted?
+  How to make prominent in README of github without big binary media?
+* Managed background process examples.
+* One polished end-to-end demo.
+  * a file edit, a tool call, a fork, a provider response
+  * ending in a readable transcript
+  * Zork is compelling; this reaches most people faster.
+  * first-five-minutes path in the README
+* Validate and document common workflow can be reasonably composed with components.
+* Format specification:
+  * The value is the data model and format collapse, not the CLI.
+  * A second implementation is the proof. Relevant for 30 years because it's relevant for software 30 years old.
+  * grammar.peg
+  * Smallest stable public surface
+    * Highlight what is supported long term:
+      * ledger grammar
+      * filesystem layout
+      * command names
+      * provider stdin/stdout contract
+      * tool contract
+    * Durability is the appeal, so the promise has to be explicit.
+    * Stabalise core layers the most.
 
-
-
-
-
-## Build and Size
+### Build and Size
 
 * ReleaseSmall: 569 KB (2026-10-04).
 * Tighten or collapse without losing anything meaningful?
@@ -181,125 +200,42 @@ Review everything again on the mission statement in the README.md
 * Named default? build for release small.
 * Option for curl / no-curl.
 
-## Sandbox and Cross-OS
+### Setup
 
-* Windows - anything that contains falls back to deny.
-  * @ - not great ":"?
-* Linux - like Windows first, own containment later.
-* `core/` unwritable by tools on macOS only.
-  * `mac-sandbox.sb:169`
-* A real process-exec filter, not `(allow process-exec)`.
-* Some git commands, by unlocking `.git` only when constrained.
-  * How does it mix with glob-limited commands?
+* Fully prepared defaults in repo easily pullable with documented command or setup script.
+  * Agents:
+    * cody
+    * setup - help set up with custom agents etc (needs better name).
+    * Planner - `PLAN.md` or `dev/plans/PLAN_X.md`, and `TODO.md`.
+    * Reviewer.
+    * Compressor/packer, and its tool.
+    * ...
+    * Ones that respect AGENTS.md? What other conventions to exemplify?
+  * Skills:
+    * Make a skill agents to understand manipulating themselves.
+  * Configs:
+    * Providers:
+      * Setups for Anthropic, OpenAI, Google.
+      * ...
+    * Example provider setups give instructional errors when a secret is missing.
+      * e.g. telling the person to run the openai cli to set up.
+    * OS specific sandbox helpers.
+* Clean out inbuilt defaults unless they are really really minimal.
+  * Clean out
+* Option to build with any inbuilt-defaults which write out on first run.
+  * Internally store compressed.
 
-## Distribution
 
-### Docs
-
-* Completely redo the README succinct and clear and well described.
-* Active demo - easiest way to have text-only animation of a play.
-  - Hi m8, can you give yourself a tool to connect to this MCP.
-  - First use useful.
-* Webassembly build of active demo? Running Zork? Elisa?
-* Replay ledger demo system.
-* Can this be in github or does it need to be hosted?
-  How to make prominent in README of github without big binary media?
-
-### Core defaults
-
-* Target: install and run.
-* A good default set of agents and providers.
-* Installed on first run, when no m8 state exists in any config area.
-* Defaults as agents: `@/core/defaults/`, named as `#### :brain:/core/defaults/`.
-* Example provider setups give instructional errors when a secret is missing.
-  * e.g. telling the person to run the openai cli to set up.
-* MAYBE: AGENTS.md in templating setups.
-
-### Providers
-
-* Setups for Anthropic, OpenAI, Google.
-  * In the default, or a folder of examples?
-  * Default carries Mac keychain commands - examples may be honest.
-* `providers.json` in a native m8 form?
-* MAYBE: A command writing out core defaults and examples.
-  * Why maybe - `cp` from a shipped folder may be the whole command.
-
-### Tools
-
-* Add a webfetch tool? Optional build for size?
-* MAYBE: MCP - generic runner tool; output schemas.
-  * How would it apply without? 🧰 rendered from a server, per the README?
-  * Generic MCP wrapper launcher/runner tool (one for local one for remote).
-  * Test with Blender. Test with web service.
-* Tool-extension skills - flexibility by what the model is told.
-* Webfetch (cody's) - make it support pages and grep directly hiding file referencing
-  via bash and munge.
-
-### Codecs
-
-* MAYBE: Anthropic cache breakpoint.
-  * Why maybe - where to cache is a policy the ledger cannot override.
-  * On the last record before the first 🙋.
-  * Derivable from the ledger; no new sigil.
-  * A codec knowing its api's quirks is what a codec is.
-* MAYBE: Parallel tool calls.
-  * Why maybe - in turn is simpler, and ledger order stays what happened.
-  * Several already run, in turn (`converse.zig:163`).
-  * Concurrently is open.
-
-### Agents
-
-* Planner - `PLAN.md` or `dev/plans/PLAN_X.md`, and `TODO.md`.
-* MAYBE: Compressor/packer, and its tool.
-  * Must be a projection - never forgetting done to the ledger.
-
-## Commands and UX
-
-* riff - see RIFF.md.
-  * `m8 riff m8 @agent/new-sub-chat`
-  * bare `m8` with a ref runs `riff m8 @`
-  * `m8 @agent` likewise, ensuring a chat when it can
-* Threads - like `git log --graph --decorate --oneline --all`.
-  * dangling turns, forks, dates
-  * structure first, summaries later
-* List agents.
-  * Listing agents and mobs - or just `ls`?
-  * Separate out where skills are stored to distinguishable when listing.
-* MAYBE: Unwrap the last 🤖 onto stdout.
-  * Why maybe - `m8 filter` chains get close; picking the last and unquoting are missing.
-* `m8 load` - bottom only, beside `cat` and `top`.
-* MAYBE: Cleanup helpers for `.tmpdir` and chats.
-  * Why maybe - they are files; `find` and `rm` compose.
-* MAYBE: Background processes.
-  * Why maybe - README promises no daemon.
-  * mob-scoped, through process handles
-  * not tmux
-  * `m8 watch`
-* One polished end-to-end demo.
-  * a file edit, a tool call, a fork, a provider response
-  * ending in a readable transcript
-  * Zork is compelling; this reaches most people faster.
-* Errors that say where.
-  * path, record, line, value, include lineage
-  * `m8: BadEnvironmentName` alone costs a hunt.
-* MAYBE: From review:
-  * `m8 doctor`
-  * `m8 check` for a ledger
-  * shell completion
-  * first-five-minutes path in the README
 
 ## Fun
 
 * Give an agent a Zork tool, and watch it.
-* Procedural generation.
+* Z-machine Procedural generation.
   * generator + seed = endless graded tasks
   * TextWorld's insight - MIT; its backend wraps GPLv2 Jericho
-  * the ledger already carries the seed
-* Glulx.
-  * separate VM, bigger address space, Glk I/O
-  * roughly doubles reach into modern IFComp
+  * the ledger already carries the seed.
+* Unicode text games.
 * Test against terminal tests.
 * Local Wikipedia search over a vector database.
-
-
+* Jed style classifier auto-tool approval.
 
