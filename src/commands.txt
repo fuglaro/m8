@@ -25,7 +25,6 @@ munge
 shield
 shield secure
 shield ask
-shield check
 providers
 providers url
 providers toy

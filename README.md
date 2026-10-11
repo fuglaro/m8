@@ -293,8 +293,7 @@ carrying — so the sizes in `zig-out/bin` are a reading
 of the architecture. Most commands sit within a few
 kilobytes of a hello-world against this std, and the
 ones that do not say why: the codecs are in the ones
-that speak to a model, and a nested agent turn is in the
-shield that asks one. In the default build the command
+that speak to a model. In the default build the command
 that posts to a url is not among them, because the posting
 is curl's; `-Dno-curl-dep=true` deliberately puts the
 standard-library HTTP client in that command instead.
@@ -1793,16 +1792,15 @@ is not m8 at all is handed through untouched: most of
 what a tool says is text, and text has no records in it
 to take out.
 
-### The three that could not be written in the shell
+### The two that could not be written in the shell
 
 Most shields are programs you already have, which is
 why `deny` is `/usr/bin/false` and a filter is a pipe.
-Three need m8 itself:
+Two need m8 itself:
 
 ```bash
 m8 shield secure "RESTRICTIONS" -- CMD   the profile
-m8 shield ask [NAME] -- CMD                     the person
-m8 shield check AGENT -- CMD             another agent
+m8 shield ask [NAME] -- CMD              the person
 ```
 
 `ask` puts the command to the person as a ❓, the way any
@@ -1814,14 +1812,14 @@ tool asks. See Asking the Person.
 * It needs no terminal, so it asks the same under a pipe,
   a riff or anything else that can answer the conversation.
 
-`check` puts the candidate to an agent, which answers
-`allow` or explains itself. Anything else becomes
-`Failed agentic check: <response>`. It is never more
-capable than what invoked it, and nothing has to be
-passed down to make that true: it runs inside every
-shield that was already standing there. A checker reads
-text an attacker may have shaped, so it belongs beside
-`ask` rather than instead of it.
+Putting a command to another agent is a shield written in
+the language: a block that pipes `m8 ref` into `m8 send`
+and runs the command when the reply is `allow`.
+
+* It runs inside every shield already standing, so it is
+  never more capable than what invoked it.
+* A checker reads text an attacker may have shaped, so it
+  belongs beside `ask` rather than instead of it.
 
 ### Two agents
 

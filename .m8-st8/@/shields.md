@@ -8,7 +8,7 @@
 > `bash` `-e` `-c` `exec {{M8}} shield secure "${__secures__}" -- "$@"` `bash`
 
 #### :shield:check
-> `bash` `-e` `-c` `exec {{M8}} shield check "${__checks__}" -- "$@"` `bash`
+> `bash` `-e` `-c` `said=$({{M8}} ref "@$__checks__" "$*" | {{M8}} send | {{M8}} tail --sigil robot --block); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"` `bash`
 
 #### :shield:contain-reads
 > :shield:secure secures contain-reads

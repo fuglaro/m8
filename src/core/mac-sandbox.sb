@@ -40,11 +40,8 @@
 ;;                   core/contain-env-allowed.txt rather than
 ;;                   inherited. See sandbox.zig.
 ;;
-;; Levels (compositions of the above)
-;;   sandbox         private + contain-writes + no-loop +
-;;                   no-edit-git + no-edit-m8-st8 + contain-env.
-;;                   Internet allowed; cwd and TMP writable.
-;;   jail            sandbox, and no internet either.
+;; A level such as sandbox or jail is a composition of the above, written
+;; in an agent's shields.
 ;;
 ;; Always allowed, in every mode:
 ;;   reads of system dirs and the standard /dev nodes; reads of

@@ -1,4 +1,4 @@
-//! What the three shields m8 ships with have in common.
+//! What the shields m8 ships with have in common.
 //!
 //! A shield takes the command it wraps after `--` and runs it in its own
 //! place, so what a tool sees is one process and one exit status however many

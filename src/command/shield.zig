@@ -1,18 +1,14 @@
 //! `shield` — the wrappers m8 ships with.
 //!
-//! A shield is a command that runs a command. These three are the ones that
+//! A shield is a command that runs a command. These two are the ones that
 //! could not be written in the shell: `secure` needs the profile that decides
-//! what a restriction means, `ask` needs the person, and `check` needs an
-//! agent. Everything else a shield does is a program you already have, which
-//! is why `deny` is `/usr/bin/false` and a filter is a pipe.
+//! what a restriction means, and `ask` needs the person. Everything else a
+//! shield does is a program you already have, which is why `deny` is
+//! `/usr/bin/false` and a filter is a pipe.
 //!
 //! Each takes the command it wraps after `--` and runs it in its own place, so
 //! what a tool sees is one process and one exit status however many wrappers
 //! it stood inside.
-//!
-//! They are commands under this one rather than branches within it, which is
-//! what keeps `check` — a whole nested agent turn — from being carried by the
-//! two that have no use for it.
 
 const std = @import("std");
 const api = @import("api.zig");
@@ -30,7 +26,6 @@ pub const command: api.Command = .{
 pub const subs = [_]api.Command{
     @import("shield/secure.zig").command,
     @import("shield/ask.zig").command,
-    @import("shield/check.zig").command,
 };
 
 pub fn find(name: []const u8) ?api.Command {
@@ -80,17 +75,14 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  m8 shield secure "RESTRICTIONS" -- CMD [ARGS]
         \\  m8 shield ask -- CMD [ARGS]
-        \\  m8 shield check AGENT -- CMD [ARGS]
         \\
         \\A shield is a command that runs a command, so most of them are
         \\programs you already have and are written in the language rather
-        \\than here. These three could not be: `secure` needs the profile
-        \\that decides what a restriction means, `ask` needs the person, and
-        \\`check` needs an agent.
+        \\than here. These two could not be: `secure` needs the profile
+        \\that decides what a restriction means, and `ask` needs the person.
         \\
     );
-    // Read off the tree: saying what m8 ships is not a reason to hold the
-    // one of them that is a whole agent turn.
+    // Read off the tree, so the list cannot drift from what is built.
     try w.writeAll("\nshields:\n\n");
     for (@import("../command.zig").byPath(&.{command.name}).?.children) |n|
         try w.print("  {s: <8} {s}\n", .{ n.spec.name, n.spec.summary });
