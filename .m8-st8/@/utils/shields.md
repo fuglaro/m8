@@ -35,7 +35,7 @@
 > :shield:secure secures no-edit-m8-st8
 
 #### :shield:contain-env
-> :shield:secure secures contain-env
+> `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8_*|TMPDIR|PATH|HOME|LANG|LC_*|TERM|COLORTERM|NO_COLOR|CLICOLOR|COLUMNS|LINES|TZ) ;; *) unset "$v";; esac; done; exec "$0" "$@"`
 
 #### :shield:contain-home
 > `bash` `-c` `HOME=$TMPDIR exec "$0" "$@"`

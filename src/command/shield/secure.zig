@@ -38,32 +38,24 @@ fn run(ctx: Ctx) !u8 {
         return wrapping.Error.UnknownRestriction;
     };
 
-    var kernel: std.ArrayList([]const u8) = .empty;
-    for (names.items) |n| if (sandbox.isKernel(n)) try kernel.append(ctx.arena, n);
-
     // The mob's scratch, which m8 made before the tool was launched. Run
     // straight from a shell there is no mob and nothing made one, so this
     // makes its own rather than refusing.
     var tmp = ctx.env.get("TMPDIR") orelse "";
     var made = false;
 
-    var full = w.argv;
-    if (kernel.items.len > 0) {
-        if (builtin.os.tag != .macos) {
-            try ctx.err.writeAll("m8 shield secure: needs sandbox-exec, which is macOS only\n");
-            return wrapping.Error.Unsupported;
-        }
-        if (tmp.len == 0) {
-            tmp = try sandbox.makeTmp(ctx.arena, ctx.io, ctx.env);
-            made = true;
-        }
-        full = try sandbox.exec(ctx.arena, ctx.io, ctx.env, w.argv, kernel.items, tmp);
+    if (builtin.os.tag != .macos) {
+        try ctx.err.writeAll("m8 shield secure: needs sandbox-exec, which is macOS only\n");
+        return wrapping.Error.Unsupported;
     }
+    if (tmp.len == 0) {
+        tmp = try sandbox.makeTmp(ctx.arena, ctx.io, ctx.env);
+        made = true;
+    }
+    const full = try sandbox.exec(ctx.arena, ctx.io, ctx.env, w.argv, names.items, tmp);
 
     var environ: ?*const std.process.Environ.Map = null;
-    if (sandbox.containsEnv(names.items)) {
-        environ = try sandbox.contained(ctx.arena, ctx.io, ctx.env, tmp);
-    } else if (made) {
+    if (made) {
         var m = try ctx.env.clone(ctx.arena);
         try m.put("TMPDIR", tmp);
         const boxed = try ctx.arena.create(std.process.Environ.Map);

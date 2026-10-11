@@ -35,11 +35,6 @@
 ;;   no-edit-git     no writing to a .git anywhere
 ;;   no-edit-m8-st8  no writing to a config directory anywhere
 ;;
-;; Not a template flag, because it is not enforced here:
-;;   contain-env     the child's environment is rebuilt from
-;;                   core/contain-env-allowed.txt rather than
-;;                   inherited. See sandbox.zig.
-;;
 ;; A level such as sandbox or jail is a composition of the above, written
 ;; in an agent's shields.
 ;;

@@ -1724,9 +1724,9 @@ invoked.
 m8 defines no shield. A name means what an agent, or
 something it includes, says it means.
 
-* `@/shields.md` is an ordinary agent holding definitions
-  and activating none of them.
-* An agent that wants them includes it with `🧠shields`.
+* `@/utils/shields.md` is an ordinary document holding
+  definitions and activating none of them.
+* An agent that wants them includes it with `🧠utils/shields`.
 * A name nothing defines is refused, so a tool under one
   does not run.
 
@@ -1762,7 +1762,6 @@ airgap           no internet; loopback and unix sockets stay
 no-loop          no loopback or unix sockets; internet stays
 no-edit-git      no writing to a .git anywhere
 no-edit-m8-st8   no writing to a config directory anywhere
-contain-env      the environment is rebuilt, not inherited
 ```
 
 Those are atoms and the profile knows nothing else. A
@@ -1772,13 +1771,26 @@ does not recognise is refused rather than ignored, so
 not understanding what was asked for is never a reason
 to apply less than was asked for.
 
-`contain-home` is not an atom. It is a wrapper that points
-`HOME` at the mob's scratch before the tool starts:
+`contain-home` and `contain-env` are not atoms. Each is a
+wrapper that changes the environment before the tool starts:
 
 ```m8
 ▐ 🛡️contain-home
 │ `bash` `-c` `HOME=$TMPDIR exec "$0" "$@"`
+
+▐ 🛡️contain-env
+│ `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8_*|TMPDIR|PATH|HOME|LANG|LC_*) ;; *) unset "$v";; esac; done; exec "$0" "$@"`
 ```
+
+* `contain-home` points `HOME` at the mob's scratch.
+* `contain-env` drops every variable its body does not name.
+  * The names are written in the body rather than passed as
+    values, because values add up across activations and a
+    list that could grow would be a way to widen.
+  * A second definition is a second filter, so stacking
+    still only tightens.
+  * `__*` and `M8_*` are what a call said and what the person
+    answered, so a definition keeps them.
 
 `freeze-toolbox` is written in the language too, and
 shows what the mechanism buys. A tool may hand back 🧰
@@ -1836,7 +1848,7 @@ One that cannot widen, whatever it includes or is asked
 to do:
 
 ```m8
-▐ 🧠shields
+▐ 🧠utils/shields
 
 ▐ 🛡️jail
 
@@ -1914,9 +1926,8 @@ working directory and searching outwards:
 
 * `providers.json` composes through the stack: every file
   adds its entries, and the nearest entry of a name stands.
-* `mac-sandbox.sb` and `contain-env-allowed.txt` are taken
-  whole from the nearest directory that has one, else from
-  the copy m8 carries.
+* `mac-sandbox.sb` is taken whole from the nearest directory
+  that has one, else from the copy m8 carries.
 * m8 carries no providers.
 
 Authored names live under `@/`, so `@mathy` on the command
@@ -1928,7 +1939,6 @@ config directory is nothing a name can reach.
 .m8-st8/
   core/
     mac-sandbox.sb
-    contain-env-allowed.txt
     providers.json
   models/
   @/
@@ -2369,9 +2379,5 @@ whatever its entry says, under its own name.
 Every tool is handed the mob's scratch as `TMPDIR`, and its
 `HOME` is left alone.
 
-* `contain-home` is a shield written in the language that
-  points `HOME` at that scratch.
-* Under `contain-env` the environment is rebuilt from
-  `core/contain-env-allowed.txt` rather than inherited.
-`M8_EXCLAMATION_*` is passed whatever that file says: a tool
-that cannot find what the person answered asks for ever.
+Moving `HOME` or dropping what was inherited is a shield's
+business. See `contain-home` and `contain-env` under Shields.

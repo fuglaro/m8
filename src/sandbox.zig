@@ -1,4 +1,4 @@
-//! Restrictions: the sandbox profile, and the environment a child is given.
+//! Restrictions: the sandbox profile.
 //!
 //! `core/mac-sandbox.sb` grants everything and then tags the lines that each
 //! restriction takes away. A restriction only ever subtracts, so any
@@ -13,23 +13,20 @@
 //! carry their own tags, so resolving stays a single pass with no lookup
 //! table.
 //!
-//! Both files may be overridden from a `core/`, nearest first like any other
+//! The profile may be overridden from a `core/`, nearest first like any other
 //! config.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const config = @import("config.zig");
-const api = @import("command/api.zig");
 
 pub const template = @embedFile("core/mac-sandbox.sb");
-pub const env_allowed = @embedFile("core/contain-env-allowed.txt");
 
 const marker = ";;!!";
 
 pub const Restriction = struct {
     name: []const u8,
     summary: []const u8,
-    kernel: bool = false,
 };
 
 /// Every restriction `m8 shield secure` knows, in the order help lists them.
@@ -37,33 +34,18 @@ pub const Restriction = struct {
 /// Atoms only. A level such as `sandbox` or `jail` is a composition an agent
 /// writes or includes, which is a place it can be read.
 ///
-/// `kernel` says the profile enforces it, so every descendant of the process
-/// inherits it. `contain-env` is the one m8 applies itself, when it builds the
-/// environment rather than passing one on.
+/// The profile enforces each one, so every descendant of the process inherits
+/// it.
 pub const all = [_]Restriction{
-    .{ .name = "contain-reads", .kernel = true, .summary = "no reading outside cwd, TMP, system and tool dirs" },
-    .{ .name = "private", .kernel = true, .summary = "as above, and tool dirs go too" },
-    .{ .name = "contain-writes", .kernel = true, .summary = "writes confined to cwd and TMP" },
-    .{ .name = "no-writes", .kernel = true, .summary = "nothing is writable, including TMP" },
-    .{ .name = "airgap", .kernel = true, .summary = "no internet; loopback and unix sockets stay" },
-    .{ .name = "no-loop", .kernel = true, .summary = "no loopback or unix sockets; internet stays" },
-    .{ .name = "no-edit-git", .kernel = true, .summary = "no writing to a .git anywhere" },
-    .{ .name = "no-edit-m8-st8", .kernel = true, .summary = "no writing to a config directory anywhere" },
-    .{ .name = "contain-env", .summary = "the environment is rebuilt, not inherited" },
+    .{ .name = "contain-reads", .summary = "no reading outside cwd, TMP, system and tool dirs" },
+    .{ .name = "private", .summary = "as above, and tool dirs go too" },
+    .{ .name = "contain-writes", .summary = "writes confined to cwd and TMP" },
+    .{ .name = "no-writes", .summary = "nothing is writable, including TMP" },
+    .{ .name = "airgap", .summary = "no internet; loopback and unix sockets stay" },
+    .{ .name = "no-loop", .summary = "no loopback or unix sockets; internet stays" },
+    .{ .name = "no-edit-git", .summary = "no writing to a .git anywhere" },
+    .{ .name = "no-edit-m8-st8", .summary = "no writing to a config directory anywhere" },
 };
-
-/// Restrictions the sandbox profile cannot express, and that m8 applies
-/// itself.
-pub fn isKernel(name: []const u8) bool {
-    return if (find(name)) |r| r.kernel else false;
-}
-
-/// True when `active` calls for the child's environment to be rebuilt. One
-/// name, because a level that wants it says so in its own composition.
-pub fn containsEnv(active: []const []const u8) bool {
-    for (active) |a| if (std.mem.eql(u8, a, "contain-env")) return true;
-    return false;
-}
 
 pub fn find(name: []const u8) ?Restriction {
     for (all) |r| if (std.mem.eql(u8, r.name, name)) return r;
@@ -99,28 +81,6 @@ fn dropped(line: []const u8, active: []const []const u8) bool {
 /// otherwise the copy compiled in.
 pub fn profile(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
     return (try config.core(arena, io, env, "mac-sandbox.sb")) orelse template;
-}
-
-/// Likewise for the environment allowlist. An override replaces the bundled
-/// list rather than extending it, so what a restriction permits is always
-/// readable from one file.
-pub fn envAllowed(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
-    return (try config.core(arena, io, env, "contain-env-allowed.txt")) orelse env_allowed;
-}
-
-/// True when `name` is passed through by the allowlist in `src`. One name per
-/// line, a trailing `*` matches a prefix, `#` comments and blank lines are
-/// ignored.
-pub fn envPasses(src: []const u8, name: []const u8) bool {
-    var lines = std.mem.splitScalar(u8, src, '\n');
-    while (lines.next()) |raw| {
-        const rule = std.mem.trim(u8, raw, " \t\r");
-        if (rule.len == 0 or rule[0] == '#') continue;
-        if (rule[rule.len - 1] == '*') {
-            if (std.mem.startsWith(u8, name, rule[0 .. rule.len - 1])) return true;
-        } else if (std.mem.eql(u8, rule, name)) return true;
-    }
-    return false;
 }
 
 /// A scratch directory for a command run under `secure` straight from a
@@ -173,29 +133,6 @@ pub fn exec(
     return full.items;
 }
 
-/// The environment rebuilt from the allowlist rather than inherited. TMPDIR
-/// becomes the run's own directory, which is what the profile was told it is.
-pub fn contained(
-    arena: Allocator,
-    io: std.Io,
-    env: *const std.process.Environ.Map,
-    tmp: []const u8,
-) !*const std.process.Environ.Map {
-    const rules = try envAllowed(arena, io, env);
-    var m: std.process.Environ.Map = .init(arena);
-    var it = env.iterator();
-    while (it.next()) |e| {
-        // What the person answered is not the list's to drop: without it a
-        // tool that asked them never finds the answer, and asks again for ever.
-        if (envPasses(rules, e.key_ptr.*) or std.mem.startsWith(u8, e.key_ptr.*, api.exclamation))
-            try m.put(e.key_ptr.*, e.value_ptr.*);
-    }
-    if (tmp.len > 0) try m.put("TMPDIR", tmp);
-    const boxed = try arena.create(std.process.Environ.Map);
-    boxed.* = m;
-    return boxed;
-}
-
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
@@ -204,9 +141,8 @@ fn res(arena: Allocator, active: []const []const u8) ![]const u8 {
     return resolve(arena, template, active);
 }
 
-test "every kernel restriction is tagged somewhere in the profile" {
+test "every restriction is tagged somewhere in the profile" {
     for (all) |r| {
-        if (!r.kernel) continue;
         const tag = try std.fmt.allocPrint(testing.allocator, "!{s}", .{r.name});
         defer testing.allocator.free(tag);
         try testing.expect(std.mem.indexOf(u8, template, tag) != null);
@@ -299,20 +235,6 @@ test "the mob's scratch stays writable under every restriction" {
         const deny = std.mem.indexOf(u8, out, broad_deny) orelse return error.DenyMissing;
         try testing.expect(at > deny);
     }
-}
-
-test "the env allowlist passes what it names and nothing else" {
-    try testing.expect(envPasses(env_allowed, "PATH"));
-    try testing.expect(envPasses(env_allowed, "LANG"));
-    try testing.expect(envPasses(env_allowed, "LC_ALL")); // trailing *
-    try testing.expect(envPasses(env_allowed, "LC_CTYPE"));
-    try testing.expect(!envPasses(env_allowed, "SSH_AUTH_SOCK"));
-    // Home passes as it was handed over: moving it is a shield's business.
-    try testing.expect(envPasses(env_allowed, "HOME"));
-    try testing.expect(!envPasses(env_allowed, "TMPDIR")); // substituted, not passed
-    try testing.expect(!envPasses(env_allowed, "AWS_SECRET_ACCESS_KEY"));
-    // A comment naming a variable must not act as a rule.
-    try testing.expect(!envPasses(env_allowed, "XPC_FLAGS"));
 }
 
 // The tampering rules are worth exercising against the real sandbox: the
@@ -411,14 +333,8 @@ test "a restriction leaves ordinary work alone" {
 test "the table is atoms, so a level is a composition and not an entry" {
     // What `jail` means is whatever an agent's shields say, where it can be
     // read and taken apart. Naming it here would be the same fact in two places.
-    for ([_][]const u8{ "jail", "sandbox", "deny", "ask", "freeze-toolbox", "agent-check=x" }) |n|
+    for ([_][]const u8{ "jail", "sandbox", "deny", "ask", "freeze-toolbox", "contain-env", "contain-home" }) |n|
         try testing.expect(find(n) == null);
-    for ([_][]const u8{ "private", "airgap", "contain-env" }) |n|
+    for ([_][]const u8{ "private", "airgap", "no-edit-git" }) |n|
         try testing.expect(find(n) != null);
-
-    // Only the environment one is m8's own; the rest are lines in the profile.
-    try testing.expect(!isKernel("contain-env"));
-    try testing.expect(isKernel("airgap"));
-    try testing.expect(containsEnv(&.{"contain-env"}));
-    try testing.expect(!containsEnv(&.{"airgap"}));
 }

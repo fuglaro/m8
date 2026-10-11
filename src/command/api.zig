@@ -30,9 +30,6 @@ pub const Ctx = struct {
     call_id: []const u8 = "",
     /// What a call hands its tool, in the environment rather than in the
     /// command, which is the one way a call is carried.
-    ///
-    /// Added after the environment has been rebuilt, so `contain-env` filters
-    /// what was inherited and never what this call is saying.
     extra_env: []const EnvVar = &.{},
     /// Arguments after the command name.
     args: []const []const u8,
