@@ -1922,6 +1922,8 @@ config directory is nothing a name can reach.
     +/psbarddrym.md           a turn a model answered
 ```
 
+In folder chat state can be omited with `echo "+/" >> .m8-st8/.gitignore`
+
 ### Mobs
 
 Mobs compose entire collections of agents, skills,

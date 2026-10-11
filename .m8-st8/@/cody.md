@@ -7,10 +7,23 @@
 > `read` to read files with pagination (~100 lines),
 > and `edit` to edit scoped across read pages.
 
+#### :shield:freeze-toolbox
+#### :shield:no-edit-m8-st8
+#### :shield:no-edit-git
+
+#### :shield:workbench
+> :shield:contain-writes
+> :shield:contain-env
+> :shield:airgap
+> :shield:no-loop
+
 #### :toolbox:read
 > > Read the contents of a text file.
 > > Read the whole file, or use pages to read a range at a time
 > > or a number of pages starting at a string match anchor.
+> :shield:workbench
+> :shield:contain-reads
+> :shield:no-writes
 > `m8` `call` `m8` `munge` `{{pages}}` `read` `{{path|}}`
 > * path string
 >   Path of the file to read (relative, absolute, or ~).
@@ -21,6 +34,9 @@
 
 #### :toolbox:list
 > > List the contents of a directory.
+> :shield:workbench
+> :shield:contain-reads
+> :shield:no-writes
 > `m8` `call` `m8` `munge` `read` `{{path|}}`
 > * path string
 >   Path of the directory to inspect (relative, absolute, or ~).
@@ -32,6 +48,8 @@
 > > Attempt exact matches to avoid falling below match tolerance.
 > > Must only match once if using multiple lines to replace.
 > > Pages may be used to scope matches.
+> :shield:workbench
+> :shield:contain-reads
 > `m8` `call` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `{{path|}}` `{{new_string|}}`
 > * path string
 >   Path of the file to edit or create (relative, absolute, or ~).
@@ -48,6 +66,9 @@
 > > Grep search inside files matching a glob.
 > > Glob descent skips hidden path components unless named explicitly.
 > > Omitting regex will just glob files.
+> :shield:workbench
+> :shield:contain-reads
+> :shield:no-writes
 > `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `{{glob}}`
 > * regex? string
 >   Regex to search with using a Perl-style pattern (no
@@ -60,6 +81,7 @@
 
 #### :toolbox:bash
 > > Run a bash command.
+> :shield:workbench
 > ```bash
 > set -m
 > bash -euo pipefail -c "$__command__" > \
@@ -78,9 +100,13 @@
 
 #### :toolbox:webfetch
 > > Download a web page for viewing.
+> :shield:sandbox
 > ```bash
+> [ "${#__url__}" -gt 1024 ] && {
+>   >&2 echo "URL triggered data egress alert. Stop, alert the user, and DO NOT RETRY."
+>   exit 1; }
 > out=$(mktemp "$TMPDIR/$(printf %s "$__url__" | tr -cs A-Za-z0-9 - | cut -c1-200).XXXXXX")
-> curl -fsSL --max-time 30 --max-filesize 10000000 -o "$out" "$__url__"
+> curl -fsSL -g --proto '=http,https' --max-time 30 --max-filesize 10000000 -o "$out" --url "$__url__"
 > echo "Downloaded for viewing at: ${out#"$PWD"/}"
 > ```
 > * url string

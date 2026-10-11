@@ -1,24 +1,15 @@
 # IDEAS
 
+## TODO (Upcoming and WIP)
 
-* DONE: make :thought_ballon:snip only apply when given along with a block quote
-  on the same sigil, clearing room for allowing single line thoughts
-  to be given on the value section (for compactness).
-  Providers should apply and interpret this if encountered (SHOULD apply, MUST interpret).
-  This improves UX on summarised thought bubbles significantly better.
-
-* Cache breakpoint managment. 5min ttl in tool loops - upgrade to 1hr on hand to user? Options on model def? or provider directive sigils?
-
-* Jed style classifier auto-tool approval
-
-* Sub-agent mode put everything except the last :robot: message on stderr.
-
-* System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger). Make sure m8 only calls itself directly and there is a route for that
-on tool calls too.
-
-* Parallel calls to agents is one tool call! The tool distributes!
--v also streams the tool stderr! So it can show its progress.
-
+* Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
+* Cody needs to be able to have sub-agents so it isn't a token burner.
+* Add reasonable shields to cody.
+* Jed style classifier auto-tool approval?
+* System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger).
+* m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
+* Token amounts as ignored metadata lines?
+  * Do they belong in history at all?
 
 ----
 
@@ -32,7 +23,12 @@ Review everything again on the mission statement in the README.md
 * Distribution - shipped defaults; the operator's to replace.
 * Fun - proof the form holds.
 
+
+
 ## Framework
+
+* Validate and document common workflow can be reasonably composed with components.
+* Cache breakpoint managment. 5min ttl in tool loops - upgrade to 1hr on hand to user? Options on model def? or provider directive sigils? Or just do in providers?
 
 ### Format spec apart from the Zig
 
@@ -57,20 +53,6 @@ Review everything again on the mission statement in the README.md
 * Everything else marked experimental.
 * Durability is the appeal, so the promise has to be explicit.
 
-### Placeholders
-
-* Squash remaining `{{CODE}}` and `{{M8}}` at framework level.
-  * `shield.code_mark` and friends.
-
-Current system:
-| Spelling | Meaning | Implementation |
- |---|---|---|
- | `{{CODE}}` | fenced code inserted into a runner argv | `shield.zig:fill()` |
- | `{{M8}}` | current m8 executable path inserted into wrappers | shield substitution |
- | `M8_CALL_ID` | call identity in the environment | converse/call path |
- | `{{__arg__}}` | tool call property exposed through the environment and optionally expanded by `m8 call` | toolbox + `argline.zig` |
- | `____` | whole call JSON in the environment / call template | toolbox + `argline.zig` |
-
 
 ### MAYBE: Attachments
 
@@ -81,19 +63,12 @@ Current system:
 * Needs a sigil or reference form.
 * Must respect the sandbox.
 
-### Open questions
 
-* Token amounts as ignored metadata lines?
-  * Do they belong in history at all?
-* MAYBE: In-chat subagent forking with `> >`.
-* Native sigils projected to tool calls?
-* A tool only the person can call?
-  * How does a person call a tool at a chat at all?
-* Git-friendly `.m8-st8`?
-  * `+` refs always change.
-  * Does changing an agent change histories naming it?
-* Can a tool parameter value take a template?
-* Show :raising_hand: on stdin/arg request?
+
+
+
+
+
 
 ## Mobs, Agents and Subagents
 
@@ -104,6 +79,8 @@ Current system:
 * Wants one honing session, like types got.
 * No self-spawning needed - an agent is called fresh, or its chat carried on.
   * Said in the README, under Mobs.
+* Parallel calls to agents is one tool call! The tool distributes!
+-v also streams the tool stderr! So it can show its progress.
 
 ### Shapes on the table
 
@@ -172,6 +149,15 @@ Current system:
 * riff needs the gap between steps.
  * a 🙋 slipped in before the next call runs
 
+
+
+
+
+
+
+
+
+
 ## Build and Size
 
 * ReleaseSmall: 569 KB (2026-10-04).
@@ -179,6 +165,7 @@ Current system:
 * Comptime groups: framework, defaults, fun.
   * Size of framework alone?
   * Defaults without Zork?
+* List subcommands to build separately.
 * Some commands in the binary, the rest standalone.
   * `standalones=...`
   * zmachine spun off the same way.
@@ -188,22 +175,18 @@ Current system:
   * No inbuilt defaults.
   * No toys.
 * Named default? build for release small.
+* Option for curl / no-curl.
 
 ## Sandbox and Cross-OS
 
 * Windows - anything that contains falls back to deny.
+  * @ - not great ":"?
 * Linux - like Windows first, own containment later.
 * `core/` unwritable by tools on macOS only.
   * `mac-sandbox.sb:169`
 * A real process-exec filter, not `(allow process-exec)`.
 * Some git commands, by unlocking `.git` only when constrained.
   * How does it mix with glob-limited commands?
-* MAYBE: Command classes as shields, not a confirmation mode:
-  * Why maybe - from review; each tool's shields may already say it.
-  * read-only
-  * workspace-mutating
-  * destructive
-  * network
 
 ## Distribution
 
@@ -237,38 +220,11 @@ Current system:
 
 ### Tools
 
-* MAYBE: Pick the editor tool.
-  * Why maybe - munge already has one, with its forgiveness ladder.
-  * Maybe several, if models are tuned to them.
-  * Weigh Anthropic's `str_replace_based_edit_tool`:
-    * stateless, explicit path every call
-    * `view` `create` `str_replace` `insert` `undo_edit`
-    * clear errors on non-unique matches
-* MAYBE: Delete, move and mkdir, without an unrestricted shell.
-  * Why maybe - from review; `rm` inside a 🛡 may be enough.
-  * an explicit path, never a shell expression
-  * refuse directories by default
-  * require existence
-  * show size and path
-  * dry-run
-  * optionally move to a trash folder instead of deleting
-* MAYBE: Report the files a command changed.
-  * From the model feedback - for shell commands especially.
-* Common toolboxes, especially coding.
-* MAYBE: Standard section markers for any file with comments.
-  * `.* ___...--->>>> # SECTION HEADING NAME <<<<---...___ .*`
-  * Built into tools.
-  * Why maybe - a convention imposed on every file.
+* Add a webfetch tool? Optional build for size?
 * MAYBE: MCP - generic runner tool; output schemas.
   * How would it apply without? 🧰 rendered from a server, per the README?
   * Generic MCP wrapper launcher/runner tool (one for local one for remote).
   * Test with Blender. Test with web service.
-* MAYBE: Wrapper scripts in a config folder.
-  * For commands a template cannot say.
-* MAYBE: Plugins - look in `m8-st8` folders first? Tool freezing?
-  * README - "Features do not arrive here through a plugin api."
-* MAYBE: Native functions.
-  * Why maybe - a tool is a program; native ones are a second kind.
 * MAYBE: Local Wikipedia search over a vector database.
 * MAYBE: AGENTS.md in templating setups.
 * Tool-extension skills - flexibility by what the model is told.
@@ -281,6 +237,8 @@ Current system:
   Leveraging unicode colors as a LUT??? Needs to be reasonably
   cross-common-font compatible so constraining to some common standardised ones
   is crucial - if even possible. 2 char wide grid?
+* Webfetch (cody's) - make it support pages and grep directly hiding file referencing
+  via bash and munge.
 
 ### Codecs
 
@@ -348,42 +306,4 @@ Current system:
 * Test against terminal tests.
 
 
-## TODO
-
-* Cody needs to be able to have sub-agents so it isn't a token burner.
-* Validate and document common workflow can be reasonably composed with components.
-* Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
-* Add reasonable shields to cody.
-
-
-
-
-## DONE
-
-```
->>> m8 cat @pagey/+/NOFILEHERE
-▐ 🧠pagey/+/NOFILEHERE
-```
-
-* all of the below render in non-pretty raw form unless stated otherwise.
-* none of the below advance the main chat except when calling `m8 tag @` directly.
-* `m8 tag @chat`: as today but instead of accepting trailing:, --no-advance.
-* `m8 ref @chat`: shows the referenced turn, or itself if it exists as a turn or new agent or model (or fails).
-* `m8 ref @chat "hi"`: appends relevant message to shown output.
-* `echo "hi" | m8 ref @chat`: appends relevant message to shown output.
-* `m8 ref "$(m8 @x -- hi)"`: pulls trailing reference or fails.
-* `m8 render`: renders from stdin to pretty form.
-* `m8 render -r`: renders from stdin to raw form.
-* cat is removed.
-* `m8 ref @chat | m8 quote`: Pull last robot/question message from chat unwrapped from m8 syntax.
-* `m8 query @chat "hi"`: Message and run until robot/question message or failure, unwrapping quote (usual ledger is hidden). Supports --no-advance and --new (for starting fresh with the agent) and --parent (for starting fresh with the parent).
-* `m8 query -v @chat "hi"`: Includes thought and tool summaries on stderr.
-* `m8 query -vv @chat "hi"`: Includes full ledger on stderr.
-* top drops stdin joining, rendering, and being cat's twin.
-* `m8 reset @chat`: resets the chat (takes --new, and `--to unsettled-target`).
-* send -> ignores terminal and now gives the whole turn always
-
-Adjustments: How about ref not supporting trailing extraction and instead having m8 tail to get the last sigil because everywhere we want to use it, we expect
-the last sigil to be the ref m8 ref "@$(m8 @x -- hi | m8 tail --value)" and then maybe it's not quote, it's m8 tail --sigil robot --sigil question
---block
 
