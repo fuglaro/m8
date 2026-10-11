@@ -205,11 +205,7 @@ pub fn selfPath(
     if (argv0.len == 0) return "m8";
     if (argv0[0] == '/') return argv0;
 
-    if (std.mem.indexOfScalar(u8, argv0, '/') != null) {
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
-        const len = std.process.currentPath(io, &buf) catch 0;
-        return std.fs.path.resolve(arena, &.{ buf[0..len], argv0 });
-    }
+    if (std.mem.indexOfScalar(u8, argv0, '/') != null) return fromCwd(arena, io, argv0);
 
     const path = env.get("PATH") orelse return argv0;
     var it = std.mem.splitScalar(u8, path, ':');
@@ -217,10 +213,19 @@ pub fn selfPath(
         if (dir.len == 0) continue;
         const candidate = try std.fs.path.join(arena, &.{ dir, argv0 });
         if (look(io, candidate)) |found| {
-            if (found.runnable) return candidate;
+            // A PATH entry may itself be relative, and what is handed on is
+            // read by something that has since changed directory.
+            if (found.runnable) return if (dir[0] == '/') candidate else fromCwd(arena, io, candidate);
         }
     }
     return argv0;
+}
+
+/// A relative path, made absolute against the working directory.
+fn fromCwd(arena: Allocator, io: std.Io, path: []const u8) ![]const u8 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const len = std.process.currentPath(io, &buf) catch 0;
+    return std.fs.path.resolve(arena, &.{ buf[0..len], path });
 }
 
 /// Run a provider and read what it says.
@@ -392,6 +397,26 @@ test "a command is found the way a shell would find it" {
     const full = try resolve(arena, io, self, core_dir, &.{ "m8", "providers", "url" });
     try testing.expectEqual(@as(usize, 3), full.len);
     try testing.expectEqualStrings("providers", full[1]);
+}
+
+test "the m8 that is running is named absolutely, however it was found" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const io = threaded.io();
+
+    var env: std.process.Environ.Map = .init(arena);
+    // Enough `..` to reach the root from anywhere, so /bin is named relatively.
+    try env.put("PATH", "/nowhere:" ++ "../" ** 64 ++ "bin");
+
+    // An absolute path is one.
+    try testing.expectEqualStrings("/opt/m8/bin/m8", try selfPath(arena, io, &env, "/opt/m8/bin/m8"));
+    // A relative one is made absolute.
+    try testing.expectEqualStrings("/bin/sh", try selfPath(arena, io, &env, "../" ** 64 ++ "bin/sh"));
+    // A bare name found under a relative PATH entry is too.
+    try testing.expectEqualStrings("/bin/sh", try selfPath(arena, io, &env, "sh"));
 }
 
 /// A sink that keeps what it is given, so a test can see what streamed rather

@@ -4,7 +4,6 @@
 
 * Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
 * Cody needs to be able to have sub-agents so it isn't a token burner.
-* Add reasonable shields to cody.
 * Jed style classifier auto-tool approval?
 * System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger).
 * m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
@@ -62,6 +61,11 @@ Review everything again on the mission statement in the README.md
 * Sent by reference.
 * Needs a sigil or reference form.
 * Must respect the sandbox.
+* Media workflows -> gen image -> see image -> show image (colored ascii rendering).
+  Maybe with a text-image format we find/make??? Custom markdown? ```palettemap...
+  Leveraging unicode colors as a LUT??? Needs to be reasonably
+  cross-common-font compatible so constraining to some common standardised ones
+  is crucial - if even possible. 2 char wide grid?
 
 
 
@@ -197,6 +201,7 @@ Review everything again on the mission statement in the README.md
   - Hi m8, can you give yourself a tool to connect to this MCP.
   - First use useful.
 * Webassembly build of active demo? Running Zork? Elisa?
+* Replay ledger demo system.
 * Can this be in github or does it need to be hosted?
   How to make prominent in README of github without big binary media?
 
@@ -208,6 +213,7 @@ Review everything again on the mission statement in the README.md
 * Defaults as agents: `@/core/defaults/`, named as `#### :brain:/core/defaults/`.
 * Example provider setups give instructional errors when a secret is missing.
   * e.g. telling the person to run the openai cli to set up.
+* MAYBE: AGENTS.md in templating setups.
 
 ### Providers
 
@@ -225,18 +231,7 @@ Review everything again on the mission statement in the README.md
   * How would it apply without? 🧰 rendered from a server, per the README?
   * Generic MCP wrapper launcher/runner tool (one for local one for remote).
   * Test with Blender. Test with web service.
-* MAYBE: Local Wikipedia search over a vector database.
-* MAYBE: AGENTS.md in templating setups.
 * Tool-extension skills - flexibility by what the model is told.
-* Nudges in definitions:
-  * several calls in one reply
-  * string-match anchors for several changes in one file
-* `m8 last` > unwraps last non-ref entry to stdout.
-* Media workflows -> gen image -> see image -> show image (colored ascii rendering).
-  Maybe with a text-image format we find/make??? Custom markdown? ```palettemap...
-  Leveraging unicode colors as a LUT??? Needs to be reasonably
-  cross-common-font compatible so constraining to some common standardised ones
-  is crucial - if even possible. 2 char wide grid?
 * Webfetch (cody's) - make it support pages and grep directly hiding file referencing
   via bash and munge.
 
@@ -304,6 +299,7 @@ Review everything again on the mission statement in the README.md
   * separate VM, bigger address space, Glk I/O
   * roughly doubles reach into modern IFComp
 * Test against terminal tests.
+* Local Wikipedia search over a vector database.
 
 
 
