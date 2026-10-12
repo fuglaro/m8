@@ -646,6 +646,7 @@ m8 query @critic/job "Review that."             the reply alone, as text
     writes the whole turn there.
   * `--no-advance`, `--new` and `--parent` say where it
     starts and whether anything moves.
+  * `--no-store` keeps nothing, so nothing moves either.
   * `--piped` reads stdin as prose, as it does for `ref`.
 * `save @X` writes a document as an agent, over whatever
   was there. An agent is authored, so changing one from a
@@ -704,6 +705,14 @@ line rather than beside it.
   * `-s N` is N status lines, from 1 to 8: the last N it wrote,
     newest at the bottom.
   * What riff says itself takes the bottom one.
+* A stderr line that leads with `::stats::` carries a panel.
+  * The panel is what follows, up to a `::` or the line's end.
+  * It sits at the right end of the top status line, hard
+    against the text, and stays until the next one.
+  * Anything after the `::` is a status line as usual.
+  * `m8 parse openai-responses` says one under `-v`:
+    `::stats::✥19▇16K::` is what came out, the share the
+    prompt cache held as a block, and what went in.
 * The editor is the rows under that.
   * It starts as one row and grows with the message, to at most
     half the terminal.
@@ -2136,29 +2145,30 @@ later in the ledger than the agent it took over from.
 
 ### Providers
 
-A provider is a command. It reads an api-formatted request on
-stdin and writes that api's response on stdout — the same
-shape a tool has, a filter that stays in a pipeline. Reaching
-a url is one such command rather than the privileged path, so
-anything you can write a program for is a provider.
+A provider is a command. It reads a request on stdin and
+writes a response on stdout — the same shape a tool has, a
+filter that stays in a pipeline. Reaching a url is one such
+command rather than the privileged path, so anything you can
+write a program for is a provider.
 
 `core/providers.json`:
 
 ```json
 {
   "toy": {
-    "cmd": ["m8", "providers", "toy"],
-    "api": "m8"
+    "cmd": ["m8", "providers", "toy"]
   },
   "local": {
     "cmd": ["m8", "providers", "url"],
-    "api": "openai-completions",
+    "encode": ["m8", "encode", "openai-completions"],
+    "parse": ["m8", "parse", "openai-completions"],
     "url": "http://127.0.0.1:11337/v1/chat/completions",
     "header-authorization": "echo Bearer $(cat ~/.omlx/key)"
   },
   "anthropic": {
     "cmd": ["m8", "providers", "url"],
-    "api": "anthropic-messages",
+    "encode": ["m8", "encode", "anthropic-messages"],
+    "parse": ["m8", "parse", "anthropic-messages"],
     "url": "https://api.anthropic.com/v1/messages",
     "header-anthropic-version": "echo 2023-06-01",
     "header-x-api-key": "security find-generic-password -s anthropic-api-key -w"
@@ -2166,20 +2176,38 @@ anything you can write a program for is a provider.
 }
 ```
 
-Two entries mean anything to m8:
+Three entries mean anything to m8, and each is a command:
 
-* `cmd` says what to run.
-* `api` says how to write the request and read the answer.
-  It names a codec, which is the same name `m8 encode` takes.
+* `cmd` gets the request answered.
+* `encode` makes the ledger a request.
+* `parse` makes the answer a turn.
 
-Everything else is handed to the command as `M8_PROVIDER_*`
-on top of the inherited environment, and means whatever the
-command makes of it. `url` arrives as `M8_PROVIDER_URL`,
-`api-version` as `M8_PROVIDER_API_VERSION`. Only string
-values with lowercase-and-hyphen keys go, because only those
-have a name to take. `cmd` stays behind — the command already
-knows what it is — and `api` goes, because what to write may
-be the command's business too.
+The three are one pipeline, each one's output the next
+one's input:
+
+* m8 writes the ledger in, as m8.
+* m8 reads the turn out, as m8.
+* With no `encode` or `parse`, `cmd` is handed m8 and
+  answers in it, as `toy` does.
+* Which apis there are is no list m8 holds.
+  The ones it ships are `m8 encode` and `m8 parse`,
+  named the way a command of your own would be.
+
+What a stage says on stderr is held until the turn is in:
+
+* A provider that answered has it passed on as it was said.
+* One that failed has it given as the reason.
+* `-v` reaches every stage as `M8_VERBOSITY`,
+  so each says no more than was asked for.
+
+Every string in the entry is handed to all three as
+`M8_PROVIDER_*` on top of the inherited environment, and
+means whatever a command makes of it. `url` arrives as
+`M8_PROVIDER_URL`, `api-version` as
+`M8_PROVIDER_API_VERSION`. Only string values with
+lowercase-and-hyphen keys go, because only those have a name
+to take. The commands stay behind — each already knows what
+it is.
 
 `header-` is nothing special to m8. It is `m8 providers
 url`'s one convention rather than the language's, and it is
@@ -2363,12 +2391,14 @@ TMPDIR            where a shielded tool's own directory is made;
                   /tmp when unset
 ```
 
-And what a provider's command is handed, which m8 writes
+And what a provider's commands are handed, which m8 writes
 and never reads:
 
 ```
-M8_PROVIDER_API   the codec the entry named
-M8_PROVIDER_*     every other string the entry said
+M8_PROVIDER_*     every string the entry said
+M8_VERBOSITY      1 under -v, 2 under -vv; a tool is
+                  handed it too, and an m8 started with it
+                  set says as much without being asked
 ```
 
 The two m8 ships with read `M8_PROVIDER_URL` and

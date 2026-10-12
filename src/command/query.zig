@@ -41,7 +41,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 query — say something to a chat, and answer with what it said back
         \\
-        \\  m8 query [-v | -vv] [--no-advance] [--new | --parent] [--piped] @ADDRESS [MESSAGE]
+        \\  m8 query [-v | -vv] [--no-advance | --no-store] [--new | --parent] [--piped] @ADDRESS [MESSAGE]
         \\
         \\Says MESSAGE to the address, runs until it replies or asks, keeps
         \\the run, and writes the reply as the text it is. The ledger is not
@@ -54,6 +54,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\with a dash is still the message. Options go before the address.
         \\
         \\  --no-advance   keep the run and move nothing: a side question
+        \\  --no-store     keep nothing, so nothing moves and nothing is written
         \\  --new          start from the agent, not from where the chat is
         \\  --parent       start from where the chat's parent is
         \\  --piped        read stdin as prose, and say it after the MESSAGE
@@ -85,6 +86,7 @@ fn run(ctx: Ctx) !u8 {
     var moving: address.Moving = .{};
     var start: address.Start = .head;
     var piped = false;
+    var store = true;
 
     // Options end at the address. The one argument after it is what was said.
     var i: usize = 0;
@@ -96,6 +98,8 @@ fn run(ctx: Ctx) !u8 {
             whole = true;
         } else if (std.mem.eql(u8, arg, "--no-advance")) {
             moving.stay = true;
+        } else if (std.mem.eql(u8, arg, "--no-store")) {
+            store = false;
         } else if (std.mem.eql(u8, arg, "--piped")) {
             piped = true;
         } else if (std.mem.eql(u8, arg, "--new") and start == .head) {
@@ -160,12 +164,12 @@ fn run(ctx: Ctx) !u8 {
         .home = try address.home(arena, io, dirs, a, name),
     };
     const turn = try converse.run(inner, .{
-        .keep = keeping.keeper(),
+        .keep = if (store) keeping.keeper() else null,
         .echo_given = whole,
         // The whole turn already says what the lines would.
-        .verbose = verbose and !whole,
+        .verbosity = if (whole) 2 else @intFromBool(verbose),
     });
-    _ = try keeping.finish(turn);
+    if (store) _ = try keeping.finish(turn);
 
     // Only what this run said. A reply from before it is not an answer to
     // what was just asked, and handing one back would say that it was.

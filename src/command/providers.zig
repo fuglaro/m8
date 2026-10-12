@@ -102,8 +102,15 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         try w.print("  {s: <10} {s}\n", .{ n.spec.name, n.spec.summary });
     try w.writeAll(
         \\
-        \\An entry in core/providers.json names one as ["m8", "providers", NAME]
-        \\and `api` says which codec writes the request and reads the answer.
+        \\An entry in core/providers.json names one as its `cmd`:
+        \\["m8", "providers", NAME]. It is handed the ledger as m8 and answers
+        \\with the turn as m8, unless the entry names two more commands:
+        \\
+        \\  encode   makes the ledger a request, as ["m8", "encode", FORMAT]
+        \\  parse    makes the answer a turn, as ["m8", "parse", FORMAT]
+        \\
+        \\The three are one pipeline. What each says on stderr is passed on
+        \\once the turn is in, or given as the reason when one fails.
         \\
     );
     try configured(ctx, w);
@@ -111,14 +118,15 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\environment:
         \\
-        \\  M8_PROVIDER_API   the codec the entry named, openai-completions
-        \\                    when it named none
-        \\  M8_PROVIDER_*     every other string the entry said: `url` arrives
+        \\  M8_VERBOSITY      1 under `-v` and 2 under `-vv`: how much to say
+        \\                    on stderr. It is inherited, so an m8 started
+        \\                    under one says as much without being asked
+        \\  M8_PROVIDER_*     every string the entry said: `url` arrives
         \\                    as M8_PROVIDER_URL, `api-version` as
         \\                    M8_PROVIDER_API_VERSION. Only lowercase-and-hyphen
         \\                    keys go, because only those have a name to take,
-        \\                    and `cmd` stays behind — the command already knows
-        \\                    what it is.
+        \\                    and the commands stay behind — each already
+        \\                    knows what it is.
         \\
     );
 }
@@ -153,11 +161,9 @@ pub fn configured(ctx: Ctx, w: *std.Io.Writer) !void {
             try w.print("  {s: <12} ({s})\n", .{ name, @errorName(why) });
             continue;
         };
-        try w.print("  {s: <12} {s: <34} api: {s}\n", .{
-            name,
-            try std.mem.join(ctx.arena, " ", p.cmd),
-            p.api,
-        });
+        try w.print("  {s: <12} {s}\n", .{ name, try std.mem.join(ctx.arena, " ", p.cmd) });
+        if (p.encode) |c| try w.print("  {s: <12}   encode: {s}\n", .{ "", try std.mem.join(ctx.arena, " ", c) });
+        if (p.parse) |c| try w.print("  {s: <12}   parse:  {s}\n", .{ "", try std.mem.join(ctx.arena, " ", c) });
     }
 }
 

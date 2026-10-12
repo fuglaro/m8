@@ -41,6 +41,13 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\its stdout scroll past as ordinary terminal scrollback. The last line
         \\it wrote to stderr is the status line.
         \\
+        \\A stderr line that leads with `::stats::` carries a panel, which
+        \\stays at the right of the top status line until the next one. The
+        \\panel runs to a `::` or the end of the line, and anything after
+        \\is a status line as usual:
+        \\
+        \\  ::stats::✥19▇16K::16000 in, 14000 cached
+        \\
         \\The editor is one row, grows with the message to at most half the
         \\terminal, and is one row again once the message is sent.
         \\
@@ -172,6 +179,10 @@ const stopping = "Stopping...";
 const waiting_empty = "Waiting (ctrl-c:cancel,ctrl-d:exit)...";
 const waiting_written = "Waiting (enter:dispatch,alt-enter/ctrl-j:newline)...";
 
+/// What a line on stderr leads with when it carries the panel: the panel
+/// follows, up to a pair of colons or the end of the line.
+const stats = "::stats::";
+
 /// The most status lines there may be.
 const most_bars = 8;
 /// The longest a key's sequence is left unfinished before it is let go.
@@ -221,6 +232,10 @@ const Riff = struct {
     s: usize = 1,
     older: [most_bars][512]u8 = undefined,
     older_len: [most_bars]usize = @splat(0),
+    /// The panel at the right of the top status line: what the command last
+    /// said in a line that began with `stats`. It stays until the next one.
+    panel: [64]u8 = undefined,
+    panel_len: usize = 0,
     scan: Scanner = .{},
     /// Whether the terminal has been asked where the command's cursor is,
     /// and what for: a resize, or a count the command's own cursor moves
@@ -454,6 +469,17 @@ const Riff = struct {
     fn note(r: *Riff, bytes: []const u8) void {
         for (bytes) |b| {
             if (b == '\n' or b == '\r') {
+                if (!r.status_ended and r.lift(r.status_len)) {
+                    // The line was the panel and nothing else, so it was not
+                    // a status line and the one before it comes back down.
+                    r.status = r.older[0];
+                    r.status_len = r.older_len[0];
+                    for (1..most_bars) |i| {
+                        r.older[i - 1] = r.older[i];
+                        r.older_len[i - 1] = r.older_len[i];
+                    }
+                    r.older_len[most_bars - 1] = 0;
+                }
                 r.status_ended = true;
                 continue;
             }
@@ -473,7 +499,20 @@ const Riff = struct {
                 r.status[r.status_len] = b;
                 r.status_len += 1;
             }
+            // The panel ends at the next pair of colons, and what follows on
+            // the line is a status line like any other.
+            if (b == ':' and std.mem.endsWith(u8, r.status[0..r.status_len], "::") and
+                r.lift(r.status_len - 2)) r.status_len = 0;
         }
+    }
+
+    /// Take the panel out of a status line that leads with one, up to `end`.
+    fn lift(r: *Riff, end: usize) bool {
+        const line = r.status[0..r.status_len];
+        if (end < stats.len or !std.mem.startsWith(u8, line, stats)) return false;
+        r.panel_len = @min(end - stats.len, r.panel.len);
+        @memcpy(r.panel[0..r.panel_len], line[stats.len..][0..r.panel_len]);
+        return true;
     }
 
     // ------------------------------------------------------------ drawing
@@ -569,8 +608,13 @@ const Riff = struct {
                 try w.splatByteAll(' ', up);
                 try w.writeAll(if (!bezel) grey ++ "\x1b[7m" else if (up > 0) grey ++ " ▟\x1b[7m" else grey ++ "▂▟\x1b[7m");
                 const room = if (bezel) wide - 4 else wide;
-                const used = try put(w, r.above(up), room);
-                try w.splatByteAll(' ', room -| used);
+                // The top line gives its right end to the panel, hard up
+                // against it, while that leaves it room to say something.
+                const panel = r.panel[0..r.panel_len];
+                const aside = if (k == 0 and span(panel) + 8 <= room) span(panel) else 0;
+                const used = try put(w, r.above(up), room - aside);
+                try w.splatByteAll(' ', room - aside -| used);
+                if (aside > 0) _ = try put(w, panel, aside);
                 try w.writeAll(if (!bezel) grey ++ "\x1b[27m" else if (up > 0) grey ++ "\x1b[27m▙" else grey ++ "\x1b[27m▙▂");
                 if (up > 0) try w.writeAll("\x1b[K");
             } else {
@@ -594,13 +638,21 @@ const Riff = struct {
             }
             if (r.drawn.items.len <= k) try r.drawn.append(r.ctx.arena, .empty);
             if (std.mem.eql(u8, r.drawn.items[k].items, line.written())) continue;
-            if (!any) try o.writeAll("\x1b[?2026h\x1b7");
+            // No wrapping while painting. A terminal that has narrowed
+            // without having said so would wrap a row drawn for the old
+            // width, and a wrap on the bottom row scrolls the output away
+            // and leaves half a bar behind in it. Cut short instead, the row
+            // is put right by the resize that follows.
+            if (!any) try o.writeAll("\x1b[?2026h\x1b7\x1b[?7l");
             any = true;
             try o.print("\x1b[{d};1H{s}", .{ r.h - l + 1 + k, line.written() });
             r.drawn.items[k].clearRetainingCapacity();
             try r.drawn.items[k].appendSlice(r.ctx.arena, line.written());
         }
         if (any) {
+            // On again first: putting the cursor back may retype the last
+            // character to leave a wrap waiting, which needs it.
+            try o.writeAll("\x1b[?7h");
             try r.scan.restore(o);
             try o.writeAll("\x1b[?2026l");
         }
@@ -1000,6 +1052,12 @@ fn width(cp: u21) usize {
     return 1;
 }
 
+/// How many cells text takes, by the same count as `put`.
+fn span(text: []const u8) usize {
+    var discard: std.Io.Writer.Discarding = .init(&.{});
+    return put(&discard.writer, text, std.math.maxInt(usize)) catch 0;
+}
+
 /// Write text into at most `max` cells and say how many it took. Escape
 /// sequences are left out, a control character is a space, and text that
 /// does not fit ends in an ellipsis.
@@ -1111,6 +1169,24 @@ test "the status line is the last line said, cut to fit" {
     defer out.deinit();
     try testing.expectEqual(@as(usize, 5), try put(&out.writer, "\x1b[1m💭 thinking", 5));
     try testing.expectEqualStrings("💭 t…", out.written());
+}
+
+test "a line that leads with stats is the panel, and the rest is the line" {
+    var r: Riff = .{ .ctx = undefined, .out = undefined, .cmd = &.{} };
+    r.note("one\n::stats::\u{2725}16K\u{2587}19::16000 in\n");
+    try testing.expectEqualStrings("\u{2725}16K\u{2587}19", r.panel[0..r.panel_len]);
+    try testing.expectEqualStrings("16000 in", r.status[0..r.status_len]);
+    try testing.expectEqualStrings("one", r.older[0][0..r.older_len[0]]);
+    try testing.expectEqual(@as(usize, 7), span(r.panel[0..r.panel_len]));
+
+    // A panel alone is no status line, and it stays when lines follow.
+    r.note("::stats::2K_3\n");
+    try testing.expectEqualStrings("2K_3", r.panel[0..r.panel_len]);
+    try testing.expectEqualStrings("16000 in", r.status[0..r.status_len]);
+    try testing.expectEqualStrings("one", r.older[0][0..r.older_len[0]]);
+    r.note("a::b\n");
+    try testing.expectEqualStrings("a::b", r.status[0..r.status_len]);
+    try testing.expectEqualStrings("2K_3", r.panel[0..r.panel_len]);
 }
 
 test "a message wraps into rows, and the cursor is found on one" {

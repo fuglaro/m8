@@ -37,7 +37,11 @@ pub const Options = struct {
     keep: ?Keeper = null,
     /// Say on stderr what the run is doing: a line as a thought opens, and
     /// one as each tool is called.
-    verbose: bool = false,
+    /// How much is said on stderr about what the run is doing: nothing, a
+    /// line as each thing happens, or more. Whatever the run starts is told
+    /// the same, as `M8_VERBOSITY`, and a run started with that set says as
+    /// much without being asked.
+    verbosity: u8 = 0,
 };
 
 /// Somewhere a run is kept, a piece at a time.
@@ -75,12 +79,32 @@ const Progress = struct {
     }
 };
 
+/// What says how much a run is saying, to whatever it starts.
+pub const verbosity_var = "M8_VERBOSITY";
+
+/// How much this run says: what it was asked for, or what whatever started
+/// it was, so asking once at the top is asking all the way down.
+fn verbosity(env: *const std.process.Environ.Map, asked: u8) u8 {
+    const inherited = std.fmt.parseInt(u8, env.get(verbosity_var) orelse "0", 10) catch 0;
+    return @max(asked, inherited);
+}
+
+/// The environment with this run's verbosity in it, for whatever it starts.
+fn told(arena: Allocator, env: *const std.process.Environ.Map, level: u8) !*const std.process.Environ.Map {
+    if (level == 0) return env;
+    const m = try arena.create(std.process.Environ.Map);
+    m.* = try env.clone(arena);
+    try m.put(verbosity_var, try std.fmt.allocPrint(arena, "{d}", .{level}));
+    return m;
+}
+
 /// Run whatever `ctx.in` holds, writing the reply as it arrives, and hand
 /// back the turn: what arrived, settled, and everything the run added.
 pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     const arena = handed.arena;
     var ctx = handed;
-    ctx.env = try unanswered(arena, handed.env);
+    const level = verbosity(handed.env, opts.verbosity);
+    ctx.env = try told(arena, try unanswered(arena, handed.env), level);
     const io = ctx.io;
     const out = ctx.out;
     const mode = ctx.mode;
@@ -111,11 +135,10 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
 
     const providers = try config.providers(arena, io, ctx.env);
     const p = try provider.read(arena, providers, def.provider);
-    const wire = codec.find(p.api) orelse return provider.Error.UnsupportedApi;
 
-    // The command is found once, before anything is said, so a provider that
-    // is not there fails before a turn is half made.
-    const argv = try provider.resolve(arena, io, ctx.self, try config.coreDirs(arena, io, ctx.env), p.cmd);
+    // The commands are found once, before anything is said, so a provider
+    // that is not there fails before a turn is half made.
+    const stages = try provider.stages(arena, io, ctx.self, try config.coreDirs(arena, io, ctx.env), p);
     const environ = try provider.environment(arena, p, ctx.env);
 
     // Only what a blockless 🧰 named, and the last definition of a name wins.
@@ -139,7 +162,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // Records normally get a blank line, so writing one has to know what came
     // before it. Some records belong together and are shown touching.
     var shown: Shown = .{};
-    var status: Status = .{ .err = if (opts.verbose) ctx.err else null };
+    var status: Status = .{ .err = if (level > 0 and !opts.echo_given) ctx.err else null };
     if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);
     // The rendered spelling is only ever written for a terminal, and a
     // terminal is the only reader that can watch a reply arrive.
@@ -162,7 +185,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             const said = try ledger.exclamations(arena, records.items, c.id);
             try status.call(arena, c);
             var how: Went = .settled;
-            for (try answer(ctx, scratch, shields, offered, c, said, &how)) |record| {
+            for (try answer(ctx, scratch, shields, offered, def.tools, c, said, &how)) |record| {
                 try show(arena, out, mode, &shown, record);
                 try records.append(arena, record);
                 try turn.append(arena, record);
@@ -197,21 +220,15 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 .shown = &shown,
                 .status = &status,
             };
-            const request = try wire.encode(arena, records.items, .{
-                .model = def.model,
-                .params = def.params,
-                .tools = offered,
-                // A hint rather than a contract: a provider that cannot stream
-                // answers whole, and the parser reads either.
-                .stream = true,
-            });
+            // The ledger as it stands, in the language itself. What a model
+            // is sent of it is the provider's to make.
+            const request = try codec.m8.codec.encode(arena, records.items, .{});
             const answered = try provider.run(
                 arena,
                 io,
-                argv,
+                stages,
                 environ,
                 request,
-                wire,
                 reply.sink(),
                 ctx.err,
             );
@@ -240,7 +257,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 // The answer comes from the tool, not the model, and was already
                 // checked against what a tool may say.
                 var how: Went = .settled;
-                const answers = try answer(ctx, scratch, shields, offered, c, &.{}, &how);
+                const answers = try answer(ctx, scratch, shields, offered, def.tools, c, &.{}, &how);
                 // A question stops the run, so the calls behind it are written
                 // down first. They are owed, and whoever picks this up with the
                 // person's answer runs them once the one that asked is through.
@@ -375,6 +392,8 @@ fn answer(
     scratch: []const u8,
     shields: shield.Set,
     tools: []const toolbox.Tool,
+    /// Every tool with a definition, offered or not, to say which is missing.
+    defined: []const toolbox.Tool,
     c: codec.Call,
     /// What the person has answered this call's questions with so far.
     said: []const ledger.Answer,
@@ -385,7 +404,11 @@ fn answer(
 
     const tool = for (tools) |t| {
         if (std.mem.eql(u8, t.name, c.name)) break t;
-    } else return failure(arena, c.id, "no tool named '{s}'", .{c.name});
+    } else {
+        for (defined) |t| if (std.mem.eql(u8, t.name, c.name))
+            return failure(arena, c.id, "tool '{s}' is defined but not offered.", .{c.name});
+        return failure(arena, c.id, "no tool named '{s}'", .{c.name});
+    };
 
     if (tool.command == .none)
         return failure(

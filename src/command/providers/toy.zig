@@ -90,7 +90,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\The entry, which m8 ships with:
         \\
-        \\  "toy": { "cmd": ["m8", "providers", "toy"], "api": "m8" }
+        \\  "toy": { "cmd": ["m8", "providers", "toy"] }
         \\
         \\It reads nothing from the environment.
         \\

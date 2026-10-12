@@ -91,14 +91,16 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  "local": {
         \\    "cmd": ["m8", "providers", "url"],
-        \\    "api": "openai-completions",
+        \\    "encode": ["m8", "encode", "openai-completions"],
+        \\    "parse": ["m8", "parse", "openai-completions"],
         \\    "url": "http://127.0.0.1:11337/v1/chat/completions",
         \\    "header-authorization": "echo Bearer $(security find-generic-password -s omlx -w)"
         \\  }
         \\
         \\  "anthropic": {
         \\    "cmd": ["m8", "providers", "url"],
-        \\    "api": "anthropic-messages",
+        \\    "encode": ["m8", "encode", "anthropic-messages"],
+        \\    "parse": ["m8", "parse", "anthropic-messages"],
         \\    "url": "https://api.anthropic.com/v1/messages",
         \\    "header-anthropic-version": "echo 2023-06-01",
         \\    "header-x-api-key": "security find-generic-password -s anthropic-api-key -w"

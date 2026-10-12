@@ -120,6 +120,9 @@ pub const Call = struct {
 /// still JSON, and those mean nothing until the last brace.
 pub const Reply = struct {
     calls: []const Call = &.{},
+    /// Something to say beside the reply, to whoever is watching the run
+    /// rather than reading it: a line for stderr, such as what the call cost.
+    aside: []const u8 = "",
 };
 
 /// A sink that keeps the reply as records, for whoever wants it whole.
@@ -226,28 +229,76 @@ pub fn stoppedAs(
 /// would have been and kept in the ledger, rather than thrown past both. It
 /// has nothing under it, so no api is ever told it again.
 ///
-/// `e` is the object holding the api's `message` beside its `type` or `code`.
+/// `e` is normally the object holding the api's `message` beside its `type`
+/// or `code`; a few APIs use `summary`, `detail`, or a string directly.
 pub fn failed(arena: Allocator, sink: Sink, e: ?std.json.Value) !void {
     var message: []const u8 = "";
     var term: []const u8 = "error";
-    if (e) |v| if (v == .object) {
-        if (v.object.get("message")) |m| if (m == .string) {
-            message = m.string;
-        };
-        for ([_][]const u8{ "code", "type" }) |name| {
-            if (v.object.get(name)) |t| if (t == .string and t.string.len > 0) {
-                term = t.string;
-            };
-        }
+    if (e) |v| switch (v) {
+        .string => message = v.string,
+        .object => {
+            for ([_][]const u8{ "message", "summary", "detail" }) |name| {
+                if (v.object.get(name)) |m| if (m == .string and m.string.len > 0) {
+                    message = m.string;
+                    break;
+                };
+            }
+            // The type is the term, and a code stands in where there is no
+            // type, or only an event's own `error`, which says nothing more.
+            for ([_][]const u8{ "code", "type" }) |name| {
+                if (v.object.get(name)) |t| if (t == .string and t.string.len > 0) {
+                    if (std.mem.eql(u8, t.string, "error") and !std.mem.eql(u8, term, "error")) continue;
+                    term = t.string;
+                };
+            }
+        },
+        else => {},
     };
     if (message.len == 0) return stoppedAs(arena, sink, "failed with", term);
 
-    // A value is one line, so a message that was several is said as one.
-    const line = try arena.dupe(u8, message);
-    for (line) |*c| if (c.* == '\n' or c.* == '\r') {
-        c.* = ' ';
-    };
-    try stoppedAs(arena, sink, try std.fmt.allocPrint(arena, "{s} - failed with", .{line}), term);
+    const line = try briefLine(arena, message);
+    if (line.len == 0) return stoppedAs(arena, sink, "failed with", term);
+    try stoppedAs(
+        arena,
+        sink,
+        try std.fmt.allocPrint(arena, "{s} - failed with", .{line}),
+        term,
+    );
+}
+
+/// An api that failed without saying why, in any place anyone knew to look.
+/// What arrived follows the words, cut to a line, so a shape nobody has met
+/// still explains itself.
+pub fn failedWith(arena: Allocator, sink: Sink, arrived: []const u8) !void {
+    const line = try briefLine(arena, arrived);
+    if (line.len == 0) return stoppedAs(arena, sink, "failed with", "error");
+    try stoppedAs(arena, sink, "failed with", try std.fmt.allocPrint(arena, "error - {s}", .{line}));
+}
+
+/// Error text lives in a record value, so make arbitrary provider prose a
+/// compact line rather than letting an HTML error or stack trace take over a
+/// transcript.
+fn briefLine(arena: Allocator, text: []const u8) ![]const u8 {
+    const limit = 240;
+    var line: std.ArrayList(u8) = .empty;
+    var space = false;
+    for (text) |c| {
+        if (std.ascii.isWhitespace(c)) {
+            space = line.items.len > 0;
+            continue;
+        }
+        if (space) try line.append(arena, ' ');
+        try line.append(arena, c);
+        space = false;
+    }
+    if (line.items.len <= limit) return line.items;
+
+    // Do not split a UTF-8 sequence to make room for the ellipsis.
+    var end: usize = limit - 3;
+    while (end > 0 and line.items[end] & 0xc0 == 0x80) end -= 1;
+    line.items.len = end;
+    try line.appendSlice(arena, "...");
+    return line.items;
 }
 
 /// The records an api can be told, which is all of them but a 🤖 with nothing
@@ -296,16 +347,12 @@ pub fn find(name: []const u8) ?Codec {
     return null;
 }
 
-/// The api a provider gets when it names none.
-pub const default = "openai-completions";
-
 /// Every format there is, for whichever page is asking. The table itself
 /// rather than a copy of it, so nothing can come to be listed that `find`
 /// would not return.
 pub fn list(w: *std.Io.Writer) !void {
     try w.writeAll("\nformats:\n\n");
     for (all) |c| try w.print("  {s: <20} {s}\n", .{ c.name, c.summary });
-    try w.print("\nA provider that names none is sent {s}.\n", .{default});
 }
 
 /// The next line, or null at the end.
@@ -375,8 +422,6 @@ test "every codec has a name and a summary, and no two share one" {
     for (all, 0..) |a, i| for (all[i + 1 ..]) |b| {
         try testing.expect(!std.mem.eql(u8, a.name, b.name));
     };
-    // The name a provider defaults to has to be one of them.
-    try testing.expect(find(default) != null);
     try testing.expect(find("nosuch") == null);
 }
 

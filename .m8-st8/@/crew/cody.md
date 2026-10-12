@@ -1,4 +1,4 @@
-#### :brain:/codex/gpt-5.6-luna,reasoning:{"summary":"auto","effort":"high"}
+#### :brain:/codex/gpt-5.6-luna,reasoning:{"summary":"auto","effort":"low"}
 
 #### :compass:
 > You are a helpful coding assistant working alongside the user,
@@ -10,13 +10,13 @@
 #### :brain:utils/shields
 
 #### :shield:freeze-toolbox
-#### :shield:no-edit-git
 
 #### :shield:workbench
 > :shield:contain-writes
 > :shield:contain-env
 > :shield:airgap
 > :shield:no-loop
+> :shield:no-edit-git
 
 #### :toolbox:read
 > > Read the contents of a text file.

@@ -49,11 +49,12 @@ pub fn run(given: Ctx, all: []const []const u8) !u8 {
     // as a person reads it.
     //
     // `-v` is verbose: what the run is doing, said on stderr as it does it.
+    // `-vv` is more so, to anything the run starts that has more to say.
     var pretty = false;
-    var verbose = false;
+    var verbosity: u8 = 0;
     var args = all;
     while (args.len > 1) : (args = args[1..]) {
-        if (std.mem.eql(u8, args[1], "-p")) pretty = true else if (std.mem.eql(u8, args[1], "-v")) verbose = true else break;
+        if (std.mem.eql(u8, args[1], "-p")) pretty = true else if (std.mem.eql(u8, args[1], "-v")) verbosity = 1 else if (std.mem.eql(u8, args[1], "-vv")) verbosity = 2 else break;
     }
     var ctx = given;
     if (pretty) ctx.mode = .m8;
@@ -127,7 +128,7 @@ pub fn run(given: Ctx, all: []const []const u8) !u8 {
         .moving = .{ .mover = .prompt },
         .home = try address.home(arena, io, dirs, a, lead[0].value),
     };
-    const turn = try converse.run(inner, .{ .keep = keeping.keeper(), .verbose = verbose });
+    const turn = try converse.run(inner, .{ .keep = keeping.keeper(), .verbosity = verbosity });
     const kept = try keeping.finish(turn);
 
     try ctx.out.writeByte('\n');

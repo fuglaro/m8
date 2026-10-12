@@ -1,16 +1,21 @@
 //! Talking to a provider.
 //!
-//! A provider is a command. It reads an api-formatted request on stdin and
-//! writes that api's response on stdout, which is the same shape a tool has —
-//! a filter that stays in a pipeline. Reaching a url is one such command
-//! rather than the privileged path, so anything you can write a program for
-//! is a provider.
+//! A provider is a command. It reads a request on stdin and writes a response
+//! on stdout, which is the same shape a tool has — a filter that stays in a
+//! pipeline. Reaching a url is one such command rather than the privileged
+//! path, so anything you can write a program for is a provider.
 //!
-//! Everything in the entry except `cmd` is handed to it as `M8_PROVIDER_*` on
-//! top of the inherited environment. m8 knows only two of them: `cmd`, which
-//! says what to run, and `api`, which says how to write the request and read
-//! the answer. A `key` is nothing special to m8; it is passed through, and
-//! whether it means anything is between you and the command.
+//! What m8 writes is the ledger, as m8, and what it reads is the turn, as m8.
+//! A provider that speaks something else names two more commands, and the
+//! three are one pipeline: `encode` makes the ledger a request, `cmd` gets it
+//! answered, and `parse` makes the answer a turn. Which apis there are is
+//! then nothing m8 holds a list of: the ones it ships are `m8 encode` and
+//! `m8 parse`, named in an entry the way anyone's own would be.
+//!
+//! Every string in the entry is handed to all three as `M8_PROVIDER_*` on
+//! top of the inherited environment. A `key` is nothing special to m8; it is
+//! passed through, and whether it means anything is between you and the
+//! command.
 //!
 //! Shields are not applied here. That is safe rather than generous: a shield
 //! is the process a child is launched inside, and `sandbox-exec` is one way —
@@ -27,7 +32,6 @@ const doc = @import("m8/doc.zig");
 
 pub const Error = error{
     UnknownProvider,
-    UnsupportedApi,
     NoCommand,
     CommandNotFound,
     CommandNotExecutable,
@@ -37,9 +41,12 @@ pub const Error = error{
 /// One entry from providers.json, as far as m8 reads it.
 pub const Provider = struct {
     name: []const u8,
-    api: []const u8,
     /// What to run, before any path has been resolved.
     cmd: []const []const u8,
+    /// What makes the ledger a request for it, and its answer a turn. With
+    /// neither, the command is handed m8 and answers in it.
+    encode: ?[]const []const u8 = null,
+    parse: ?[]const []const u8 = null,
     /// Everything else the entry said, for the environment. Only string
     /// values with lowercase-and-hyphen keys make it this far.
     args: []const Arg,
@@ -63,44 +70,44 @@ pub const env_prefix = "M8_PROVIDER_";
 /// Only string values with lowercase-and-hyphen keys are passed on, because
 /// only those have an environment variable to be: `api-version` arrives as
 /// `M8_PROVIDER_API_VERSION`. Anything else in the entry is m8's business or
-/// nobody's. `cmd` is left behind — the command already knows what it is.
+/// nobody's. The commands are left behind — each already knows what it is.
 pub fn read(arena: Allocator, providers: std.json.ObjectMap, name: []const u8) !Provider {
     const v = providers.get(name) orelse return Error.UnknownProvider;
     if (v != .object) return Error.UnknownProvider;
     const o = v.object;
 
-    var cmd: std.ArrayList([]const u8) = .empty;
-    if (o.get("cmd")) |c| {
-        if (c != .array) return Error.NoCommand;
-        for (c.array.items) |item| {
-            if (item != .string) return Error.NoCommand;
-            try cmd.append(arena, item.string);
-        }
-    }
-    if (cmd.items.len == 0) return Error.NoCommand;
+    const cmd = (try words(arena, o.get("cmd"))) orelse return Error.NoCommand;
 
     var args: std.ArrayList(Arg) = .empty;
     var it = o.iterator();
     while (it.next()) |e| {
         const key = e.key_ptr.*;
-        // `cmd` is m8's alone — the command already knows what it is. `api`
-        // goes through, because what to write may be the command's business
-        // as much as m8's.
-        if (std.mem.eql(u8, key, "cmd")) continue;
+        // The commands are lists, so they stay behind with everything else
+        // that is not a string: a command already knows what it is.
         if (e.value_ptr.* != .string) continue;
         if (!nameable(key)) continue;
         try args.append(arena, .{ .key = key, .value = e.value_ptr.*.string });
     }
 
-    const api = if (o.get("api")) |a| (if (a == .string) a.string else codec.default) else codec.default;
-    if (o.get("api") == null) try args.append(arena, .{ .key = "api", .value = api });
-
     return .{
         .name = name,
-        .api = api,
-        .cmd = cmd.items,
+        .cmd = cmd,
+        .encode = try words(arena, o.get("encode")),
+        .parse = try words(arena, o.get("parse")),
         .args = args.items,
     };
+}
+
+/// A command as an entry writes it: a list of strings, with at least one.
+fn words(arena: Allocator, v: ?std.json.Value) !?[]const []const u8 {
+    const list = v orelse return null;
+    if (list != .array or list.array.items.len == 0) return Error.NoCommand;
+    var out: std.ArrayList([]const u8) = .empty;
+    for (list.array.items) |item| {
+        if (item != .string) return Error.NoCommand;
+        try out.append(arena, item.string);
+    }
+    return out.items;
 }
 
 /// Whether a key has an environment variable to become: lowercase letters,
@@ -228,77 +235,120 @@ fn fromCwd(arena: Allocator, io: std.Io, path: []const u8) ![]const u8 {
     return std.fs.path.resolve(arena, &.{ buf[0..len], path });
 }
 
+/// The commands a provider is, resolved: what makes the request, what gets
+/// it answered, and what reads the answer. Only the middle one is always
+/// there.
+pub const Stages = struct {
+    encode: ?[]const []const u8 = null,
+    cmd: []const []const u8,
+    parse: ?[]const []const u8 = null,
+};
+
+pub fn stages(
+    arena: Allocator,
+    io: std.Io,
+    self: []const u8,
+    core_dirs: []const []const u8,
+    p: Provider,
+) !Stages {
+    return .{
+        .encode = if (p.encode) |c| try resolve(arena, io, self, core_dirs, c) else null,
+        .cmd = try resolve(arena, io, self, core_dirs, p.cmd),
+        .parse = if (p.parse) |c| try resolve(arena, io, self, core_dirs, c) else null,
+    };
+}
+
 /// Run a provider and read what it says.
 ///
-/// The request is written and stdin closed before anything is read back. A
-/// provider reads its request before answering — it cannot answer otherwise —
-/// so the one shape this would deadlock on is a command that writes more than
-/// a pipe holds before reading, which is not a thing a provider does.
+/// The stages are one pipeline, each one's stdout the next one's stdin, and
+/// m8 holds only the two ends: it writes the ledger to the first and reads
+/// the turn from the last.
+///
+/// The ledger is written and stdin closed before anything is read back. A
+/// stage reads what it is handed before answering — it cannot answer
+/// otherwise — so the one shape this would deadlock on is a command that
+/// writes more than a pipe holds before reading, which is not a thing a
+/// provider does.
+///
+/// What a stage says on stderr is held until the turn is in. A provider that
+/// answered has it passed on as it was said, and one that failed has it
+/// given as the reason.
 pub fn run(
     arena: Allocator,
     io: std.Io,
-    argv: []const []const u8,
+    s: Stages,
     environ: ?*const std.process.Environ.Map,
-    request: []const u8,
-    c: codec.Codec,
+    ledger: []const u8,
     sink: codec.Sink,
     err: *std.Io.Writer,
 ) !codec.Reply {
-    var child = std.process.spawn(io, .{
-        .argv = argv,
-        .environ_map = environ,
-        .stdin = .pipe,
-        .stdout = .pipe,
-        .stderr = .pipe,
-    }) catch return Error.CommandNotFound;
+    const names = [_][]const u8{ "encode", "cmd", "parse" };
+    const argvs = [_]?[]const []const u8{ s.encode, s.cmd, s.parse };
+    var children: [3]?std.process.Child = @splat(null);
+
+    var first: ?std.Io.File = null;
+    var last: ?std.Io.File = null;
+    for (argvs, 0..) |argv, n| {
+        children[n] = std.process.spawn(io, .{
+            .argv = argv orelse continue,
+            .environ_map = environ,
+            .stdin = if (last) |from| .{ .file = from } else .pipe,
+            .stdout = .pipe,
+            .stderr = .pipe,
+        }) catch return Error.CommandNotFound;
+        // The stage before it is this one's to read now, and nobody else's:
+        // held open here, its end would never be seen.
+        if (last) |from| from.close(io) else first = children[n].?.stdin.?;
+        children[n].?.stdin = null;
+        for (children[0..n]) |*before| if (before.*) |*b| {
+            b.stdout = null;
+        };
+        last = children[n].?.stdout.?;
+    }
 
     var write_buf: [16 * 1024]u8 = undefined;
-    var w = child.stdin.?.writerStreaming(io, &write_buf);
-    try w.interface.writeAll(request);
+    var w = first.?.writerStreaming(io, &write_buf);
+    try w.interface.writeAll(ledger);
     try w.interface.flush();
-    child.stdin.?.close(io);
-    child.stdin = null;
+    first.?.close(io);
 
     var read_buf: [64 * 1024]u8 = undefined;
-    var r = child.stdout.?.readerStreaming(io, &read_buf);
-    const reply = c.parse(arena, &r.interface, sink) catch |parse_err| {
-        // A parser may have stopped at the first malformed line. Drain what
-        // remains before waiting, or a provider that wrote a large response
-        // can stay blocked with its stdout pipe full and hide the diagnostic.
-        _ = r.interface.discardRemaining() catch {};
+    var r = last.?.readerStreaming(io, &read_buf);
+    const reply = codec.m8.codec.parse(arena, &r.interface, sink);
+    // A parser may have stopped at the first malformed line. Drain what
+    // remains before waiting, or a stage that wrote a large response can stay
+    // blocked with its stdout pipe full and hide the diagnostic.
+    if (reply) |_| {} else |_| _ = r.interface.discardRemaining() catch {};
 
-        var parse_err_buf: [8 * 1024]u8 = undefined;
-        var parse_stderr = child.stderr.?.readerStreaming(io, &parse_err_buf);
-        const parse_said = parse_stderr.interface.allocRemaining(arena, .limited(8192)) catch "";
-        const why = std.mem.trimEnd(u8, parse_said, "\n");
-        if (why.len > 0)
-            try err.print("m8: provider {s} stderr: {s}\n", .{ c.name, why });
-        try err.print("m8: provider {s}: {s}\n", .{ c.name, @errorName(parse_err) });
-        _ = child.wait(io) catch {};
+    var failed = false;
+    var said: [3][]const u8 = @splat("");
+    for (&children, 0..) |*c, n| if (c.*) |*child| {
+        var err_buf: [8 * 1024]u8 = undefined;
+        var e = child.stderr.?.readerStreaming(io, &err_buf);
+        said[n] = e.interface.allocRemaining(arena, .limited(8192)) catch "";
+        const why = std.mem.trimEnd(u8, said[n], "\n");
+        const code: ?u8 = switch (child.wait(io) catch std.process.Child.Term{ .unknown = 0 }) {
+            .exited => |code| if (code == 0) continue else code,
+            else => null,
+        };
+        failed = true;
+        try err.print("m8: provider {s} failed", .{names[n]});
+        if (code) |x| try err.print(" with exit code {d}", .{x});
+        if (why.len > 0) try err.print(": {s}", .{why});
+        try err.writeAll("\n");
+    };
+    const turn = reply catch |parse_err| {
+        if (!failed) try err.print("m8: provider: {s}\n", .{@errorName(parse_err)});
         return parse_err;
     };
-
-    var err_buf: [8 * 1024]u8 = undefined;
-    var e = child.stderr.?.readerStreaming(io, &err_buf);
-    const said = e.interface.allocRemaining(arena, .limited(8192)) catch "";
-
-    switch (child.wait(io) catch return Error.ProviderFailed) {
-        .exited => |code| if (code != 0) {
-            const why = std.mem.trimEnd(u8, said, "\n");
-            if (why.len > 0) {
-                try err.print("m8: provider failed with exit code {d}: {s}\n", .{ code, why });
-            } else {
-                try err.print("m8: provider failed with exit code {d}\n", .{code});
-            }
-            return Error.ProviderFailed;
-        },
-        else => return Error.ProviderFailed,
-    }
+    if (failed) return Error.ProviderFailed;
     // A provider that answered may still have had something to say, such as
-    // a credential it could not find.
-    const aside = std.mem.trimEnd(u8, said, "\n");
-    if (aside.len > 0) try err.print("m8: provider: {s}\n", .{aside});
-    return reply;
+    // a credential it could not find, or what the answer cost.
+    for (said) |aside| if (aside.len > 0) {
+        try err.writeAll(aside);
+        if (aside[aside.len - 1] != '\n') try err.writeAll("\n");
+    };
+    return turn;
 }
 
 // ---------------------------------------------------------------- tests
@@ -310,7 +360,7 @@ fn providersFrom(arena: Allocator, json: []const u8) !std.json.ObjectMap {
     return v.object;
 }
 
-test "an entry is a command, an api, and whatever else it wants to say" {
+test "an entry is its commands, and whatever else it wants to say" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -318,6 +368,7 @@ test "an entry is a command, an api, and whatever else it wants to say" {
     const ps = try providersFrom(arena,
         \\{"local": {
         \\  "cmd": ["m8", "providers", "url"],
+        \\  "encode": ["m8", "encode", "openai-completions"],
         \\  "url": "http://x/v1/chat/completions",
         \\  "key": "cat ~/.key",
         \\  "api-version": "2024-02-01",
@@ -327,7 +378,9 @@ test "an entry is a command, an api, and whatever else it wants to say" {
     );
     const p = try read(arena, ps, "local");
 
-    try testing.expectEqualStrings(codec.default, p.api);
+    // A stage it did not name is not there: the command is handed m8.
+    try testing.expectEqualStrings("openai-completions", p.encode.?[2]);
+    try testing.expect(p.parse == null);
     try testing.expectEqual(@as(usize, 3), p.cmd.len);
     try testing.expectEqualStrings("m8", p.cmd[0]);
 
@@ -464,10 +517,9 @@ test "a provider is a command: what it writes is the answer" {
     const reply = try run(
         arena,
         io,
-        &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> said it\n'" },
+        .{ .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> said it\n'" }, },
         null,
         "#### :raising_hand:\n> ask\n",
-        codec.m8.codec,
         collect.sink(),
         &thrown.writer,
     );
@@ -491,16 +543,55 @@ test "a provider that fails says why, and the run stops" {
     try testing.expectError(Error.ProviderFailed, run(
         arena,
         io,
-        &.{ "/bin/sh", "-c", "cat >/dev/null; echo 'that api is not supported' >&2; exit 3" },
+        .{ .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; echo 'that api is not supported' >&2; exit 3" }, },
         null,
         "",
-        codec.m8.codec,
         collect.sink(),
         &thrown.writer,
     ));
     // The exit code and whatever it said, so the reason is not lost.
     try testing.expect(std.mem.indexOf(u8, thrown.written(), "exit code 3") != null);
     try testing.expect(std.mem.indexOf(u8, thrown.written(), "not supported") != null);
+}
+
+test "the stages are one pipeline, and what each says aside is kept for the end" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const io = threaded.io();
+
+    var thrown: std.Io.Writer.Allocating = .init(arena);
+    var collect: Collect = .{ .arena = arena };
+    _ = try run(
+        arena,
+        io,
+        .{
+            .encode = &.{ "/bin/sh", "-c", "tr a-z A-Z" },
+            .cmd = &.{ "/bin/sh", "-c", "sed 's/$/!/'" },
+            .parse = &.{ "/bin/sh", "-c", "echo '::stats::x' >&2; printf '#### :robot:\n> '; cat" },
+        },
+        null,
+        "ask",
+        collect.sink(),
+        &thrown.writer,
+    );
+    try testing.expectEqualStrings("ASK!", try collect.got.said(arena));
+    // As it was said, with nothing put in front of it.
+    try testing.expectEqualStrings("::stats::x\n", thrown.written());
+
+    // The stage that failed is the one named.
+    try testing.expectError(Error.ProviderFailed, run(
+        arena,
+        io,
+        .{ .encode = &.{ "/bin/sh", "-c", "cat >/dev/null; echo nope >&2; exit 2" }, .cmd = &.{"cat"} },
+        null,
+        "ask",
+        collect.sink(),
+        &thrown.writer,
+    ));
+    try testing.expect(std.mem.indexOf(u8, thrown.written(), "provider encode failed with exit code 2: nope") != null);
 }
 
 test "everything the entry said reaches the command, and nothing else does" {
@@ -528,8 +619,6 @@ test "everything the entry said reaches the command, and nothing else does" {
     try testing.expectEqualStrings("yes", environ.get("M8_TEST_INHERITED").?);
     try testing.expectEqualStrings("http://x/v1/chat/completions", environ.get("M8_PROVIDER_URL").?);
     try testing.expectEqualStrings("2024-02-01", environ.get("M8_PROVIDER_API_VERSION").?);
-    // `api` goes, because the command may need to know what to write.
-    try testing.expectEqualStrings(codec.default, environ.get("M8_PROVIDER_API").?);
     // `cmd` does not: the command already knows what it is.
     try testing.expect(environ.get("M8_PROVIDER_CMD") == null);
 
@@ -538,10 +627,9 @@ test "everything the entry said reaches the command, and nothing else does" {
     _ = try run(
         arena,
         io,
-        &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> %s\n' \"$M8_PROVIDER_URL\"" },
+        .{ .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> %s\n' \"$M8_PROVIDER_URL\"" }, },
         environ,
         "",
-        codec.m8.codec,
         collect.sink(),
         &thrown.writer,
     );

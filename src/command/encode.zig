@@ -61,6 +61,9 @@ fn target(ctx: Ctx, records: []const doc.Record) !codec.Target {
         .model = def.model,
         .params = def.params,
         .tools = try agent.offer(ctx.arena, def),
+        // A hint rather than a contract: a provider that cannot stream
+        // answers whole, and `parse` reads either.
+        .stream = true,
     };
 }
 

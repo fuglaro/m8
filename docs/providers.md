@@ -67,7 +67,8 @@ plan. So the entry is a url and a command that reads the token:
 ```json
 "codex": {
   "cmd": ["m8", "providers", "url"],
-  "api": "openai-responses",
+  "encode": ["m8", "encode", "openai-responses"],
+  "parse": ["m8", "parse", "openai-responses"],
   "url": "https://chatgpt.com/backend-api/codex/responses",
   "header-authorization": "echo Bearer $(...access_token from ~/.codex/auth.json...)",
   "header-chatgpt-account-id": "...the account id claim in that token...",
@@ -102,7 +103,8 @@ An api key instead, which reaches the same codec:
 ```json
 "openai": {
   "cmd": ["m8", "providers", "url"],
-  "api": "openai-responses",
+  "encode": ["m8", "encode", "openai-responses"],
+  "parse": ["m8", "parse", "openai-responses"],
   "url": "https://api.openai.com/v1/responses",
   "header-authorization": "echo Bearer $(security find-generic-password -s openai-api-key -w)"
 }

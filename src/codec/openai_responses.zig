@@ -431,27 +431,27 @@ fn event(built: *Building, v: std.json.Value) !bool {
         const index = num(v.object.get("summary_index")) orelse num(v.object.get("content_index")) orelse 0;
         if (index != built.part) try built.nextPart(index);
         if (str(v.object.get("delta"))) |d| try built.say(.thought, d);
+    } else if (std.mem.eql(u8, kind, "response.reasoning_summary_part.done")) {
+        // Said now rather than when the next part opens, which may be a long
+        // think away, or never: the last part would wait for the whole item.
+        if (built.kind == .reasoning) try built.nextPart(built.part);
     } else if (std.mem.eql(u8, kind, "response.function_call_arguments.delta")) {
         if (str(v.object.get("delta"))) |d| try built.args.appendSlice(built.arena, d);
     } else if (std.mem.eql(u8, kind, "response.completed")) {
+        if (v.object.get("response")) |resp| built.aside = try cost(built.arena, resp);
         return true;
     } else if (std.mem.eql(u8, kind, "response.incomplete")) {
         // Cut off rather than failed: what was said still happened, and the
         // ledger keeps it — along with that it was cut off.
         if (v.object.get("response")) |resp| built.reason = incompleteOf(resp);
+        if (v.object.get("response")) |resp| built.aside = try cost(built.arena, resp);
         return true;
     } else if (std.mem.eql(u8, kind, "response.failed") or std.mem.eql(u8, kind, "error")) {
         // A refusal, an overload or a bad request arrives here with a 200, so
         // this is the only thing that would notice it. Saying nothing would
         // record a turn in which the model simply said nothing.
         if (built.kind != .none) try built.stop();
-        // A failed response carries its error inside; a bare `error` event
-        // is one.
-        const e = if (v.object.get("response")) |resp|
-            (if (resp == .object) resp.object.get("error") else null)
-        else
-            v;
-        try api.failed(built.arena, built.sink, e);
+        try fail(built.arena, built.sink, v);
         return true;
     }
     return false;
@@ -467,15 +467,28 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
         return error.MalformedResponse;
     if (v != .object) return error.MalformedResponse;
     if (v.object.get("error")) |e| if (e != .null) {
-        try api.failed(arena, sink, e);
+        try fail(arena, sink, v);
+        return .{};
+    };
+    if (str(v.object.get("status"))) |status| if (std.mem.eql(u8, status, "failed")) {
+        try fail(arena, sink, v);
         return .{};
     };
 
     var built: Building = .{ .arena = arena, .sink = sink };
+    built.aside = try cost(built.arena, v);
     if (str(v.object.get("status"))) |status| if (std.mem.eql(u8, status, "incomplete")) {
         built.reason = incompleteOf(v);
     };
-    const output = v.object.get("output") orelse return built.finish();
+    const output = v.object.get("output") orelse {
+        // Not a response at all, so whatever it is is why there is none: a
+        // gateway's `{"detail": ...}` on a refused request, say.
+        if (built.reason.len == 0) {
+            try fail(arena, sink, v);
+            return .{};
+        }
+        return built.finish();
+    };
     if (output != .array) return built.finish();
     for (output.array.items) |item| {
         if (item != .object) continue;
@@ -484,6 +497,74 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
         try built.stop();
     }
     return built.finish();
+}
+
+/// The useful part of a failed event. OpenAI documents `response.error`, but
+/// compatible providers (and some gateways) put the same information beside
+/// the status or on the event itself. Prefer the documented location while
+/// still looking farther when it contains no explanatory text.
+fn failureOf(event_value: std.json.Value) ?std.json.Value {
+    if (event_value != .object) return null;
+    const event_object = event_value.object;
+    const response = event_object.get("response");
+    var fallback: ?std.json.Value = null;
+
+    if (response) |resp| if (resp == .object) {
+        if (resp.object.get("error")) |e| if (e != .null) {
+            if (hasFailureText(e)) return e;
+            fallback = e;
+        };
+        if (resp.object.get("status_details")) |details| if (details == .object) {
+            if (details.object.get("error")) |e| if (e != .null) {
+                if (hasFailureText(e)) return e;
+                if (fallback == null) fallback = e;
+            };
+        };
+    };
+    // In a non-streamed reply the response itself is the top-level object.
+    if (event_object.get("status_details")) |details| if (details == .object) {
+        if (details.object.get("error")) |e| if (e != .null) {
+            if (hasFailureText(e)) return e;
+            if (fallback == null) fallback = e;
+        };
+    };
+    if (event_object.get("error")) |e| if (e != .null) {
+        if (hasFailureText(e)) return e;
+        if (fallback == null) fallback = e;
+    };
+
+    // Return the holder, not just its text, so a code or type beside the
+    // fallback message remains visible in `(message - failed with code)`.
+    if (hasFailureText(event_value)) return event_value;
+    if (response) |resp| if (hasFailureText(resp)) return resp;
+    if (fallback) |f| if (hasTerm(f)) return f;
+    return null;
+}
+
+/// Say the failure: by what it said of itself, or with nothing anywhere
+/// saying why, by what arrived.
+fn fail(arena: Allocator, sink: api.Sink, event_value: std.json.Value) !void {
+    if (failureOf(event_value)) |e| return api.failed(arena, sink, e);
+    var raw: std.Io.Writer.Allocating = .init(arena);
+    try std.json.Stringify.value(event_value, .{}, &raw.writer);
+    try api.failedWith(arena, sink, raw.written());
+}
+
+fn hasTerm(value: std.json.Value) bool {
+    if (value != .object) return false;
+    for ([_][]const u8{ "code", "type" }) |name| {
+        if (str(value.object.get(name))) |text| if (text.len > 0) return true;
+    }
+    return false;
+}
+
+fn hasFailureText(value: std.json.Value) bool {
+    if (value == .string) return value.string.len > 0;
+    if (value != .object) return false;
+    for ([_][]const u8{ "message", "summary", "detail" }) |name| {
+        if (str(value.object.get(name))) |text| if (text.len > 0) return true;
+    }
+    return false;
 }
 
 /// Why a response is incomplete, in this api's words. Completing says nothing
@@ -528,6 +609,8 @@ const Building = struct {
     encrypted: []const u8 = "",
     /// Of the response rather than any item, and only known at its end.
     reason: []const u8 = "",
+    /// What the response cost, as a line for whoever is watching.
+    aside: []const u8 = "",
     /// The summary part being read, and how many before it became 💭 already.
     part: i64 = 0,
     parts: usize = 0,
@@ -673,9 +756,61 @@ const Building = struct {
         if (b.kind != .none) try b.stop();
         const reason = if (b.refused and b.reason.len == 0) "refusal" else b.reason;
         try api.stopped(b.arena, b.sink, stops, reason);
-        return .{ .calls = b.calls.items };
+        return .{ .calls = b.calls.items, .aside = b.aside };
     }
 };
+
+/// What a finished response says it cost, as a line: how much went in, how
+/// much of that the prompt cache already held, and how much came out.
+///
+/// It leads with the same in a few cells, for something that keeps a panel:
+/// what came out, a block as tall as the share the cache held, what went in.
+fn cost(arena: Allocator, response: std.json.Value) ![]const u8 {
+    if (response != .object) return "";
+    const u = response.object.get("usage") orelse return "";
+    if (u != .object) return "";
+    const in = num(u.object.get("input_tokens")) orelse 0;
+    const out = num(u.object.get("output_tokens")) orelse 0;
+    var cached: i64 = 0;
+    var written: i64 = 0;
+    var thinking: i64 = 0;
+    if (u.object.get("input_tokens_details")) |d| if (d == .object) {
+        cached = num(d.object.get("cached_tokens")) orelse 0;
+        written = num(d.object.get("cache_write_tokens")) orelse 0;
+    };
+    if (u.object.get("output_tokens_details")) |d| if (d == .object) {
+        thinking = num(d.object.get("reasoning_tokens")) orelse 0;
+    };
+
+    const hit = if (in > 0) @divTrunc(cached * 100, in) else 0;
+    var a: [8]u8 = undefined;
+    var b: [8]u8 = undefined;
+    var line: std.Io.Writer.Allocating = .init(arena);
+    const w = &line.writer;
+    try w.print("::stats::\u{2725}{s}{s}{s}::", .{ short(&a, out), held(cached, hit), short(&b, in) });
+    try w.print("\u{1F9EE} {d} in, {d} cached ({d}%)", .{ in, cached, hit });
+    if (written > 0) try w.print(", {d} written", .{written});
+    try w.print(", {d} out", .{out});
+    if (thinking > 0) try w.print(" ({d} thinking)", .{thinking});
+    return line.written();
+}
+
+/// A count in at most four characters: 999, 1K, 16K, 160K, 1M.
+fn short(buf: *[8]u8, count: i64) []const u8 {
+    var n: u64 = @intCast(@max(0, count));
+    var unit: usize = 0;
+    while (n >= 1000 and unit < 5) : (unit += 1) n /= 1000;
+    return std.fmt.bufPrint(buf, "{d}{s}", .{ n % 10000, " KMGTP"[unit..][0..@min(unit, 1)] }) catch unreachable;
+}
+
+/// A block as tall as the share of the prompt the cache held, and a line
+/// along the bottom for none of it. It stops short of a whole block, which
+/// would be a hole in a status bar.
+fn held(cached: i64, percent: i64) []const u8 {
+    if (cached <= 0) return "_";
+    const blocks = [_][]const u8{ "\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}", "\u{2585}", "\u{2586}", "\u{2587}" };
+    return blocks[@intCast(std.math.clamp(@divTrunc(percent * 7, 100), 0, 6))];
+}
 
 // ------------------------------------------------------------------ decode
 
@@ -1065,6 +1200,69 @@ test "a streamed reply reads as the items it was made of" {
     , reply.calls[0].arguments);
 }
 
+test "a finished response says what it cost" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const body =
+        \\event: response.completed
+        \\data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1200,"input_tokens_details":{"cached_tokens":1024,"cache_write_tokens":100},"output_tokens":80,"output_tokens_details":{"reasoning_tokens":64}}}}
+        \\
+    ;
+    const at_once =
+        \\{"status":"completed","output":[],"usage":{"input_tokens":1200,"input_tokens_details":{"cached_tokens":1024,"cache_write_tokens":100},"output_tokens":80,"output_tokens_details":{"reasoning_tokens":64}}}
+    ;
+    for ([_][]const u8{ body, at_once }) |got| {
+        var r: std.Io.Reader = .fixed(got);
+        var collect: Collect = .{ .arena = arena };
+        try testing.expectEqualStrings(
+            "::stats::\u{2725}80\u{2586}1K::\u{1F9EE} 1200 in, 1024 cached (85%), 100 written, 80 out (64 thinking)",
+            (try parse(arena, &r, collect.sink())).aside,
+        );
+    }
+}
+
+test "a summary part that says it ended is said once" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // Each part closes itself, and the item's end then finds nothing held.
+    const body =
+        \\event: response.output_item.added
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}
+        \\
+        \\event: response.reasoning_summary_text.delta
+        \\data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"**Verifying**"}
+        \\
+        \\event: response.reasoning_summary_part.done
+        \\data: {"type":"response.reasoning_summary_part.done","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"**Verifying**"}}
+        \\
+    ;
+    const rest =
+        \\event: response.reasoning_summary_text.delta
+        \\data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":1,"delta":"**Refining**"}
+        \\
+        \\event: response.reasoning_summary_part.done
+        \\data: {"type":"response.reasoning_summary_part.done","output_index":0,"summary_index":1,"part":{"type":"summary_text","text":"**Refining**"}}
+        \\
+        \\event: response.output_item.done
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"**Verifying**"},{"type":"summary_text","text":"**Refining**"}],"encrypted_content":"ENC"}}
+        \\
+        \\event: response.completed
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+    ;
+    var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ body, "\n", rest }));
+    var collect: Collect = .{ .arena = arena };
+    _ = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
+    try testing.expectEqualStrings("**Verifying**", collect.got.records.items[0].value);
+    try testing.expectEqualStrings("**Refining**", collect.got.records.items[1].value);
+    try testing.expectEqualStrings(api.snip, collect.got.records.items[2].value);
+}
+
 test "each summary part is a 💭, and they go back as one item" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
@@ -1154,6 +1352,101 @@ test "an error is what the api said, and the reply says so" {
     try testing.expectEqual(@as(usize, 1), said.len);
     try testing.expectEqualStrings("(oops - failed with server_error)", said[0].value);
     try testing.expect(said[0].content == null);
+}
+
+test "failed events find details in alternate response shapes" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const fixtures = [_]struct { body: []const u8, want: []const u8 }{
+        .{
+            .body =
+            \\event: response.failed
+            \\data: {"type":"response.failed","detail":"less useful","response":{"status":"failed","status_details":{"error":{"code":"backend_error","summary":"upstream reset\nplease retry"}}}}
+            \\
+            ,
+            .want = "(upstream reset please retry - failed with backend_error)",
+        },
+        .{
+            .body =
+            \\event: response.failed
+            \\data: {"type":"response.failed","response":{"status":"failed","detail":"The model service is temporarily unavailable."}}
+            \\
+            ,
+            .want = "(The model service is temporarily unavailable. - failed with error)",
+        },
+        .{
+            .body =
+            \\event: error
+            \\data: {"type":"error","error":"gateway overloaded"}
+            \\
+            ,
+            .want = "(gateway overloaded - failed with error)",
+        },
+    };
+
+    for (fixtures) |fixture| {
+        var r: std.Io.Reader = .fixed(fixture.body);
+        var collect: Collect = .{ .arena = arena };
+        _ = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
+        try testing.expectEqualStrings(fixture.want, collect.got.records.items[0].value);
+    }
+}
+
+test "a failure nobody has met still says what arrived" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const fixtures = [_]struct { body: []const u8, want: []const u8 }{
+        // A code is the term where the only type is the event's own.
+        .{
+            .body = "data: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"Slow down.\"}\n\n",
+            .want = "(Slow down. - failed with rate_limit_exceeded)",
+        },
+        // A term and no words is still said by its term.
+        .{
+            .body = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\"}}}\n\n",
+            .want = "(failed with server_error)",
+        },
+        // Neither, so the event itself.
+        .{
+            .body = "data: {\"type\":\"response.failed\",\"response\":{\"error\":null}}\n\n",
+            .want = "(failed with error - {\"type\":\"response.failed\",\"response\":{\"error\":null}})",
+        },
+        // Not a response, all at once.
+        .{
+            .body = "{\"detail\":\"Unauthorized\"}",
+            .want = "(Unauthorized - failed with error)",
+        },
+    };
+    for (fixtures) |fixture| {
+        var r: std.Io.Reader = .fixed(fixture.body);
+        var collect: Collect = .{ .arena = arena };
+        _ = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
+        try testing.expectEqualStrings(fixture.want, collect.got.records.items[0].value);
+    }
+}
+
+test "a whole failed response reports status details" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const body =
+        \\{"status":"failed","status_details":{"error":{"type":"server_error","detail":"The backend closed the stream."}},"output":[]}
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    _ = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
+    try testing.expectEqualStrings(
+        "(The backend closed the stream. - failed with server_error)",
+        collect.got.records.items[0].value,
+    );
 }
 
 test "a request decodes to a ledger and encodes back to the same request" {
@@ -1302,4 +1595,19 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[2].value);
     try testing.expect(collect.got.records.items[2].content == null);
+}
+
+test "a count is cut to four characters, and a cache share is a block" {
+    var b: [8]u8 = undefined;
+    try testing.expectEqualStrings("19", short(&b, 19));
+    try testing.expectEqualStrings("999", short(&b, 999));
+    try testing.expectEqualStrings("1K", short(&b, 1234));
+    try testing.expectEqualStrings("16K", short(&b, 16_400));
+    try testing.expectEqualStrings("999K", short(&b, 999_999));
+    try testing.expectEqualStrings("1M", short(&b, 1_000_000));
+    try testing.expectEqualStrings("2G", short(&b, 2_500_000_000));
+    try testing.expectEqualStrings("_", held(0, 0));
+    try testing.expectEqualStrings("\u{2581}", held(5, 1));
+    try testing.expectEqualStrings("\u{2587}", held(6656, 87));
+    try testing.expectEqualStrings("\u{2587}", held(10, 100));
 }

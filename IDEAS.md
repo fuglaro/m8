@@ -7,8 +7,48 @@
 * Shields:
   * do agents under tools not need to write to state? no-edit-m8-st8? allow for subagent call which has it's own tools but not other tools?
     separate areas?
+* m8 @crew/cody/chat-- to new rather than parent...
+
+* m8 watch -> watch live chat - useful to see subagents!
 
 * Review everything again on the mission statement in the README.md.
+
+* DONE: Tokens:
+  * Riff right aligned status panel:
+    * sterr lines prefixed with `::stats::` give a stats info string.
+    * doesn't show in main status line text.
+    * top status line is shortened to make room for it on the right (no space before).
+    * stays there and updates as the new ones come.
+  * openai_responses updates it's token info line to:
+    * `::stats::✥16K▇19::written line`:
+      * `✥` - literal decorator.
+      * `16K` - max 4 chars shortened input count K/M/G/T/P.
+      * `▇` - block element with height showing cache percent, _ for 0.
+      * `19` - max 4 chars shortened output count K/M/G/T/P.
+  * Then default m8 running riff back to one status line.
+  * Token amounts as ignored metadata lines?
+* DONE: No way to easily add a new codec for existing providers like url while still passing it the -v so it knows to give a stats line.
+  ```
+      "codex": {
+        "cmd": [
+          "m8",
+          "providers",
+          "url"
+        ],
+  XXX      "api": "openai-responses",
+        "encode": ["m8", "encode", "openai-responses"],
+        "parse": ["m8", "parse", "openai-responses"]
+
+  (otherwise defaults to passing the m8 in and out straight).
+  - m8 -> encode -> cmd -> parse -> stream
+  top level -v drops M8_VERBOSITY=1 -vv => 2
+  ```
+
+
+* {{M8}} - can we get rid of this if we always detect the first argument being "m8"?
+  is there any time that is insufficient?
+
+
 
 ## Framework
 
@@ -18,7 +58,6 @@
   * 5min ttl in tool loops - upgrade to 1hr on hand to user?
   * Options on model def? or provider directive sigils? Or just do in providers?
 * System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger).
-* Token amounts as ignored metadata lines?
 
 
   * Do they belong in history at all?
@@ -100,6 +139,8 @@
 
 ## Mobs, Agents and Subagents
 
+See: PLAN_AGENTS_*.md
+
 * MAYBE: the framework knowing about subagents at all.
   * Pi excludes them.
   * A subagent may just be a 🧰 whose command is `m8 @agent`.
@@ -160,6 +201,50 @@
 ## Distribution
 
 ### Docs
+
+```
+▐ 🤖
+│ I’ve warmed up on the README’s core context.
+│
+│ m8 is a composable, shell-first agent harness built around a durable Markdown ledger:
+│
+│ - Conversations, agent definitions, tool calls, wire formats, and policies share one record grammar.
+│ - The ledger is authoritative; projections and provider codecs must not silently lose or reorder records.
+│ - Turns are immutable files, while chats are movable references—similar to Git objects and refs.
+│ - Tools and providers are ordinary programs in pipelines: m8 reads and writes m8.
+│ - Agents, models, mobs, skills, shields, and tools are composed through files rather than a plugin API.
+│ - The CLI supports shorthand such as `m8 @agent -- "prompt"` and explicit pipelines such as `ref | encode | providers | parse`.
+│ - The project emphasizes text ownership, offline/build simplicity, composability, and long-term durability.
+│
+│ I’ll keep that architecture and terminology in mind going forward.
+
+```
+
+```
+- m8 is a shell-first agent harness where the **conversation is the artifact** and the **ledger is authoritative**.
+- Agent definitions, transcripts, wire requests, tool exchanges, and policies share one markdown-compatible grammar.
+- Commands compose as stdin/stdout filters; tools and providers are ordinary commands.
+- Chats are movable refs (`+.md`); immutable turns live under `+/`, similar to Git refs and objects.
+- Core flow: `ref → send → tag`, with `encode`, `decode`, `parse`, `query`, `render`, `tail`, and `reset` as composable pieces.
+- Sigils define records such as 🧠, 🙋, 🤖, 💭, 📲, 🧾, 🟢, 🚫, 🧰, and  .
+- Shields restrict tools by process wrapping and compose through intersection.
+- Config resolves nearest-first through `.m8-st8/` and XDG config.
+- Providers are configurable command pipelines; models are selected directly in the ledger.
+- No database, daemon, plugin API, or required network/build dependencies.
+```
+
+
+```
+▐ 🙋
+│ 1 haiku about m8 plz
+
+▐ 🤖
+│ Files hold the voices
+│ Shell pipelines shape the ledger
+│ Turns bloom into paths
+
+▐ 🧠crew/cody/+/xgptrhymlk
+```
 
 * Completely redo the README succinct and clear and well described.
 * Active demo - easiest way to have text-only animation of a play.

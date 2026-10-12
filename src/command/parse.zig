@@ -7,9 +7,11 @@
 //! Reading is incremental whether or not the provider streamed. A provider
 //! that wrote everything at once is a stream of one chunk, so parsing this
 //! way is what lets streaming be something a provider MAY do rather than
-//! MUST. It is defined inside m8 with a command over it: a custom api needs
-//! no entry here, because a custom provider speaks whichever api it declares
-//! and m8 only ever reads the ones it knows.
+//! MUST.
+//!
+//! It is what a provider names as its `parse`, and one command among any
+//! that could be: an api m8 has no format for is read by whatever its
+//! provider names there instead.
 
 const std = @import("std");
 const codec = @import("../codec.zig");
@@ -74,6 +76,12 @@ fn run(ctx: Ctx) !u8 {
     var live: Live = .{ .out = ctx.out, .mode = ctx.mode };
     const reply = try c.parse(ctx.arena, &in.interface, live.sink());
     try live.finish();
+    // What a format has to say beside the turn, such as what it cost, is for
+    // whoever is watching the run, and only once they have asked to be told.
+    if (reply.aside.len > 0 and verbosity(ctx) > 0) {
+        try ctx.err.print("{s}\n", .{reply.aside});
+        try ctx.err.flush();
+    }
 
     for (reply.calls) |call| {
         if (live.opened) try ctx.out.writeByte('\n');
@@ -85,6 +93,11 @@ fn run(ctx: Ctx) !u8 {
         });
     }
     return 0;
+}
+
+/// How much whatever started this asked to be told.
+fn verbosity(ctx: Ctx) u8 {
+    return std.fmt.parseInt(u8, ctx.env.get("M8_VERBOSITY") orelse "0", 10) catch 0;
 }
 
 /// Opens the 🤖 on the first byte. A reply that only calls a tool says

@@ -5,10 +5,10 @@
 > `m8` `shield` `ask` `{{SHIELD}}` `--`
 
 #### :shield:secure
-> `bash` `-e` `-c` `exec {{M8}} shield secure "${__secures__}" -- "$@"` `bash`
+> `m8` `shield` `secure` `{{secures|}}` `--`
 
 #### :shield:check
-> `bash` `-e` `-c` `said=$({{M8}} ref "@$__checks__" "$*" | {{M8}} send | {{M8}} tail --sigil robot --block); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"` `bash`
+> `bash` `-e` `-c` `said=$({{M8}} query --no-advance "@$__checks__" "$*"); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"` `bash`
 
 #### :shield:contain-reads
 > :shield:secure secures contain-reads
