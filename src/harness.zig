@@ -40,7 +40,6 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
     const err = &stderr.interface;
 
     const self = try m8Path(arena, io, init.environ_map, argv);
-
     var tty_storage: api.TtyFiles = undefined;
     var ctx: api.Ctx = .{
         .arena = arena,
@@ -48,6 +47,7 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
         .mode = if (c.terminal) mode(io) else .md,
         .env = init.environ_map,
         .self = self,
+        .verbosity = verbosity(init.environ_map),
         .args = args,
         .in = "",
         .out = out,
@@ -102,6 +102,7 @@ pub fn run(
         },
         .env = env,
         .self = self,
+        .verbosity = verbosity(env),
         .args = &.{},
         .in = "",
         .out = out,
@@ -138,6 +139,10 @@ fn finish(ctx: api.Ctx, name: []const u8, result: anyerror!u8) !u8 {
 fn stdoutPipe(io: std.Io) bool {
     const stat = std.Io.File.stdout().stat(io) catch return false;
     return stat.kind == .named_pipe;
+}
+
+fn verbosity(env: *const std.process.Environ.Map) u8 {
+    return std.fmt.parseInt(u8, env.get("M8_VERBOSITY") orelse "0", 10) catch 0;
 }
 
 /// Where the m8 launcher is, from where this binary is.

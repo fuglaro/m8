@@ -20,11 +20,13 @@ pub const Ctx = struct {
     /// the `@` prompt and a command marked `terminal` are handed the rendered
     /// spelling when stdout is one.
     mode: doc.Mode,
-    /// The environment, for a command that spawns something.
+    /// The environment inherited at startup, or a narrower copy with values
+    /// belonging to an outer call removed. Borrowed and never mutated here.
     env: *const std.process.Environ.Map,
-    /// Where the m8 that is running lives, so a provider naming `m8` reaches
-    /// this build rather than whichever one is on a PATH, or none at all.
+    /// The launcher executable for this process and its descendants.
     self: []const u8 = "m8",
+    /// Verbosity parsed at the process root and raised for this run.
+    verbosity: u8 = 0,
     /// The call this is answering, which names the 🧾 or 🚫 written back.
     /// Empty when a command was run straight from the shell.
     call_id: []const u8 = "",
@@ -58,6 +60,21 @@ pub const Ctx = struct {
 /// written in any language reads it the way that language already reads its
 /// environment.
 pub const EnvVar = struct { key: []const u8, value: []const u8 };
+
+/// Build the environment for an external process boundary.
+pub fn childEnvironment(arena: Allocator, ctx: Ctx, overlays: []const EnvVar) !*std.process.Environ.Map {
+    var m = try ctx.env.clone(arena);
+    for (overlays) |v| try m.put(v.key, v.value);
+    // Identity and run state are canonical: neither an inherited value nor an
+    // overlay belonging to one child may say something else.
+    try m.put("M8", ctx.self);
+    var verbosity_buf: [3]u8 = undefined;
+    const verbosity = try std.fmt.bufPrint(&verbosity_buf, "{}", .{ctx.verbosity});
+    try m.put("M8_VERBOSITY", verbosity);
+    const out = try arena.create(std.process.Environ.Map);
+    out.* = m;
+    return out;
+}
 
 /// How a tool asks the person something: this exit status, nothing on stdout,
 /// and a stderr that opens with `ask_lead`. `EX_TEMPFAIL` — it could not
@@ -163,6 +180,36 @@ pub const Command = struct {
 /// prompt words after an `@` are prose only after their `--` separator.
 pub fn wantsHelp(args: []const []const u8) bool {
     return args.len > 0 and std.mem.eql(u8, args[0], "--help");
+}
+
+test "a child environment adds process state without changing its base" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var base: std.process.Environ.Map = .init(arena);
+    try base.put("KEPT", "yes");
+    try base.put("M8", "/wrong");
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = undefined,
+        .mode = .md,
+        .env = &base,
+        .self = "/right/m8",
+        .verbosity = 2,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &out.writer,
+        .tty = null,
+    };
+    const child = try childEnvironment(arena, ctx, &.{.{ .key = "EXTRA", .value = "one" }});
+    try std.testing.expectEqualStrings("/wrong", base.get("M8").?);
+    try std.testing.expectEqualStrings("/right/m8", child.get("M8").?);
+    try std.testing.expectEqualStrings("2", child.get("M8_VERBOSITY").?);
+    try std.testing.expectEqualStrings("yes", child.get("KEPT").?);
+    try std.testing.expectEqualStrings("one", child.get("EXTRA").?);
 }
 
 test "only a leading long help option asks for help" {

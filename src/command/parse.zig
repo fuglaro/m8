@@ -97,7 +97,7 @@ fn run(ctx: Ctx) !u8 {
 
 /// How much whatever started this asked to be told.
 fn verbosity(ctx: Ctx) u8 {
-    return std.fmt.parseInt(u8, ctx.env.get("M8_VERBOSITY") orelse "0", 10) catch 0;
+    return ctx.verbosity;
 }
 
 /// Opens the 🤖 on the first byte. A reply that only calls a tool says

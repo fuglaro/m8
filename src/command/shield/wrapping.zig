@@ -45,7 +45,8 @@ pub fn cut(args: []const []const u8) !Wrapped {
 pub fn through(ctx: Ctx, argv: []const []const u8, environ: ?*const std.process.Environ.Map) !u8 {
     try ctx.out.flush();
     try ctx.err.flush();
-    var child = try std.process.spawn(ctx.io, .{ .argv = argv, .environ_map = environ });
+    const child_env = environ orelse try api.childEnvironment(ctx.arena, ctx, &.{});
+    var child = try std.process.spawn(ctx.io, .{ .argv = argv, .environ_map = child_env });
     return switch (try child.wait(ctx.io)) {
         .exited => |code| code,
         .signal => |s| @as(u8, 128) +| @as(u8, @truncate(@intFromEnum(s))),

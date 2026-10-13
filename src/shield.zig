@@ -44,20 +44,6 @@ pub const Error = error{
 /// The placeholder a runner puts a code block into.
 pub const code_mark = "{{CODE}}";
 
-/// The placeholder that is the m8 that is running.
-///
-/// A wrapper's argv0 is resolved positionally when it is the word `m8`, which
-/// covers a wrapper that *is* an m8 command. It cannot cover one that mentions
-/// m8 inside a word — a pipe in a shell script, most of all — because the word
-/// is bytes m8 does not read. This is the spelling for those: written where it
-/// is needed, substituted wherever it appears, and it keeps m8 with no opinion
-/// about the language the script is in.
-///
-/// Said in the argv rather than handed over in the environment, so the path
-/// reaches the one wrapper that asked for it rather than every process
-/// underneath it.
-pub const self_mark = "{{M8}}";
-
 /// The placeholder that is the name a wrapper stands as: its shield's name
 /// and which of that name's wrappers it is, counted from one — `ask_1`.
 ///
@@ -323,8 +309,9 @@ fn append(
 /// A command opening with `m8` means the m8 that is running, not whichever one
 /// is on a PATH or none at all — the same rule a provider's command follows,
 /// and the reason a shield written as an m8 command works on a machine where
-/// nothing has been installed. The tool's own command is read the same way as each
-/// wrapper: its first word, and `{{M8}}` wherever it is written.
+/// nothing has been installed. The tool's own command follows the same rule.
+/// Everything else is opaque; a script reaches this path as `$M8` in its
+/// environment rather than by having its source rewritten.
 pub fn wrap(
     arena: Allocator,
     wrappers: []const []const []const u8,
@@ -339,17 +326,10 @@ pub fn wrap(
     return out.items;
 }
 
-/// One command's words, with what it says of m8 made to mean this one.
+/// One command's words, resolving only its executable position.
 fn own(arena: Allocator, out: *std.ArrayList([]const u8), words: []const []const u8, self: []const u8) Allocator.Error!void {
-    for (words, 0..) |word, i| {
-        // A command that is an m8 command says so as its own first word; one
-        // that mentions m8 anywhere else says where. Both mean this m8.
-        if (i == 0 and std.mem.eql(u8, word, "m8")) {
-            try out.append(arena, self);
-            continue;
-        }
-        try out.append(arena, try said(arena, word, self_mark, self));
-    }
+    for (words, 0..) |word, i|
+        try out.append(arena, if (i == 0 and std.mem.eql(u8, word, "m8")) self else word);
 }
 
 /// One word with a placeholder in it made to say what the placeholder is for.
@@ -568,44 +548,34 @@ test "a wrapper opening with m8 reaches the m8 that is running" {
     try testing.expectEqualStrings("m8", full[9]);
 }
 
-test "a wrapper says where this m8 is, as its own word or inside one" {
+test "a wrapper resolves m8 only in executable position" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
 
     const self = "/opt/m8/bin/m8";
+    const script = "\"$0\" \"$@\" | \"$M8\" exclude --sigil toolbox";
     const wrappers = [_][]const []const u8{
-        // An m8 command: the first word is the whole of it.
         &.{ "m8", "shield", "ask", "--" },
-        // A pipe: m8 is named inside a script it does not read.
-        &.{ "bash", "-c", "\"$0\" \"$@\" | {{M8}} exclude --sigil toolbox" },
+        &.{ "bash", "-c", script },
     };
-    const got = try wrap(arena, &wrappers, &.{ "grep", "-r", "x", "{{M8}}", "call", "{{M8}}", "munge" }, self);
+    const got = try wrap(arena, &wrappers, &.{ "grep", "-r", "m8" }, self);
 
     try testing.expectEqualStrings(self, got[0]);
     try testing.expectEqualStrings("shield", got[1]);
-    try testing.expectEqualStrings(
-        "\"$0\" \"$@\" | " ++ self ++ " exclude --sigil toolbox",
-        got[6],
-    );
-    // The tool's own command says it the same way, as often as it needs.
-    try testing.expectEqualStrings("grep", got[7]);
-    try testing.expectEqualStrings(self, got[10]);
-    try testing.expectEqualStrings(self, got[12]);
-
-    // A word that never says it is handed back rather than rebuilt.
-    const plain = "-c";
-    try testing.expectEqual(plain.ptr, (try said(arena, plain, self_mark, self)).ptr);
+    try testing.expectEqualStrings("bash", got[4]);
+    // Shell source and an m8 that is merely data are both opaque.
+    try testing.expectEqualStrings(script, got[6]);
+    try testing.expectEqualStrings("m8", got[9]);
 }
 
-test "every mention in a word is answered, not only the first" {
+test "every shield-name mention in a word is answered" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
 
     try testing.expectEqualStrings(
-        "/m8 x /m8",
-        try said(arena, "{{M8}} x {{M8}}", self_mark, "/m8"),
+        "ask_1 x ask_1",
+        try said(arena, "{{SHIELD}} x {{SHIELD}}", name_mark, "ask_1"),
     );
-    try testing.expectEqualStrings("/m8", try said(arena, "{{M8}}", self_mark, "/m8"));
 }

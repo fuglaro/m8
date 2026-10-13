@@ -207,8 +207,7 @@ fn runCurl(ctx: Ctx, endpoint: []const u8) !u8 {
     var lines: std.ArrayList(u8) = .empty;
     try headers(ctx, &lines);
 
-    var environ = try ctx.env.clone(ctx.arena);
-    try environ.put(headers_var, lines.items);
+    const environ = try api.childEnvironment(ctx.arena, ctx, &.{.{ .key = headers_var, .value = lines.items }});
 
     // curl reads the request from the stdin it inherits and writes the answer
     // to the stdout it inherits, so nothing passes through here on the way
@@ -220,7 +219,7 @@ fn runCurl(ctx: Ctx, endpoint: []const u8) !u8 {
     // What is left to fail is the reaching itself, which curl says on stderr.
     var child = std.process.spawn(ctx.io, .{
         .argv = &.{ "sh", "-c", script, "m8 providers url", endpoint },
-        .environ_map = &environ,
+        .environ_map = environ,
         .stdin = .inherit,
         .stdout = .inherit,
         .stderr = .inherit,

@@ -185,6 +185,8 @@ test "the page for a provider command lists what it reads" {
         .io = threaded.io(),
         .mode = .md,
         .env = &env,
+        .self = "/m8",
+        .verbosity = 0,
         .args = &.{},
         .in = "",
         .out = &out.writer,

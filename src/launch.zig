@@ -110,10 +110,14 @@ fn spawn(ctx: Ctx, program: []const u8, args: []const []const u8, in: Stdin) !u8
     try argv.append(ctx.arena, try sibling(ctx.arena, ctx.self, program));
     try argv.appendSlice(ctx.arena, args);
 
-    var m = try ctx.env.clone(ctx.arena);
-    for (ctx.extra_env) |v| try m.put(v.key, v.value);
-    const environ = try ctx.arena.create(std.process.Environ.Map);
-    environ.* = m;
+    const environ = if (ctx.extra_env.len == 0)
+        ctx.env
+    else added: {
+        const copy = try ctx.arena.create(std.process.Environ.Map);
+        copy.* = try ctx.env.clone(ctx.arena);
+        for (ctx.extra_env) |v| try copy.put(v.key, v.value);
+        break :added copy;
+    };
 
     // Anything held in this process's writers is on its way to the same
     // descriptors the child is about to write to. Out of order otherwise.

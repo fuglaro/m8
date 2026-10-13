@@ -737,6 +737,8 @@ line rather than beside it.
 * CMD has no terminal.
   * It runs in a session of its own, so `/dev/tty` is not
     there to open and riff keeps the one it has.
+  * Its environment is riff's as it arrived, apart from
+    `COLUMNS` tracking the terminal width.
   * A tool that asks the person does it through the ledger, so
     the question is the last thing a run says and the next
     message sent is the answer. See Asking the Person.
@@ -1654,30 +1656,21 @@ A 🏃 is what makes a block runnable: an argv with
   shield's stays a transparent wrapper.
 
 Every wrapper is handed the command it wraps as
-arguments, and two spellings say "the m8 that is
-running", because a wrapper is m8 two different ways.
+arguments. A wrapper whose first word is `m8` *is* an m8
+command, and that word becomes this m8's path. `🛡️ask` is
+`` `m8` `shield` `ask` `{{SHIELD}}` `--` `` and nothing else.
+A tool's own command is read the same way, as is the program
+named by `m8 call`, so `` `m8` `call` `m8` `munge` … ``
+reaches this build at both executable positions.
 
-* A wrapper whose first word is `m8` *is* an m8 command,
-  and that word becomes this m8's path. `🛡️ask` is
-  `` `m8` `shield` `ask` `{{SHIELD}}` `--` `` and nothing else.
-* A wrapper that mentions m8 inside a word says `{{M8}}`
-  and that becomes the path. A script is bytes m8 does
-  not read, so a pipe through `m8 exclude` needs somewhere
-  to write where m8 is.
+When launching providers and calls, m8 adds its absolute
+launcher path as `M8`. Opaque program text stays opaque: a
+shell script
+that needs the current build runs `"$M8"`, and m8 does not
+rewrite its source.
 
-Said in the argv either way, so the path reaches the
-wrapper that asked for it rather than every process
-underneath.
-
-A tool's own command is read the same way.
-
-* A first word `m8` is this m8, so `` `m8` `call` … ``
-  runs with no m8 installed.
-* `{{M8}}` is this m8 anywhere else, which is how a
-  program `m8 call` runs is this m8 too:
-  `` `{{M8}}` `call` `{{M8}}` `munge` `read` … ``.
-* What a call said arrives in the environment, never in
-  these words, so no value a model wrote is read for it.
+What a call said arrives in the environment, never in these
+words, so no value a model wrote is read for a command.
 
 `{{SHIELD}}` is the name a wrapper stands as.
 
@@ -1788,7 +1781,7 @@ wrapper that changes the environment before the tool starts:
 │ `bash` `-c` `HOME=$TMPDIR exec "$0" "$@"`
 
 ▐ 🛡️contain-env
-│ `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8_*|TMPDIR|PATH|HOME|LANG|LC_*) ;; *) unset "$v";; esac; done; exec "$0" "$@"`
+│ `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8|M8_*|TMPDIR|PATH|HOME|LANG|LC_*) ;; *) unset "$v";; esac; done; exec "$0" "$@"`
 ```
 
 * `contain-home` points `HOME` at the mob's scratch.
@@ -1808,7 +1801,7 @@ that channel is a pipe rather than a rule:
 
 ```m8
 ▐ 🛡️freeze-toolbox
-│ `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} exclude --sigil toolbox --sigil brain --sigil books`
+│ `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
 ```
 
 `m8 exclude` takes out every record of the kinds it is
@@ -2391,14 +2384,20 @@ TMPDIR            where a shielded tool's own directory is made;
                   /tmp when unset
 ```
 
-And what a provider's commands are handed, which m8 writes
-and never reads:
+What m8 adds when launching a provider or a call:
+
+```
+M8               absolute path of the m8 launcher running it;
+                  an inherited value is always overwritten
+M8_VERBOSITY      1 under -v, 2 under -vv; a tool is handed
+                  it too, and an m8 started with it set says
+                  as much without being asked
+```
+
+And what a provider's commands are handed as well:
 
 ```
 M8_PROVIDER_*     every string the entry said
-M8_VERBOSITY      1 under -v, 2 under -vv; a tool is
-                  handed it too, and an m8 started with it
-                  set says as much without being asked
 ```
 
 The two m8 ships with read `M8_PROVIDER_URL` and

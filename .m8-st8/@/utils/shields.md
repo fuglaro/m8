@@ -8,7 +8,7 @@
 > `m8` `shield` `secure` `{{secures|}}` `--`
 
 #### :shield:check
-> `bash` `-e` `-c` `said=$({{M8}} query --no-advance "@$__checks__" "$*"); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"` `bash`
+> `bash` `-e` `-c` `said=$("$M8" query --no-advance "@$__checks__" "$*"); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"` `bash`
 
 #### :shield:contain-reads
 > :shield:secure secures contain-reads
@@ -35,13 +35,13 @@
 > :shield:secure secures no-edit-m8-st8
 
 #### :shield:contain-env
-> `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8_*|TMPDIR|PATH|HOME|LANG|LC_*|TERM|COLORTERM|NO_COLOR|CLICOLOR|COLUMNS|LINES|TZ) ;; *) unset "$v";; esac; done; exec "$0" "$@"`
+> `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8|M8_*|TMPDIR|PATH|HOME|LANG|LC_*|TERM|COLORTERM|NO_COLOR|CLICOLOR|COLUMNS|LINES|TZ) ;; *) unset "$v";; esac; done; exec "$0" "$@"`
 
 #### :shield:contain-home
 > `bash` `-c` `HOME=$TMPDIR exec "$0" "$@"`
 
 #### :shield:freeze-toolbox
-> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} exclude --sigil toolbox --sigil brain --sigil books`
+> `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
 
 #### :shield:sandbox
 > :shield:freeze-toolbox

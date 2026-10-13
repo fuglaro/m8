@@ -12,7 +12,7 @@
 #### :toolbox:cody
 > > Give Cody one fresh, bounded repository task. Cody may explore,
 > > edit files, and run relevant tests.
-> `m8` `call` `{{M8}}` `query` `--new` `@crew/cody/delegated` `{{task|}}`
+> `m8` `call` `m8` `query` `--new` `@crew/cody/delegated` `{{task|}}`
 > * task string
 >   The task to complete and any relevant scope or constraints.
 

@@ -130,18 +130,14 @@ pub fn envName(arena: Allocator, key: []const u8) ![]const u8 {
     return out;
 }
 
-/// The environment a provider command is launched with: what m8 has, plus
-/// everything the entry said.
-pub fn environment(
+/// Add everything a provider entry said to the child environment already
+/// made for it. Kept separate from cloning so a launch copies its base once.
+pub fn addEnvironment(
     arena: Allocator,
     p: Provider,
-    inherited: *const std.process.Environ.Map,
-) !*const std.process.Environ.Map {
-    var m = try inherited.clone(arena);
-    for (p.args) |a| try m.put(try envName(arena, a.key), a.value);
-    const boxed = try arena.create(std.process.Environ.Map);
-    boxed.* = m;
-    return boxed;
+    env: *std.process.Environ.Map,
+) !void {
+    for (p.args) |a| try env.put(try envName(arena, a.key), a.value);
 }
 
 /// Where the command actually is.
@@ -611,9 +607,9 @@ test "everything the entry said reaches the command, and nothing else does" {
     );
     const p = try read(arena, ps, "probe");
 
-    var inherited: std.process.Environ.Map = .init(arena);
-    try inherited.put("M8_TEST_INHERITED", "yes");
-    const environ = try environment(arena, p, &inherited);
+    var environ: std.process.Environ.Map = .init(arena);
+    try environ.put("M8_TEST_INHERITED", "yes");
+    try addEnvironment(arena, p, &environ);
 
     // On top of what was already there, not instead of it.
     try testing.expectEqualStrings("yes", environ.get("M8_TEST_INHERITED").?);
@@ -628,7 +624,7 @@ test "everything the entry said reaches the command, and nothing else does" {
         arena,
         io,
         .{ .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> %s\n' \"$M8_PROVIDER_URL\"" }, },
-        environ,
+        &environ,
         "",
         collect.sink(),
         &thrown.writer,

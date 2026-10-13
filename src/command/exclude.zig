@@ -42,7 +42,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\keeps one record where this drops every one of a kind.
         \\
         \\  ▐ 🛡️freeze-toolbox
-        \\  │ `bash` `-euo` `pipefail` `-c` `"$0" "$@" | {{M8}} exclude --sigil toolbox --sigil brain --sigil books`
+        \\  │ `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
         \\
         \\Read a line at a time and never holding more than one, so a tool may
         \\say more than there is memory for and this will not be what stops it.

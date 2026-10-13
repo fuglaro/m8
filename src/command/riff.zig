@@ -70,7 +70,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 riff -c -s 2 python3 -i -u -q
         \\
         \\CMD is given no terminal: it runs in a detatched session of its own
-        \\via `m8 riff --detached CMD`.
+        \\via `m8 riff --detached CMD`. Its environment is riff's as it
+        \\arrived, apart from COLUMNS tracking the terminal width.
         \\
     );
 }
@@ -101,9 +102,10 @@ fn onSignal(sig: posix.SIG) callconv(.c) void {
 fn run(ctx: Ctx) !u8 {
     if (ctx.args.len > 1 and std.mem.eql(u8, ctx.args[0], detached)) {
         _ = posix.system.setsid();
-        const argv = try ctx.arena.dupe([]const u8, ctx.args[1..]);
-        if (std.mem.eql(u8, argv[0], "m8")) argv[0] = ctx.self;
-        return std.process.replace(ctx.io, .{ .argv = argv });
+        return std.process.replace(ctx.io, .{
+            .argv = ctx.args[1..],
+            .environ_map = ctx.env,
+        });
     }
     // `-c` is continuous: one run of the command, sent every message.
     // `-t` is that with a NUL ending each message, which a new line inside

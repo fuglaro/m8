@@ -79,32 +79,14 @@ const Progress = struct {
     }
 };
 
-/// What says how much a run is saying, to whatever it starts.
-pub const verbosity_var = "M8_VERBOSITY";
-
-/// How much this run says: what it was asked for, or what whatever started
-/// it was, so asking once at the top is asking all the way down.
-fn verbosity(env: *const std.process.Environ.Map, asked: u8) u8 {
-    const inherited = std.fmt.parseInt(u8, env.get(verbosity_var) orelse "0", 10) catch 0;
-    return @max(asked, inherited);
-}
-
-/// The environment with this run's verbosity in it, for whatever it starts.
-fn told(arena: Allocator, env: *const std.process.Environ.Map, level: u8) !*const std.process.Environ.Map {
-    if (level == 0) return env;
-    const m = try arena.create(std.process.Environ.Map);
-    m.* = try env.clone(arena);
-    try m.put(verbosity_var, try std.fmt.allocPrint(arena, "{d}", .{level}));
-    return m;
-}
-
 /// Run whatever `ctx.in` holds, writing the reply as it arrives, and hand
 /// back the turn: what arrived, settled, and everything the run added.
 pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     const arena = handed.arena;
     var ctx = handed;
-    const level = verbosity(handed.env, opts.verbosity);
-    ctx.env = try told(arena, try unanswered(arena, handed.env), level);
+    ctx.verbosity = @max(handed.verbosity, opts.verbosity);
+    ctx.env = try unanswered(arena, handed.env);
+    const level = ctx.verbosity;
     const io = ctx.io;
     const out = ctx.out;
     const mode = ctx.mode;
@@ -139,7 +121,8 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // The commands are found once, before anything is said, so a provider
     // that is not there fails before a turn is half made.
     const stages = try provider.stages(arena, io, ctx.self, try config.coreDirs(arena, io, ctx.env), p);
-    const environ = try provider.environment(arena, p, ctx.env);
+    const environ = try api.childEnvironment(arena, ctx, &.{});
+    try provider.addEnvironment(arena, p, environ);
 
     // Only what a blockless 🧰 named, and the last definition of a name wins.
     const offered = try agent.offer(arena, def);
@@ -344,13 +327,20 @@ fn exclaimed(arena: Allocator, said: []const ledger.Answer) ![]const api.EnvVar 
 /// run by a tool counts its shields from one again, and would otherwise take
 /// what was said to that tool's as said to its own.
 fn unanswered(arena: Allocator, env: *const std.process.Environ.Map) !*const std.process.Environ.Map {
-    const own = try arena.create(std.process.Environ.Map);
-    own.* = .init(arena);
-    var it = env.iterator();
-    while (it.next()) |e| {
-        if (!std.mem.startsWith(u8, e.key_ptr.*, api.exclamation)) try own.put(e.key_ptr.*, e.value_ptr.*);
+    var probe = env.iterator();
+    while (probe.next()) |e| {
+        if (!std.mem.startsWith(u8, e.key_ptr.*, api.exclamation)) continue;
+
+        const own = try arena.create(std.process.Environ.Map);
+        own.* = .init(arena);
+        var it = env.iterator();
+        while (it.next()) |entry| {
+            if (!std.mem.startsWith(u8, entry.key_ptr.*, api.exclamation))
+                try own.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        return own;
     }
-    return own;
+    return env;
 }
 
 /// Whether a name is one a question can come from: the tool, or a shield
@@ -481,6 +471,8 @@ fn answer(
         .io = io,
         .mode = ctx.mode,
         .env = ctx.env,
+        .self = ctx.self,
+        .verbosity = ctx.verbosity,
         .call_id = c.id,
         .extra_env = env.items,
         .args = &.{},

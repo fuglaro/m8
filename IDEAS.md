@@ -44,10 +44,12 @@
   top level -v drops M8_VERBOSITY=1 -vv => 2
   ```
 
+* "{{SHIELD}} x {{SHIELD}}" - WHY IS THIS ALLOWED?
 
-* {{M8}} - can we get rid of this if we always detect the first argument being "m8"?
+
+
+* DONE: {{M8}} - can we get rid of this if we always detect the first argument being "m8"?
   is there any time that is insufficient?
-
 
 
 ## Framework

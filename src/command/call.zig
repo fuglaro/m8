@@ -69,21 +69,30 @@ pub const Answer = enum {
     document,
 };
 
+/// Resolve the program after placeholders have settled which word is argv0.
+/// `m8` there is the launcher that established this environment, just as it
+/// is for a provider, tool, shield, or riff.
+fn executable(arena: std.mem.Allocator, self: []const u8, expanded: []const []const u8) ![]const []const u8 {
+    if (!std.mem.eql(u8, expanded[0], "m8")) return expanded;
+    const copy = try arena.dupe([]const u8, expanded);
+    copy[0] = self;
+    return copy;
+}
+
 fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
     // What was inherited, and then what this call is saying. The call's own
     // values are put last, so an inherited variable cannot shadow them. What
     // a shield does to an environment it does in its own process, further out
     // than this one.
-    var m = try ctx.env.clone(ctx.arena);
-    for (ctx.extra_env) |v| try m.put(v.key, v.value);
-    const environ = try ctx.arena.create(std.process.Environ.Map);
-    environ.* = m;
+    const environ = try api.childEnvironment(ctx.arena, ctx, ctx.extra_env);
 
-    const full = try argline.line(ctx.arena, environ, ctx.err, argv);
-    if (full.len == 0) {
+    const expanded = try argline.line(ctx.arena, environ, ctx.err, argv);
+    if (expanded.len == 0) {
         try ctx.err.writeAll("m8 call: everything expanded away\n");
         return Error.NothingToRun;
     }
+
+    const full = try executable(ctx.arena, ctx.self, expanded);
 
     var child = try std.process.spawn(ctx.io, .{
         .argv = full,
@@ -303,6 +312,8 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\The program's stdout becomes a 🧾 receipt, followed by 🟢 or 🚫 for
         \\how it ended. Stdin remains the descriptor call itself was given.
+        \\A PROG named `m8` is the current launcher, whose absolute path every
+        \\program is also handed as M8.
         \\
         \\A program asks the person something by exiting 75 with nothing on
         \\stdout and a stderr that opens `QUESTION:tool:`. It is run again
@@ -334,6 +345,21 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+
+test "m8 in executable position is the current launcher" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const own = try executable(arena, "/opt/m8/bin/m8", &.{ "m8", "munge" });
+    try testing.expectEqualStrings("/opt/m8/bin/m8", own[0]);
+    try testing.expectEqualStrings("munge", own[1]);
+
+    const other = &[_][]const u8{ "printf", "m8" };
+    const untouched = try executable(arena, "/opt/m8/bin/m8", other);
+    try testing.expectEqual(other.ptr, untouched.ptr);
+    try testing.expectEqualStrings("m8", untouched[1]);
+}
 
 test "a tail keeps the end, and says when it dropped the start" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);

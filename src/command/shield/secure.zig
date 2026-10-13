@@ -55,13 +55,7 @@ fn run(ctx: Ctx) !u8 {
     const full = try sandbox.exec(ctx.arena, ctx.io, ctx.env, w.argv, names.items, tmp);
 
     var environ: ?*const std.process.Environ.Map = null;
-    if (made) {
-        var m = try ctx.env.clone(ctx.arena);
-        try m.put("TMPDIR", tmp);
-        const boxed = try ctx.arena.create(std.process.Environ.Map);
-        boxed.* = m;
-        environ = boxed;
-    }
+    if (made) environ = try api.childEnvironment(ctx.arena, ctx, &.{.{ .key = "TMPDIR", .value = tmp }});
     return wrapping.through(ctx, full, environ);
 }
 
@@ -76,7 +70,7 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
         \\🛡 hands over what was appended to its variable:
         \\
         \\  ▐ 🛡️secure
-        \\  │ `bash` `-e` `-c` `exec {{M8}} shield secure "${__secures__}" -- "$@"` `bash`
+        \\  │ `m8` `shield` `secure` `{{secures|}}` `--`
         \\  ▐ 🛡️secure secures airgap
         \\
         \\A restriction it does not recognise is refused rather than ignored.
