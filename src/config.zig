@@ -216,6 +216,7 @@ pub fn providers(
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+const test_tmp = @import("test_tmp.zig");
 
 test "definitions and generated state have separate roots" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -238,10 +239,7 @@ const Tree = struct {
 
     fn init(gpa: Allocator, threaded: *std.Io.Threaded, name: []const u8) !Tree {
         const io = threaded.io();
-        const root = try std.fs.path.join(gpa, &.{ "/private/tmp", name });
-        std.Io.Dir.cwd().deleteTree(io, root) catch {};
-        try std.Io.Dir.cwd().createDirPath(io, root);
-        return .{ .io = io, .threaded = threaded, .root = root };
+        return .{ .io = io, .threaded = threaded, .root = try test_tmp.make(gpa, io, name) };
     }
 
     fn write(t: Tree, gpa: Allocator, rel: []const u8, data: []const u8) !void {

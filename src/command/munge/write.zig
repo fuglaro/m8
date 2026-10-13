@@ -22,7 +22,7 @@
 //! every place it hit.
 
 const std = @import("std");
-const api = @import("../api.zig");
+const api = @import("../../api.zig");
 const read = @import("read.zig");
 const opts = @import("opts.zig");
 const Ctx = api.Ctx;

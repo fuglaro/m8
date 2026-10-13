@@ -21,7 +21,7 @@
 //! which is what somebody who did not say where meant.
 
 const std = @import("std");
-const api = @import("../api.zig");
+const api = @import("../../api.zig");
 const read = @import("read.zig");
 const opts = @import("opts.zig");
 const regex = @import("regex.zig");

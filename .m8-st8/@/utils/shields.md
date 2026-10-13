@@ -2,10 +2,10 @@
 > `false`
 
 #### :shield:ask
-> `m8` `shield` `ask` `{{SHIELD}}` `--`
+> `m8` `ask-shield` `{{SHIELD}}` `--`
 
 #### :shield:secure
-> `m8` `shield` `secure` `{{secures|}}` `--`
+> `m8` `secure-shield` `{{secures|}}` `--`
 
 #### :shield:check
 > `bash` `-e` `-c` `said=$("$M8" query --no-advance "@$__checks__" "$*"); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"` `bash`

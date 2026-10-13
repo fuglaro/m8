@@ -19,7 +19,7 @@
 //! table rather than three.
 
 const std = @import("std");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const opts = @import("munge/opts.zig");
 const Ctx = api.Ctx;
 
@@ -97,8 +97,6 @@ fn run(ctx: Ctx) !u8 {
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 munge - read, search and change files in pages
-        \\
         \\Usage: m8 munge [OPTIONS] COMMAND [COMMAND-OPTIONS] ARGS
         \\
         \\Options:
@@ -159,6 +157,5 @@ test "the commands are reached under munge and nowhere else" {
     // it and not separate split programs.
     try testing.expect(cmd.find("munge") != null);
     try testing.expect(cmd.find("read") == null);
-    try testing.expect(cmd.byPath(&.{ "munge", "read" }) == null);
-    try testing.expectEqual(@as(usize, 0), cmd.byPath(&.{"munge"}).?.children.len);
+    try testing.expect(cmd.byProgram("m8-read") == null);
 }

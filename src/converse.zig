@@ -23,7 +23,7 @@ const toolbox = @import("toolbox.zig");
 const shield = @import("shield.zig");
 const doc = @import("m8/doc.zig");
 const sigil = @import("m8/sigil.zig");
-const api = @import("command/api.zig");
+const api = @import("api.zig");
 const Ctx = api.Ctx;
 
 pub const Options = struct {

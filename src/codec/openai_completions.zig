@@ -30,7 +30,6 @@ pub const codec: api.Codec = .{
     .name = codec_name,
     .summary = "OpenAI chat completions",
     .encode = encode,
-    .decode = decode,
     .parse = parse,
 };
 
@@ -523,127 +522,6 @@ fn extractDelta(v: std.json.Value) ?[]const u8 {
     return if (content == .string) content.string else null;
 }
 
-// ------------------------------------------------------------------ decode
-
-pub fn decode(arena: Allocator, bytes: []const u8) ![]const doc.Record {
-    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, api.request_options);
-    if (v != .object) return error.MalformedRequest;
-
-    var out: std.ArrayList(doc.Record) = .empty;
-
-    // Everything the request asked for, back onto the 🧠 that asked. m8 knows
-    // none of these by name, so one it has never heard of comes back too.
-    //
-    // Nothing on the wire says whose model it was. That is the one loss the
-    // round trip is allowed, and naming a provider at `send` is what answers
-    // it.
-    if (str(v.object.get("model"))) |name| {
-        var params: std.ArrayList(modelform.Param) = .empty;
-        var it = v.object.iterator();
-        while (it.next()) |e| {
-            if (structural(e.key_ptr.*)) continue;
-            try params.append(arena, .{
-                .key = e.key_ptr.*,
-                .value = try modelform.written(arena, e.value_ptr.*),
-            });
-        }
-        try out.append(arena, .{
-            .sigil = .agent,
-            .value = try modelform.render(arena, .{ .name = name, .params = params.items }),
-        });
-    }
-
-    if (v.object.get("tools")) |tools| if (tools == .array) {
-        for (tools.array.items) |t| try readTool(arena, &out, t);
-    };
-
-    const messages = v.object.get("messages") orelse return out.items;
-    if (messages != .array) return out.items;
-    for (messages.array.items) |m| try readMessage(arena, &out, m);
-    return out.items;
-}
-
-fn readMessage(arena: Allocator, out: *std.ArrayList(doc.Record), m: std.json.Value) !void {
-    if (m != .object) return;
-    const role = str(m.object.get("role")) orelse return;
-    const content = str(m.object.get("content")) orelse "";
-
-    if (std.mem.eql(u8, role, "system")) {
-        try out.append(arena, .{ .sigil = .system, .content = content });
-    } else if (std.mem.eql(u8, role, "user")) {
-        try out.append(arena, .{ .sigil = .user, .content = content });
-    } else if (std.mem.eql(u8, role, "tool")) {
-        // Nothing here says whether the tool succeeded, so it comes back a 🧾.
-        try out.append(arena, .{
-            .sigil = .result,
-            .value = str(m.object.get("tool_call_id")) orelse "",
-            .content = content,
-        });
-    } else if (std.mem.eql(u8, role, "assistant")) {
-        if (content.len > 0)
-            try out.append(arena, .{ .sigil = .bot, .content = content });
-        const calls = m.object.get("tool_calls") orelse return;
-        if (calls != .array) return;
-        for (calls.array.items) |c| {
-            if (c != .object) continue;
-            const id = str(c.object.get("id")) orelse "";
-            const f = c.object.get("function") orelse continue;
-            if (f != .object) continue;
-            const name = str(f.object.get("name")) orelse "";
-            const args = str(f.object.get("arguments")) orelse "{}";
-            try out.append(arena, .{
-                .sigil = .call,
-                .value = try std.fmt.allocPrint(arena, "{s},{s}", .{ name, id }),
-                .content = try toolbox.renderArgs(arena, .md, args),
-            });
-        }
-    }
-}
-
-/// A tool on the wire is a schema, so this is the inverse of
-/// `toolbox.writeSchema`: nested objects flatten back to dotted paths, an
-/// array's items give the `[]` suffix, and an enum's values rejoin with `|`.
-/// The 🔌 is not here to be recovered — it never went out.
-fn readTool(arena: Allocator, out: *std.ArrayList(doc.Record), t: std.json.Value) !void {
-    if (t != .object) return;
-    const f = t.object.get("function") orelse return;
-    if (f != .object) return;
-    const name = str(f.object.get("name")) orelse return;
-
-    var props: std.ArrayList(toolbox.Property) = .empty;
-    if (f.object.get("parameters")) |params|
-        try toolbox.readParameters(arena, &props, params);
-
-    const tool: toolbox.Tool = .{
-        .name = name,
-        .description = str(f.object.get("description")) orelse "",
-        .properties = props.items,
-    };
-    try out.append(arena, .{
-        .sigil = .tool,
-        .value = name,
-        .content = try toolbox.render(arena, .md, tool),
-    });
-    // Being on the wire at all is what it means for a tool to be offered, and
-    // a 🧰 with no block is how that is said.
-    try out.append(arena, .{ .sigil = .tool, .value = name });
-}
-
-/// The fields that are the request's shape rather than something asked for.
-/// `stream` is among them: it belongs to a run, not to a conversation, and m8
-/// decides it each time.
-fn structural(key: []const u8) bool {
-    for ([_][]const u8{ "model", "messages", "tools", "stream" }) |k| {
-        if (std.mem.eql(u8, key, k)) return true;
-    }
-    return false;
-}
-
-fn str(v: ?std.json.Value) ?[]const u8 {
-    const got = v orelse return null;
-    return if (got == .string) got.string else null;
-}
-
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
@@ -710,61 +588,6 @@ test "calls gather onto the turn that made them, ahead of their answers" {
     try testing.expectEqualStrings("c2", field(msgs[2], "tool_call_id").string);
     try testing.expectEqualStrings("nope", field(msgs[2], "content").string);
     try testing.expectEqualStrings("assistant", field(msgs[3], "role").string);
-}
-
-test "a request decodes back to a ledger that encodes to the same request" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-
-    const tool: toolbox.Tool = .{
-        .name = "shell",
-        .description = "Runs a command.",
-        .properties = &.{
-            .{ .name = "cmd", .type = "string", .description = "What to run.", .required = true },
-            .{ .name = "with", .type = "check|sandbox", .required = false },
-            .{ .name = "tags", .type = "string[]", .required = false },
-            .{ .name = "opts", .type = "object", .required = false },
-            .{ .name = "opts.depth", .type = "integer", .required = true },
-        },
-    };
-    const records = [_]doc.Record{
-        .{ .sigil = .system, .content = "Be brief." },
-        .{ .sigil = .user, .content = "Hi." },
-        .{ .sigil = .bot, .content = "" },
-        .{ .sigil = .call, .value = "shell,c1", .content = "* cmd `ls`" },
-        .{ .sigil = .result, .value = "c1", .content = "a\nb" },
-    };
-    const first = try encode(arena, &records, .{
-        .model = "tiny",
-        .params = &.{
-            .{ .key = "max_tokens", .value = "2048" },
-            // One m8 has never heard of, to show it is not a list of known
-            // names doing the work.
-            .{ .key = "reasoning_effort", .value = "high" },
-        },
-        .tools = &.{tool},
-    });
-
-    const back = try decode(arena, first);
-    // 🧠 carries the model and everything that was asked for, so nothing has
-    // to be looked up to send it again. Both 🧰 records come back too.
-    try testing.expectEqual(doc.Sigil.agent, back[0].sigil);
-    try testing.expectEqualStrings(
-        "/tiny,max_tokens:2048,reasoning_effort:high",
-        back[0].value,
-    );
-    try testing.expectEqual(doc.Sigil.tool, back[1].sigil);
-    try testing.expectEqual(doc.Sigil.tool, back[2].sigil);
-
-    // And what comes back off the wire goes out again unchanged.
-    const m = (try modelform.parse(arena, back[0].value)).?;
-    const again = try encode(arena, back, .{
-        .model = m.name,
-        .params = m.params,
-        .tools = &.{try toolbox.parse(arena, .md, back[1].value, back[1].content.?)},
-    });
-    try testing.expectEqualStrings(first, again);
 }
 
 test "an answer that arrived late is still written beside its call" {

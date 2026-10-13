@@ -1,4 +1,4 @@
-//! `shield secure` — run inside the sandbox profile with restrictions taken
+//! `secure-shield` — run inside the sandbox profile with restrictions taken
 //! away.
 //!
 //! The other one that could not be written in the shell: this needs the
@@ -9,12 +9,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const api = @import("../api.zig");
-const sandbox = @import("../../sandbox.zig");
-const wrapping = @import("wrapping.zig");
+const sandbox = @import("../sandbox.zig");
+const wrapping = @import("shield/wrapping.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
-    .name = "secure",
+    .name = "secure-shield",
     .summary = "run it inside the sandbox profile, with restrictions applied",
     .takes = .nothing,
     .run = run,
@@ -34,7 +34,7 @@ fn run(ctx: Ctx) !u8 {
     // A name with no line in the profile is refused. Not understanding what
     // was asked for is never a reason to apply less than was asked for.
     for (names.items) |n| if (sandbox.find(n) == null) {
-        try ctx.err.print("m8 shield secure: no restriction named '{s}'\n", .{n});
+        try ctx.err.print("m8 secure-shield: no restriction named '{s}'\n", .{n});
         return wrapping.Error.UnknownRestriction;
     };
 
@@ -45,7 +45,7 @@ fn run(ctx: Ctx) !u8 {
     var made = false;
 
     if (builtin.os.tag != .macos) {
-        try ctx.err.writeAll("m8 shield secure: needs sandbox-exec, which is macOS only\n");
+        try ctx.err.writeAll("m8 secure-shield: needs sandbox-exec, which is macOS only\n");
         return wrapping.Error.Unsupported;
     }
     if (tmp.len == 0) {
@@ -62,16 +62,22 @@ fn run(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     _ = ctx;
     try out.writeAll(
-        \\m8 shield secure — run it inside the sandbox profile
-        \\
-        \\  m8 shield secure "RESTRICTIONS" -- CMD [ARGS]
+        \\  m8 secure-shield "RESTRICTIONS" -- CMD [ARGS]
         \\
         \\Restrictions come as one space separated argument, which is how a
         \\🛡 hands over what was appended to its variable:
         \\
         \\  ▐ 🛡️secure
-        \\  │ `m8` `shield` `secure` `{{secures|}}` `--`
+        \\  │ `m8` `secure-shield` `{{secures|}}` `--`
         \\  ▐ 🛡️secure secures airgap
+        \\
+    );
+    // Read from the same table validation uses, so help cannot drift from
+    // what secure accepts.
+    try out.writeAll("\nrestrictions:\n\n");
+    for (sandbox.all) |r|
+        try out.print("  {s: <22} {s}\n", .{ r.name, r.summary });
+    try out.writeAll(
         \\
         \\A restriction it does not recognise is refused rather than ignored.
         \\Not understanding what was asked for is never a reason to apply less

@@ -400,16 +400,15 @@ test "a turn that advances nothing goes beside its parent" {
     try testing.expectEqualStrings("+", try besideParent(arena, ""));
 }
 
+const test_tmp = @import("test_tmp.zig");
+
 const Fixture = struct {
     io: std.Io,
     dir: []const u8,
 
     fn init(gpa: Allocator, threaded: *std.Io.Threaded, name: []const u8) !Fixture {
         const io = threaded.io();
-        const dir = try std.fs.path.join(gpa, &.{ "/private/tmp", name });
-        std.Io.Dir.cwd().deleteTree(io, dir) catch {};
-        try std.Io.Dir.cwd().createDirPath(io, dir);
-        return .{ .io = io, .dir = dir };
+        return .{ .io = io, .dir = try test_tmp.make(gpa, io, name) };
     }
 
     fn write(f: Fixture, gpa: Allocator, name: []const u8, body: []const u8) !void {

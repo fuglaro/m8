@@ -59,8 +59,11 @@ fn overview(w: *std.Io.Writer) !void {
         \\
         \\  m8 ref @ "And in one sentence?" | m8 send | m8 tag @
         \\  m8 ref @mathy | m8 encode openai-completions >request.json
-        \\  m8 decode openai-completions local <request.json | m8 send
         \\  m8 query @mathy "And in one sentence?"
+        \\
+        \\A provider is an entry in core/providers.json. Its `cmd`, `encode`,
+        \\`parse` and `models` are commands, and every other string in it
+        \\reaches them as M8_PROVIDER_*: `url` as M8_PROVIDER_URL.
         \\
     );
     try overviewCommands(w);
@@ -68,7 +71,7 @@ fn overview(w: *std.Io.Writer) !void {
 
 fn overviewCommands(w: *std.Io.Writer) !void {
     try w.writeAll("\nCOMMANDS:\n");
-    for (command.tree) |n| try w.print("  {s: <10} {s}\n", .{ n.spec.name, n.spec.summary });
+    for (command.all) |c| try w.print("  {s: <13} {s}\n", .{ c.name, c.summary });
 }
 
 pub fn main(init: std.process.Init) !u8 {
@@ -87,19 +90,9 @@ pub fn main(init: std.process.Init) !u8 {
         if (argv.len > 0) argv[0] else "m8",
     );
 
-    // The single binary installed under one of the command names *is* that
-    // command, the way a symlinked busybox is. Answering the same as the
-    // program of that name is what keeps one installation from behaving
-    // unlike the other. The split launcher is only ever `m8`; prompt mode is
-    // handled there, while the other commands remain sibling programs.
-    if (!launch.split) {
-        if (command.byProgram(std.fs.path.basename(self))) |node|
-            return harness.leaf(
-                init,
-                command.at(node.path).?,
-                try command.named(arena, node.path, @ptrCast(args)),
-            );
-    }
+    // A binary installed under one of the command names *is* that command,
+    // the way a symlinked busybox is.
+    if (command.byProgram(std.fs.path.basename(self))) |c| return harness.leaf(init, c, c.name);
 
     // Streaming, so writing is `write` from wherever the descriptor already
     // is rather than a position this process is keeping. A run inherits a
@@ -117,6 +110,7 @@ pub fn main(init: std.process.Init) !u8 {
     // prompt's `--help` is prose after its required `--` separator.
     if (command.api.wantsHelp(@ptrCast(args))) {
         try overview(out);
+        try siblings(io, arena, init.environ_map, self, out);
         try out.flush();
         return 0;
     }
@@ -132,45 +126,84 @@ pub fn main(init: std.process.Init) !u8 {
         if (args.len <= 1 and !std.mem.endsWith(u8, word, "-") and
             try std.Io.File.stdin().isTty(io) and try std.Io.File.stdout().isTty(io))
         {
-            return launched(io, arena, init, command.byPath(&.{"riff"}).?, &.{ self, word, "-p", "-v" }, self, out, err);
+            // riff is started as a process of its own even when this binary
+            // holds it, so that what it was started with is how it starts
+            // itself again. Without riff anywhere, the one message is said
+            // the plain way.
+            if (command.find("riff") != null)
+                return launch.become(io, &.{ self, "riff", self, word, "-p", "-v" });
+            if (try launch.beside(arena, io, self, command.prefix ++ "riff")) |riff|
+                return launch.become(io, &.{ riff, self, word, "-p", "-v" });
         }
-        return harness.run(io, arena, init.environ_map, .prompt, "", @ptrCast(args), .inherited, self, out, err);
+        return harness.run(io, arena, init.environ_map, .prompt, "", @ptrCast(argv), @ptrCast(args), self, out, err);
     }
 
-    const node = command.byPath(&.{args[0]}) orelse {
-        try err.print("m8: '{s}' is not a command. See m8 --help.\n", .{args[0]});
-        try err.flush();
-        return 1;
-    };
     const cmd_args: []const []const u8 = @ptrCast(args[1..]);
+    if (command.find(args[0])) |c|
+        return harness.run(io, arena, init.environ_map, .{ .call = c }, c.name, @ptrCast(argv), cmd_args, self, out, err);
 
-    // `launch.under` answers a command's leading `--help` in the single
-    // binary; a split-out leaf answers the same option itself.
-    return launched(io, arena, init, node, cmd_args, self, out, err);
+    // Not held here, so a program beside this one if there is one.
+    const program = try std.mem.concat(arena, u8, &.{ command.prefix, args[0] });
+    if (try launch.beside(arena, io, self, program)) |path| {
+        var words: std.ArrayList([]const u8) = .empty;
+        try words.append(arena, path);
+        try words.appendSlice(arena, cmd_args);
+        return launch.become(io, words.items);
+    }
+
+    try err.print("m8: '{s}' is not a command. See m8 --help.\n", .{args[0]});
+    try err.flush();
+    return 1;
 }
 
-/// Reach a command, whichever way this build reaches one. Each reads its own
-/// stdin, so the launcher reads none.
-fn launched(
+/// Set while a launcher is asking the programs beside it what they are, so
+/// one of them that is itself a launcher does not ask in turn.
+const listing = "M8_LISTING";
+
+/// The commands that are programs beside this one, for the overview.
+///
+/// Each is asked for its page, and the first line of that is what it is: a
+/// manual's NAME line, `m8 NAME - SUMMARY`. One that says anything else is
+/// still listed, by name alone.
+fn siblings(
     io: std.Io,
     arena: std.mem.Allocator,
-    init: std.process.Init,
-    node: command.Node,
-    cmd_args: []const []const u8,
+    env: *const std.process.Environ.Map,
     self: []const u8,
-    out: *std.Io.Writer,
-    err: *std.Io.Writer,
-) !u8 {
-    const reach: launch.Reach = if (!launch.split)
-        .{ .call = command.at(node.path).? }
-    else
-        .{ .spawn = node.program };
+    w: *std.Io.Writer,
+) !void {
+    if (env.get(listing) != null) return;
+    const where = std.fs.path.dirname(self) orelse return;
+    var dir = std.Io.Dir.cwd().openDir(io, where, .{ .iterate = true }) catch return;
+    defer dir.close(io);
 
-    // What a complaint names. The command under this one parses its own
-    // arguments, so this launcher reaches `shield ask` by calling `shield` —
-    // but `m8 shield ask:` says more than `m8 shield:` and costs nothing.
-    const called = try command.named(arena, node.path, cmd_args);
-    return harness.run(io, arena, init.environ_map, reach, called, cmd_args, .inherited, self, out, err);
+    var names: std.ArrayList([]const u8) = .empty;
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        if (!std.mem.startsWith(u8, entry.name, command.prefix)) continue;
+        const name = entry.name[command.prefix.len..];
+        if (name.len == 0 or command.find(name) != null) continue;
+        try names.append(arena, try arena.dupe(u8, name));
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lessThan);
+
+    var asking = try env.clone(arena);
+    try asking.put(listing, "1");
+    for (names.items) |name| {
+        const path = try std.fs.path.join(arena, &.{ where, try std.mem.concat(arena, u8, &.{ command.prefix, name }) });
+        const said = std.process.run(arena, io, .{
+            .argv = &.{ path, "--help" },
+            .environ_map = &asking,
+        }) catch continue;
+        const first = said.stdout[0 .. std.mem.indexOfScalar(u8, said.stdout, '\n') orelse said.stdout.len];
+        const lead = try std.fmt.allocPrint(arena, "m8 {s} - ", .{name});
+        const summary = if (std.mem.startsWith(u8, first, lead)) first[lead.len..] else "";
+        try w.print("  {s: <13} {s}\n", .{ name, summary });
+    }
 }
 
 // ---------------------------------------------------------------- tests
@@ -185,8 +218,7 @@ test "the overview lists every command" {
     try overview(&out.writer);
     const said = out.written();
 
-    for (command.tree) |n| {
-        const c = n.spec;
+    for (command.all) |c| {
         var seen: usize = 0;
         var at: usize = 0;
         while (std.mem.indexOfPos(u8, said, at, c.name)) |i| {

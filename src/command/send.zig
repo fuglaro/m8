@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const converse = @import("../converse.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -20,8 +20,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 send — run a ledger and write the turn it makes
-        \\
         \\  m8 send
         \\
         \\The ledger on stdin says which model, everything to ask it for, and
@@ -31,7 +29,6 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  m8 ref @mathy "hi" | m8 send
         \\  { m8 ref @mathy "hi"; echo "#### :brain:/local/tiny"; } | m8 send
-        \\  m8 decode openai-completions local <request.json | m8 send
         \\
         \\Whatever the run says is appended — a reply, a 📲, and the answer to
         \\that 📲. What comes out is the whole turn, whatever stdout is: the
@@ -41,8 +38,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 ref @mathy "hi" | m8 send | m8 tag @mathy
         \\
         \\That is what `m8 @mathy -- hi` does. `m8 tail --block` is the reply
-        \\alone and `m8 render` is the turn as a person reads it. m8 providers
-        \\--help says what a provider is and how to write another.
+        \\alone and `m8 render` is the turn as a person reads it. `m8 --help`
+        \\says what a provider is.
         \\
     );
 }
@@ -50,8 +47,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
 fn run(ctx: Ctx) !u8 {
     if (ctx.args.len > 0) {
         try ctx.err.writeAll(
-            "m8 send: takes no arguments; whose model it is goes on the 🧠, " ++
-                "or on `m8 decode FORMAT PROVIDER`\n",
+            "m8 send: takes no arguments; whose model it is goes on the 🧠\n",
         );
         return 1;
     }

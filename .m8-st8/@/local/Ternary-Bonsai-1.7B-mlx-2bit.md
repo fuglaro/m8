@@ -1,1 +1,1 @@
-#### :brain:/local/Ternary-Bonsai-1.7B-mlx-2bit,max_tokens:8192
+#### :brain:/local/Ternary-Bonsai-1.7B-mlx-2bit,max_output_tokens:8192

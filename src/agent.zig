@@ -15,7 +15,7 @@ const ledger = @import("ledger.zig");
 const config = @import("config.zig");
 const model = @import("m8/model.zig");
 const toolbox = @import("toolbox.zig");
-const api = @import("command/api.zig");
+const api = @import("api.zig");
 const shield = @import("shield.zig");
 
 pub const Error = error{ NoModel, NoProvider };
@@ -151,6 +151,7 @@ fn add(arena: Allocator, into: *std.ArrayList([]const u8), one: []const u8) !voi
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+const test_tmp = @import("test_tmp.zig");
 
 const Fixture = struct {
     io: std.Io,
@@ -158,10 +159,7 @@ const Fixture = struct {
 
     fn init(gpa: Allocator, threaded: *std.Io.Threaded, name: []const u8) !Fixture {
         const io = threaded.io();
-        const dir = try std.fs.path.join(gpa, &.{ "/private/tmp", name });
-        std.Io.Dir.cwd().deleteTree(io, dir) catch {};
-        try std.Io.Dir.cwd().createDirPath(io, dir);
-        return .{ .io = io, .dir = dir };
+        return .{ .io = io, .dir = try test_tmp.make(gpa, io, name) };
     }
 
     fn agent(f: Fixture, gpa: Allocator, name: []const u8, body: []const u8) !void {

@@ -15,16 +15,13 @@
 //! still holds all of it. Reading a response is the other direction and drops
 //! nothing on purpose: what comes back is records in the order the model made
 //! them, and a sigil this api did not expect is handed to `policy.zig` to
-//! refuse rather than quietly discarded. Decoding is partial, and what it hands back is a
-//! ledger-shaped approximation rather than the ledger. A tool comes back
-//! without its 🔌 or its 🔒 because a model call has no business carrying
-//! either, so their absence on the way home is this working rather than
-//! failing.
+//! refuse rather than quietly discarded.
 //!
 //! `m8` is the one codec whose view is the whole ledger. That is the reason it
-//! belongs in this table, and the reason `decode m8` loses nothing.
+//! belongs in this table.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const doc = @import("m8/doc.zig");
 const Sigil = @import("m8/sigil.zig").Sigil;
@@ -43,10 +40,6 @@ pub const snip = @import("session.zig").snip;
 pub fn thoughtText(r: doc.Record) []const u8 {
     return r.content orelse r.value;
 }
-
-/// How a request is read when decoding. m8 never writes a key twice, but a
-/// request from elsewhere may, and the last one is how most JSON reads it.
-pub const request_options: std.json.ParseOptions = .{ .duplicate_field_behavior = .use_last };
 
 /// What the ledger says the request is, plus the one thing it cannot: whether
 /// the answer is streamed, which belongs to this run rather than to what was
@@ -319,7 +312,6 @@ pub const Codec = struct {
     name: []const u8,
     summary: []const u8,
     encode: *const fn (Allocator, []const doc.Record, Target) anyerror![]const u8,
-    decode: *const fn (Allocator, []const u8) anyerror![]const doc.Record,
     /// Read a response as it arrives.
     ///
     /// Reading is incremental whether or not the provider bothered to stream:
@@ -335,12 +327,12 @@ pub const openai_completions = @import("codec/openai_completions.zig");
 pub const anthropic_messages = @import("codec/anthropic_messages.zig");
 pub const openai_responses = @import("codec/openai_responses.zig");
 
-pub const all = [_]Codec{
-    m8.codec,
-    openai_completions.codec,
-    anthropic_messages.codec,
-    openai_responses.codec,
-};
+/// The formats this build has. `-Dformats` picks among the wire formats, and
+/// one left out is never referenced, so it is not compiled either.
+pub const all = [_]Codec{m8.codec} ++
+    (if (build_options.format_openai_completions) [_]Codec{openai_completions.codec} else [_]Codec{}) ++
+    (if (build_options.format_anthropic_messages) [_]Codec{anthropic_messages.codec} else [_]Codec{}) ++
+    (if (build_options.format_openai_responses) [_]Codec{openai_responses.codec} else [_]Codec{});
 
 pub fn find(name: []const u8) ?Codec {
     for (all) |c| if (std.mem.eql(u8, c.name, name)) return c;
@@ -441,7 +433,7 @@ test "a thought uses its block, or its compact value" {
     }));
 }
 
-test "m8 encodes to itself and decodes back" {
+test "m8 encodes to itself" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -457,7 +449,8 @@ test "m8 encodes to itself and decodes back" {
         \\
     ;
     const c = find("m8").?;
-    const records = try c.decode(arena, src);
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(arena, src, &diag);
     try testing.expectEqualStrings(src, try c.encode(arena, records, .{}));
 }
 

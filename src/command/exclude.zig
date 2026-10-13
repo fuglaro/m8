@@ -17,7 +17,7 @@
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
 const sigil = @import("../m8/sigil.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -33,8 +33,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 exclude — write a document back with some kinds of record gone
-        \\
         \\  m8 exclude --sigil SIGIL [--sigil SIGIL]...
         \\
         \\SIGIL is a sigil's plain spelling without the colons: `toolbox`,

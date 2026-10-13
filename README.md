@@ -238,13 +238,13 @@ loop.
 ### What a distribution gets
 
 * MIT.
-* One binary from `zig build`, or a program per command
-  from `zig build split` — the same sources either way,
-  and below. `build.zig.zon` declares no dependencies.
+* One binary from `zig build`, or any of its commands as
+  programs beside it with `-Dsplit` — the same sources
+  either way, and below. `build.zig.zon` declares no dependencies.
   Nothing vendored, nothing fetched at build time, no
   libcurl, no OpenSSL, nothing to CVE-track that is not
   the toolchain in the default build.
-* The default `m8 providers url` hands reaching a url to
+* The default `m8 url-provider` hands reaching a url to
   the `curl` already on the machine, which a distribution
   keeps patched anyway. A self-contained HTTP transport is
   available with `-Dno-curl-dep=true`; that build uses
@@ -264,66 +264,128 @@ for thirty years, because it is the shape of `grep` and
 agent runtimes whose entire state is files you can read
 do not.
 
-### One registry, two builds
+### One launcher, and programs beside it
 
 Composable is a claim about the command line, and it is
 cheap to make while every command is one binary calling
-itself. So m8 builds both ways from one registry, and
-the split set is the guardrail rather than the
-optimisation.
+itself. So any command can be built as a program of its
+own, and the sizes of those are the guardrail rather than
+the optimisation.
 
-* `zig build` is the single binary. A launcher reaching
-  a command calls it.
-* `zig build split` is a program per command — `m8-cat` and
-  `m8-munge` — plus a launcher. Munge's read, write and scan
-  operations stay in that one tool rather than becoming programs of
-  their own. Prompt mode is launcher syntax; commands are spawned.
+* `m8 NAME` runs a command the binary holds by calling it.
+* One it does not hold is `m8-NAME` beside it.
+  * m8 becomes that program rather than waiting on it.
+  * It looks beside itself and nowhere else, so an m8
+    installed anywhere reaches its own commands and not
+    whichever are on a `PATH`.
+  * A command the binary holds wins over a program of the
+    same name.
+* `m8 --help` lists both.
+  * A program beside it is asked for its page, and the first
+    line of that says what it is: `m8 NAME - SUMMARY`.
+  * So a program of your own named `m8-NAME` is a command,
+    listed with the rest.
+* `-Dsplit` chooses which commands are programs. See below.
 
-The difference is one comptime branch. What a launcher
-reads is a command's *spec* — its name, what it takes,
-and whether its arguments are prose — and a spec holds
-no function pointer, so a launcher knows every command
-without carrying one. The whole registry costs it two
-kilobytes.
+A command that reaches into another command's module still
+compiles. Built on its own, it is a program suddenly
+carrying a stack it has no business carrying.
 
-A command that reaches into another command's module
-still compiles. It shows up in the split set, as a leaf
-that is suddenly carrying a stack it has no business
-carrying — so the sizes in `zig-out/bin` are a reading
-of the architecture. Most commands sit within a few
-kilobytes of a hello-world against this std, and the
-ones that do not say why: the codecs are in the ones
-that speak to a model. In the default build the command
-that posts to a url is not among them, because the posting
-is curl's; `-Dno-curl-dep=true` deliberately puts the
-standard-library HTTP client in that command instead.
+* `zig build -Dsmall=true -Dsplit=all` builds every command
+  apart, and the sizes in `zig-out/bin` are a reading of the
+  architecture.
+* Most sit within a few kilobytes of a hello-world against
+  this std, and the ones that do not say why: the codecs
+  are in the ones that speak to a model.
+* In the default build the command that posts to a url is
+  not among them, because the posting is curl's.
+  `-Dno-curl-dep=true` deliberately puts the
+  standard-library HTTP client in that command instead.
 
-Nothing about the command line changes between the two,
-and a distribution picks by what it is packaging rather
-than by what it gets. Symlink `m8-cat` to the single
-binary and it *is* `m8-cat`, the way busybox is: same
-output, same status, so the uber download and the split
-package behave alike.
+Nothing about the command line changes with what is built
+where. Symlink `m8-tail` to a binary that holds `tail` and
+it *is* `m8-tail`, the way busybox is: same output, same
+status.
 
 The url transport is another build-time choice:
 
 ```bash
-# Small default: curl is required at runtime.
-zig build -Doptimize=ReleaseSmall
+# Small, stripped default: curl is required at runtime.
+zig build -Dsmall=true
 
 # Self-contained url provider: no curl executable is required.
-zig build -Doptimize=ReleaseSmall -Dno-curl-dep=true
+zig build -Dsmall=true -Dno-curl-dep=true
 
-# The choice applies to split command binaries too.
-zig build split -Dno-curl-dep=true
+# The choices apply to commands built apart too.
+zig build -Dsmall=true -Dno-curl-dep=true -Dsplit=url-provider
 ```
 
-`no-curl-dep` is comptime-selected in `providers url`. The
+Every artifact is compiled single-threaded. m8 composes concurrent work as
+processes and uses none of Zig's in-process concurrency operations, so the
+standard I/O implementation keeps its file, terminal, process, random and
+network operations without carrying a worker-thread runtime. `small` selects
+`ReleaseSmall` and explicitly omits debug symbols; on Darwin it also removes
+the local symbols Mach-O retains after linking. Neither choice changes the
+command line or stored data. `small` does narrow the wire formats and
+builds the toy provider apart, as below.
+
+`no-curl-dep` is comptime-selected in `url-provider`. The
 unused transport is not linked, so the default does not carry
 `std.http` and the self-contained build does not carry the curl
 launcher. The latter is larger because TLS and certificate
 validation have to live somewhere, but only the url command
-pays for them in a split build.
+pays for them when it is built apart.
+
+The wire formats are a build-time choice too:
+
+```bash
+# Only the formats named, for `encode` and `parse` alike.
+zig build -Dformats=anthropic-messages
+zig build -Dformats=openai-completions,openai-responses
+```
+
+* With no `formats`, all of them are built in.
+* `small` with no `formats` builds `openai-responses` alone.
+  `-Dsmall=true -Dformats=...` says otherwise.
+* `m8` is the language itself, so it is always there.
+* A format left out is not compiled, and naming it at
+  `m8 encode` or `m8 parse` says there is no such format.
+* `m8 encode --help` lists what a build has.
+
+Which commands the binary holds is one as well:
+
+```bash
+# `m8-toy-provider` beside `m8`, and out of it.
+zig build -Dsplit=toy-provider
+zig build -Dsplit=toy-provider,riff
+zig build -Dsplit=all
+```
+
+* With no `split`, the binary holds every command.
+* A command named is built as `m8-NAME` beside `m8`, and
+  is not compiled into it.
+  * Nothing is lost: `m8 NAME` reaches it there.
+  * Leaving one out altogether is not installing its
+    program.
+* `small` with no `split` builds `toy-provider` apart.
+  `-Dsmall=true -Dsplit=` says otherwise.
+* The names are the files in `src/command`: one file is one
+  command, and what it keeps to itself is in a folder
+  beneath.
+
+Two more name a small build with less in the binary:
+
+```bash
+zig build -Dminimal=true    # small, with munge and the shields apart
+zig build -Dcore=true       # minimal, with riff apart
+```
+
+* Each only chooses what `small`, `formats` and `split`
+  default to, so any of those can still be said.
+* With `riff` nowhere, an address alone at a terminal says
+  its one message the plain way.
+* `zig build test` is of the sources: it is handed every
+  command whatever is built apart.
 
 ### The field
 
@@ -490,7 +552,7 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
 * Names are paths and the folder part is the mob. See
   Mobs.
 * 🧠 names an agent, unless it is written with a leading `/`,
-  which names a model: `/local/Bonsai-8B,max_tokens:8192`.
+  which names a model: `/local/Bonsai-8B,max_output_tokens:8192`.
   The mark is the whole of the distinction — nothing is looked
   up to decide it — so a name that is missing is a missing
   agent rather than a model nobody configured. On the command
@@ -517,13 +579,11 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
   * A thought kept aside as a snip is not said.
 * A first word that is not an address names a command.
 
-Every command has a page, and anything under a command
-has one too:
+Every command has a page:
 
 ```bash
 m8 --help                  every command, and what m8 reads
 m8 send --help             one command
-m8 providers url --help    something under one
 m8 munge --help            one tool and all its operations
 ```
 
@@ -592,7 +652,7 @@ had on its own:
 m8 ref @mathy hi | m8 send | m8 tag @mathy      what m8 @mathy -- hi does
 m8 ref @mathy | m8 tag @mathy/aside             fork, with nothing said
 m8 ref @ hi | m8 send | m8 tag @mathy/other     keep a run somewhere else
-m8 ref @ | m8 encode | m8 save @notes           a chat, flattened into an agent
+m8 ref @ | m8 encode >.m8-st8/@/notes.md        a chat, flattened into an agent
 m8 ref @mathy | m8 encode | m8 render           a chat, as a person reads it
 m8 query @critic/job "Review that."             the reply alone, as text
 ```
@@ -648,9 +708,6 @@ m8 query @critic/job "Review that."             the reply alone, as text
     starts and whether anything moves.
   * `--no-store` keeps nothing, so nothing moves either.
   * `--piped` reads stdin as prose, as it does for `ref`.
-* `save @X` writes a document as an agent, over whatever
-  was there. An agent is authored, so changing one from a
-  pipe is the same as editing its file.
 * `top @X` is `ref`'s twin for 📚: it names a file for
   what it says about itself, and nothing else. See Tops.
 
@@ -751,7 +808,6 @@ much a riff as a chat is.
 
 ```bash
 m8 encode [FORMAT]                 a ledger, as some api sees it
-m8 decode FORMAT [PROVIDER]        that api's request, as a ledger
 m8 parse FORMAT                    that api's response, as a turn
 m8 send                            run a ledger and write the turn
 ```
@@ -759,7 +815,7 @@ m8 send                            run a ledger and write the turn
 There are four:
 
 * `m8` — the language itself, so encoding is writing it
-  out and decoding loses nothing.
+  out and loses nothing.
 * `openai-completions` — OpenAI chat completions, and the
   many servers that answer in its shape.
 * `anthropic-messages` — Anthropic's messages api, which
@@ -777,17 +833,11 @@ how a chat becomes one flat document.
 ```bash
 m8 ref @mathy | m8 encode m8
 m8 ref @mathy | m8 encode m8 >full-ledger-copy.md
-m8 decode m8 <full-ledger-copy.md      # the null operation
 ```
 
 ```bash
 m8 ref @mathy | m8 encode openai-completions
 m8 encode openai-completions <full-ledger-copy.md >openai.json
-m8 decode openai-completions <openai.json
-```
-
-```bash
-m8 decode openai-completions local <openai.json | m8 send
 ```
 
 A ledger always has an api view. An api request never has
@@ -799,14 +849,6 @@ allowed to do.
 So encoding is total, and loses whatever the target cannot
 say. That is what makes it a projection, and the ledger it
 came from still holds all of it.
-
-Decoding is partial, and hands back something ledger-shaped
-rather than the ledger. A tool comes back without its command or
-its 🛡 — a model call has no business carrying either, so
-their absence on the way home is that rule holding rather
-than a corner missed. A tool read back is an interface, and
-calling one answers with 🚫 rather than running something
-nobody sent.
 
 How much of a ledger survives is the api's own affair rather
 than the codec's care, and the three wire formats differ in
@@ -840,34 +882,33 @@ The ledger holds all of it either way, which is the point of
 a projection losing things.
 
 `m8` is the one format whose view is the whole ledger. That
-is why it is in the table at all, and why `decode m8`
-approximates nothing.
+is why it is in the table at all.
 
-What a request does carry, it carries exactly. A request
-says which model and everything to ask it for, and never
-whose model it was — so `openai-completions → m8 →
-openai-completions` is the same request, byte for byte, and
-all it is missing is the provider. `decode` is where that
-went missing, so `decode FORMAT PROVIDER` is where it is
-said, and what comes out runs as it is. That is why
-parameters live on the 🧠 rather than in a config keyed by
-a name the wire never carries.
+A request says which model and everything to ask it for,
+and never whose model it was. That is why parameters live
+on the 🧠 rather than in a config keyed by a name the wire
+never carries.
 
-`decode` and `parse` are the way in rather than filters, so
-they take stdin exactly as it arrives.
+`parse` is the way in rather than a filter, so it takes
+stdin exactly as it arrives.
 
-`parse` is the third direction. `encode` and `decode` are
-about requests, which are ledger-shaped; a response is
-turn-shaped, so it is not decoded into a ledger but read
-into the records it adds to one. With it, the whole loop is
-something you can watch happen:
+`parse` is the other direction. `encode` is about requests,
+which are ledger-shaped; a response is turn-shaped, so it is
+read into the records it adds to a ledger rather than into
+one. With it, the whole loop is something you can watch
+happen:
 
 ```bash
 m8 ref @mathy "Say hi." \
-  | m8 encode openai-completions \
-  | m8 providers url \
-  | m8 parse openai-completions
+  | m8 encode openai-responses \
+  | M8_PROVIDER_URL=http://127.0.0.1:8000/v1/responses m8 url-provider \
+  | m8 parse openai-responses
 ```
+
+* `url-provider` on its own knows no provider, so the
+  endpoint is said in its environment.
+* A header goes the same way, as `M8_PROVIDER_HEADER_*`.
+  See Providers.
 
 Reading is incremental whether or not the provider streamed.
 A provider that writes everything at once is a stream of one
@@ -896,7 +937,7 @@ m8 call PROG [ARGS]     a program from the environment
   around `call` rather than asked about within it.
 
 ```bash
-m8 shield secure "private airgap" -- bash -c "ls"
+m8 secure-shield "private airgap" -- bash -c "ls"
 ```
 
 Output is m8: what the program writes becomes a 🧾
@@ -910,7 +951,7 @@ A failure keeps the *last* 8K of what the program
 complained about — the end is where a program says
 why — and marks it `...` when there was more.
 
-`m8 shield` is what a 🛡 expands into. See Shields.
+A 🛡 expands into a command such as `m8 secure-shield`. See Shields.
 
 `munge` provides the file tools as `m8 munge read`,
 `write` and `scan`.
@@ -1106,7 +1147,7 @@ another to m8.
 Simple example query with definition:
 
 ```m8
-▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
+▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 
 ▐ 🧭
 │ You are a mathematics expert that will answer questions,
@@ -1235,7 +1276,7 @@ value and nothing under it.
 │ Moonlight on still ponds
 │ Crickets stitch the
 
-▐ 🤖(cut off at max_tokens)
+▐ 🤖(cut off at max_output_tokens)
 ```
 
 * The value is `(words term)`.
@@ -1609,7 +1650,7 @@ replacing one, so a mob you have not read can tighten
 what it was given and can never un-define it.
 
 ```bash
-m8 shield secure "private airgap" -- bash -c "ls"
+m8 secure-shield "private airgap" -- bash -c "ls"
 ```
 
 ### Defining and activating
@@ -1658,7 +1699,7 @@ A 🏃 is what makes a block runnable: an argv with
 Every wrapper is handed the command it wraps as
 arguments. A wrapper whose first word is `m8` *is* an m8
 command, and that word becomes this m8's path. `🛡️ask` is
-`` `m8` `shield` `ask` `{{SHIELD}}` `--` `` and nothing else.
+`` `m8` `ask-shield` `{{SHIELD}}` `--` `` and nothing else.
 A tool's own command is read the same way, as is the program
 named by `m8 call`, so `` `m8` `call` `m8` `munge` … ``
 reaches this build at both executable positions.
@@ -1751,27 +1792,32 @@ What `jail` means there is a composition you can read:
 ```
 
 Each of those atoms is `secure` with one more value
-appended to its variable, and `m8 shield secure` turns
+appended to its variable, and `m8 secure-shield` turns
 that variable into lines removed from the sandbox
 profile:
 
 ```
-contain-reads    no reading outside cwd, TMP, system and tool dirs
-private          as above, and tool dirs go too
-contain-writes   writes confined to cwd and TMP
-no-writes        nothing is writable, including TMP
-airgap           no internet; loopback and unix sockets stay
-no-loop          no loopback or unix sockets; internet stays
-no-edit-git      no writing to a .git anywhere
-no-edit-m8-st8   no writing to a config directory anywhere
+contain-reads        no reading outside cwd, TMP, system and tool dirs
+contain-reads-home   as above, with HOME readable too
+private              as contain-reads, and tool dirs go too
+contain-writes       writes confined to cwd and TMP
+contain-writes-home  writes confined to cwd, TMP and HOME
+no-writes            nothing is writable, including TMP
+airgap               no internet; loopback and unix sockets stay
+no-loop               no loopback or unix sockets; internet stays
+no-edit-git           no writing to a .git anywhere
+no-edit-m8-st8        no writing to a config directory anywhere
 ```
 
-Those are atoms and the profile knows nothing else. A
-level is a composition in the language, where it can be
-read, overridden or taken apart — and a value `secure`
-does not recognise is refused rather than ignored, so
-not understanding what was asked for is never a reason
-to apply less than was asked for.
+Those are atoms and the profile knows nothing else. Each
+one only takes permissions away, so combinations silently
+take the most restrictive form: `contain-writes` together
+with `contain-writes-home` is `contain-writes`. A level is
+a composition in the language, where it can be read,
+overridden or taken apart — and a value `secure` does not
+recognise is refused rather than ignored, so not
+understanding what was asked for is never a reason to
+apply less than was asked for.
 
 `contain-home` and `contain-env` are not atoms. Each is a
 wrapper that changes the environment before the tool starts:
@@ -1822,11 +1868,11 @@ why `deny` is `/usr/bin/false` and a filter is a pipe.
 Two need m8 itself:
 
 ```bash
-m8 shield secure "RESTRICTIONS" -- CMD   the profile
-m8 shield ask [NAME] -- CMD              the person
+m8 secure-shield "RESTRICTIONS" -- CMD   the profile
+m8 ask-shield [NAME] -- CMD              the person
 ```
 
-`ask` puts the command to the person as a ❓, the way any
+`ask-shield` puts the command to the person as a ❓, the way any
 tool asks. See Asking the Person.
 
 * `y` or `yes` runs it.
@@ -1856,7 +1902,7 @@ to do:
 
 ▐ 🧠team/helpers
 
-▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192
+▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 ```
 
 `team/helpers` may define whatever tools and shields it
@@ -2094,7 +2140,7 @@ A 🧠 written with a leading `/` names a model rather than an
 agent, and carries whatever the api should be asked for:
 
 ```m8
-▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_tokens:8192,temperature:0.7
+▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192,temperature:0.7
 ```
 
 Parameters are the api's own words, passed through as
@@ -2119,7 +2165,7 @@ used everywhere:
 ```
 
 ```m8
-▐ 🧠/local/Ternary-Bonsai-1.7B-mlx-2bit,max_tokens:2048
+▐ 🧠/local/Ternary-Bonsai-1.7B-mlx-2bit,max_output_tokens:2048
 ```
 
 An agent file is the only kind of alias there is, so it also
@@ -2129,7 +2175,7 @@ answers — the same rule as a tool's last definition.
 
 ```m8
 ▐ 🧠mathy
-▐ 🧠/local/Ternary-Bonsai-27B-mlx-2bit,max_tokens:16384
+▐ 🧠/local/Ternary-Bonsai-27B-mlx-2bit,max_output_tokens:16384
 ```
 
 A chat is the same: a model piped in after one runs it, and
@@ -2149,17 +2195,20 @@ write a program for is a provider.
 ```json
 {
   "toy": {
-    "cmd": ["m8", "providers", "toy"]
+    "cmd": ["m8", "toy-provider"],
+    "models": ["m8", "toy-provider", "--models"]
   },
   "local": {
-    "cmd": ["m8", "providers", "url"],
-    "encode": ["m8", "encode", "openai-completions"],
-    "parse": ["m8", "parse", "openai-completions"],
-    "url": "http://127.0.0.1:11337/v1/chat/completions",
+    "cmd": ["m8", "url-provider"],
+    "encode": ["m8", "encode", "openai-responses"],
+    "parse": ["m8", "parse", "openai-responses"],
+    "url": "http://127.0.0.1:8000/v1/responses",
+    "models-url": "http://127.0.0.1:8000/v1/models",
+    "models": ["sh", "-c", "\"$M8\" url-provider --get \"$M8_PROVIDER_MODELS_URL\" | tr ',' '\\n' | sed -n 's/.*\"id\" *: *\"\\([^\"]*\\)\".*/\\1/p'"],
     "header-authorization": "echo Bearer $(cat ~/.omlx/key)"
   },
   "anthropic": {
-    "cmd": ["m8", "providers", "url"],
+    "cmd": ["m8", "url-provider"],
     "encode": ["m8", "encode", "anthropic-messages"],
     "parse": ["m8", "parse", "anthropic-messages"],
     "url": "https://api.anthropic.com/v1/messages",
@@ -2169,13 +2218,14 @@ write a program for is a provider.
 }
 ```
 
-Three entries mean anything to m8, and each is a command:
+Four entries mean anything to m8, and each is a command:
 
 * `cmd` gets the request answered.
 * `encode` makes the ledger a request.
 * `parse` makes the answer a turn.
+* `models` lists what it serves. See Listing models.
 
-The three are one pipeline, each one's output the next
+The first three are one pipeline, each one's output the next
 one's input:
 
 * m8 writes the ledger in, as m8.
@@ -2202,8 +2252,8 @@ lowercase-and-hyphen keys go, because only those have a name
 to take. The commands stay behind — each already knows what
 it is.
 
-`header-` is nothing special to m8. It is `m8 providers
-url`'s one convention rather than the language's, and it is
+`header-` is nothing special to m8. It is `m8
+url-provider`'s one convention rather than the language's, and it is
 the entry beside the url that knows it: a key named
 `header-x-api-key` arrives as `M8_PROVIDER_HEADER_X_API_KEY`,
 what it says is run, and its output is that header's value.
@@ -2222,6 +2272,35 @@ than a field per vendor habit.
 
 A provider you write reads whatever its own entry says,
 under its own `M8_PROVIDER_` name, and owes none of this.
+
+#### Listing models
+
+```bash
+m8 models                  every provider that can say
+m8 models local codex      the ones named
+```
+```m8
+#### :brain:/local/Ternary-Bonsai-8B-mlx-2bit
+#### :brain:/codex/gpt-5.5
+```
+
+* `models` in an entry is a command that prints one model
+  name a line.
+  * It is handed the entry as `M8_PROVIDER_*`, as `cmd` is.
+  * `$M8` names the m8 that is running.
+* `m8 models` runs each and writes a 🧠 per name, spelled
+  the way one is asked for.
+* m8 knows no api's shape for a list.
+  * Reaching the list and picking the names out of it are
+    the command's business, beside the url that needs them.
+  * A list that cannot be fetched is a `printf` of names.
+* `m8 url-provider --get URL` asks a url with the entry's
+  headers, so a key is not spelled out twice.
+  * `models-url` is no key of m8's: it arrives as
+    `M8_PROVIDER_MODELS_URL` like any other string.
+* A provider with no `models` is left out.
+* m8 says nothing of its own: what a command says on
+  stderr is passed on.
 
 There is no path m8 appends to a url. Which api lives where is
 a fact about a provider, not about a format, and m8 keeps no
@@ -2281,28 +2360,23 @@ are in [docs/providers.md](docs/providers.md).
 #### The ones m8 ships with
 
 ```bash
-m8 providers url       post the request to $M8_PROVIDER_URL
-m8 providers toy       answer it here
+m8 url-provider              post the request to $M8_PROVIDER_URL
+m8 url-provider --get URL    ask a url, with the same headers
+m8 toy-provider              answer it here
+m8 toy-provider --models     its models, one name a line
 ```
 
-```bash
-m8 providers                   these two, and what is configured
-m8 providers url --help        what it reads, and from where
-m8 providers toy --help        which models it serves
-```
-
-A provider command reads a request on stdin. A terminal
-there is nobody piping one, so it says what it is instead
-of waiting for an end of file that is not coming — which
-makes `m8 providers url` a third way to that page.
-
-`m8 providers` also lists the providers configured here,
-naming the files they came from. Which models any of them
-serves is not in that list and is not missing: that is the
-ledger's business, written on the 🧠 that names one, so
-nothing in a config has to be kept in step with what a
-provider offers. `toy` is the exception, because its
-models are m8's own.
+* Each is a command like any other, with a page of its own
+  under `--help`.
+* A provider command reads a request on stdin.
+  * A terminal there is nobody piping one, so it says what
+    it is instead of waiting for an end of file that is not
+    coming.
+* Which models a provider serves is in no config.
+  * That is the ledger's business, written on the 🧠 that
+    names one, so nothing has to be kept in step with what
+    a provider offers.
+  * `m8 models` asks each provider instead.
 
 `toy` is configured like any other, with the first entry of
 the `core/providers.json` above. It speaks m8 and answers
@@ -2357,8 +2431,8 @@ m8 ships with no story files: it plays whichever are there,
 `.z1` through `.z8`. The name is the file's own and the folder's,
 spelled the way they are, like every other name in m8.
 Zork I to III are MIT-licensed source from Microsoft and their
-repositories carry the compiled files. `m8 providers toy
---help` lists what it can find.
+repositories carry the compiled files. `m8 toy-provider
+--models` lists what it can find.
 
 `src/zmachine/README.md` is the rest of it: the seam between
 the machine and the provider, the invariant every stored
@@ -2401,7 +2475,7 @@ M8_PROVIDER_*     every string the entry said
 ```
 
 The two m8 ships with read `M8_PROVIDER_URL` and
-`M8_PROVIDER_HEADER_*` between them, and `m8 providers url
+`M8_PROVIDER_HEADER_*` between them, and `m8 url-provider
 --help` says what each is for. A provider you write reads
 whatever its entry says, under its own name.
 

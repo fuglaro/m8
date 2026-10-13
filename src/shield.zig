@@ -19,12 +19,12 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const api = @import("command/api.zig");
+const api = @import("api.zig");
 const doc = @import("m8/doc.zig");
 const sigil = @import("m8/sigil.zig");
 const markdown = @import("m8/markdown.zig");
 const Mode = sigil.Mode;
-const argname = @import("command/argname.zig");
+const argname = @import("argname.zig");
 
 pub const Error = error{
     /// An activation named a shield nothing defines.
@@ -376,11 +376,11 @@ test "a code block runs through the runner its language names" {
         .name = "bash",
         .argv = &.{ "m8", "call", "bash", "-c", code_mark, "bash" },
     }};
-    const steps = try parseBody(arena, .md, "```bash\nexec m8 shield ask -- \"$@\"\n```", &runners);
+    const steps = try parseBody(arena, .md, "```bash\nexec m8 ask-shield -- \"$@\"\n```", &runners);
     try testing.expectEqual(@as(usize, 1), steps.len);
     const argv = steps[0].command;
     try testing.expectEqual(@as(usize, 6), argv.len);
-    try testing.expectEqualStrings("exec m8 shield ask -- \"$@\"", argv[4]);
+    try testing.expectEqualStrings("exec m8 ask-shield -- \"$@\"", argv[4]);
     // The argv0 placeholder is the author's, not m8's.
     try testing.expectEqualStrings("bash", argv[5]);
 
@@ -445,7 +445,7 @@ test "shields compose, and what they append to a variable accumulates" {
     const arena = a.allocator();
 
     const all = [_]Definition{
-        .{ .name = "secure", .steps = &.{.{ .command = &.{ "m8", "shield", "secure" } }} },
+        .{ .name = "secure", .steps = &.{.{ .command = &.{ "m8", "secure-shield" } }} },
         .{ .name = "sandbox", .steps = &.{
             .{ .compose = .{ .name = "secure", .env_var = "secures", .values = &.{ "private", "contain-writes" } } },
         } },
@@ -533,19 +533,19 @@ test "a wrapper opening with m8 reaches the m8 that is running" {
     const arena = a.allocator();
 
     const wrappers = [_][]const []const u8{
-        &.{ "m8", "shield", "ask", "--" },
+        &.{ "m8", "ask-shield", "--" },
         // Only the first word, and only of a wrapper. An `m8` that is an
         // argument is somebody's argument.
         &.{ "bash", "-c", "m8 exclude --sigil toolbox" },
     };
     const full = try wrap(arena, &wrappers, &.{ "m8", "call", "m8", "munge" }, "/opt/m8/bin/m8");
     try testing.expectEqualStrings("/opt/m8/bin/m8", full[0]);
-    try testing.expectEqualStrings("bash", full[4]);
-    try testing.expectEqualStrings("m8 exclude --sigil toolbox", full[6]);
+    try testing.expectEqualStrings("bash", full[3]);
+    try testing.expectEqualStrings("m8 exclude --sigil toolbox", full[5]);
     // The tool's own command follows the same rule: its first word, and no
     // other.
-    try testing.expectEqualStrings("/opt/m8/bin/m8", full[7]);
-    try testing.expectEqualStrings("m8", full[9]);
+    try testing.expectEqualStrings("/opt/m8/bin/m8", full[6]);
+    try testing.expectEqualStrings("m8", full[8]);
 }
 
 test "a wrapper resolves m8 only in executable position" {
@@ -556,17 +556,17 @@ test "a wrapper resolves m8 only in executable position" {
     const self = "/opt/m8/bin/m8";
     const script = "\"$0\" \"$@\" | \"$M8\" exclude --sigil toolbox";
     const wrappers = [_][]const []const u8{
-        &.{ "m8", "shield", "ask", "--" },
+        &.{ "m8", "ask-shield", "--" },
         &.{ "bash", "-c", script },
     };
     const got = try wrap(arena, &wrappers, &.{ "grep", "-r", "m8" }, self);
 
     try testing.expectEqualStrings(self, got[0]);
-    try testing.expectEqualStrings("shield", got[1]);
-    try testing.expectEqualStrings("bash", got[4]);
+    try testing.expectEqualStrings("ask-shield", got[1]);
+    try testing.expectEqualStrings("bash", got[3]);
     // Shell source and an m8 that is merely data are both opaque.
-    try testing.expectEqualStrings(script, got[6]);
-    try testing.expectEqualStrings("m8", got[9]);
+    try testing.expectEqualStrings(script, got[5]);
+    try testing.expectEqualStrings("m8", got[8]);
 }
 
 test "every shield-name mention in a word is answered" {

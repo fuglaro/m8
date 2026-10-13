@@ -2,7 +2,6 @@
 
 ## TODO (Upcoming and WIP)
 
-* Cody needs to be able to have sub-agents so it isn't a token burner.
 * m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
 * Shields:
   * do agents under tools not need to write to state? no-edit-m8-st8? allow for subagent call which has it's own tools but not other tools?
@@ -13,44 +12,21 @@
 
 * Review everything again on the mission statement in the README.md.
 
-* DONE: Tokens:
-  * Riff right aligned status panel:
-    * sterr lines prefixed with `::stats::` give a stats info string.
-    * doesn't show in main status line text.
-    * top status line is shortened to make room for it on the right (no space before).
-    * stays there and updates as the new ones come.
-  * openai_responses updates it's token info line to:
-    * `::stats::✥16K▇19::written line`:
-      * `✥` - literal decorator.
-      * `16K` - max 4 chars shortened input count K/M/G/T/P.
-      * `▇` - block element with height showing cache percent, _ for 0.
-      * `19` - max 4 chars shortened output count K/M/G/T/P.
-  * Then default m8 running riff back to one status line.
-  * Token amounts as ignored metadata lines?
-* DONE: No way to easily add a new codec for existing providers like url while still passing it the -v so it knows to give a stats line.
-  ```
-      "codex": {
-        "cmd": [
-          "m8",
-          "providers",
-          "url"
-        ],
-  XXX      "api": "openai-responses",
-        "encode": ["m8", "encode", "openai-responses"],
-        "parse": ["m8", "parse", "openai-responses"]
-
-  (otherwise defaults to passing the m8 in and out straight).
-  - m8 -> encode -> cmd -> parse -> stream
-  top level -v drops M8_VERBOSITY=1 -vv => 2
-  ```
+* Reconsider tool calls in serial.
 
 * "{{SHIELD}} x {{SHIELD}}" - WHY IS THIS ALLOWED?
+* "{{CODE}}" - can it always be passed at the end?
+  or two list with a post args?
+
+* Maybe use jq instead of sed scraping in the example configs?
 
 
 
-* DONE: {{M8}} - can we get rid of this if we always detect the first argument being "m8"?
-  is there any time that is insufficient?
-
+* DONE (for devyn): Cody needs to be able to have sub-agents so it isn't a token burner.
+* DONE: Prompt to riff: m8 @agent alone at a terminal launches riff (src/main.zig:138). Riff to itself: riff re-spawns as m8 riff --detached, or m8-riff in a split build (src/command/riff.zig:405).
+* DONE: Clean: Shield to its subcommands: m8 shield dispatches to secure and ask, spawning m8-shield-secure in a split build (src/command/shield.zig:53).
+* DONE: turn `m8 shield ask` into `m8 ask-shield`, and `m8 shield secure` into `m8 secure-shield`, and clean out `m8 shield`
+* DONE: -Dformats=openai-completions,anthropic-messages,openai-responses (defaults all, always includes m8, applies to encode and parse)
 
 ## Framework
 
@@ -227,7 +203,7 @@ See: PLAN_AGENTS_*.md
 - Agent definitions, transcripts, wire requests, tool exchanges, and policies share one markdown-compatible grammar.
 - Commands compose as stdin/stdout filters; tools and providers are ordinary commands.
 - Chats are movable refs (`+.md`); immutable turns live under `+/`, similar to Git refs and objects.
-- Core flow: `ref → send → tag`, with `encode`, `decode`, `parse`, `query`, `render`, `tail`, and `reset` as composable pieces.
+- Core flow: `ref → send → tag`, with `encode`, `parse`, `query`, `render`, `tail`, and `reset` as composable pieces.
 - Sigils define records such as 🧠, 🙋, 🤖, 💭, 📲, 🧾, 🟢, 🚫, 🧰, and  .
 - Shields restrict tools by process wrapping and compose through intersection.
 - Config resolves nearest-first through `.m8-st8/` and XDG config.

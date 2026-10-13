@@ -10,15 +10,14 @@
 //! serves both builds without either keeping a list the other could drift from.
 
 const std = @import("std");
-pub const api = @import("command/api.zig");
+pub const api = @import("api.zig");
 pub const Command = api.Command;
-pub const Spec = api.Spec;
 pub const Ctx = api.Ctx;
 pub const Tty = api.Tty;
 pub const Takes = api.Takes;
 
-/// The commands, as the modules that hold them.
-const modules = .{
+/// Every command there is, as the modules that hold them.
+const every = .{
     @import("command/ref.zig"),
     @import("command/send.zig"),
     @import("command/tag.zig"),
@@ -28,16 +27,40 @@ const modules = .{
     @import("command/exclude.zig"),
     @import("command/render.zig"),
     @import("command/encode.zig"),
-    @import("command/decode.zig"),
     @import("command/parse.zig"),
-    @import("command/save.zig"),
     @import("command/top.zig"),
     @import("command/call.zig"),
     @import("command/munge.zig"),
-    @import("command/shield.zig"),
-    @import("command/providers.zig"),
+    @import("command/secure-shield.zig"),
+    @import("command/ask-shield.zig"),
+    @import("command/url-provider.zig"),
+    @import("command/toy-provider.zig"),
+    @import("command/models.zig"),
     @import("command/riff.zig"),
 };
+
+/// The commands this binary holds. `-Dsplit` names the ones built as programs
+/// of their own instead, and a module left out here is never named again, so
+/// it is not compiled into this one.
+const modules = kept(every);
+
+fn kept(comptime ms: anytype) []const type {
+    comptime {
+        // Each name is read against every word of the option.
+        @setEvalBranchQuota(100_000);
+        var out: []const type = &.{};
+        for (ms) |m| {
+            if (!apart(m.command.name)) out = out ++ &[_]type{m};
+        }
+        return out;
+    }
+}
+
+fn apart(name: []const u8) bool {
+    var it = std.mem.tokenizeAny(u8, @import("build_options").split, ", ");
+    while (it.next()) |word| if (std.mem.eql(u8, word, name)) return true;
+    return false;
+}
 
 pub const all = commands(modules);
 
@@ -54,170 +77,30 @@ pub fn find(name: []const u8) ?Command {
     return null;
 }
 
-// ------------------------------------------------------------------ tree
+// --------------------------------------------------------------- programs
 
-/// One command, where it lives, and whatever lives under it.
-///
-/// Nothing in here is a function pointer. A launcher walks this to decide what
-/// goes on a child's stdin and what to call it, and walking it links none of
-/// the implementations.
-pub const Node = struct {
-    spec: Spec,
-    /// The words that reach it, `m8` aside: `call`, `munge`, `read`.
-    path: []const []const u8,
-    /// Its logical program spelling, hyphenated from the command path.
-    program: []const u8,
-    children: []const Node = &.{},
-};
-
-pub const tree: []const Node = nodes(modules, "m8", &.{});
-
-fn childrenOf(comptime m: type, comptime program: []const u8, comptime path: []const []const u8) []const Node {
-    comptime {
-        if (!@hasDecl(m, "subs")) return &.{};
-        var out: []const Node = &.{};
-        for (m.subs) |s| out = out ++ &[_]Node{.{
-            .spec = s.spec(),
-            .path = path ++ &[_][]const u8{s.name},
-            .program = joined(program, s.name),
-        }};
-        return out;
-    }
-}
-
-fn nodes(comptime ms: anytype, comptime program: []const u8, comptime path: []const []const u8) []const Node {
-    comptime {
-        var out: []const Node = &.{};
-        for (ms) |m| {
-            const here = path ++ &[_][]const u8{m.command.name};
-            const name = joined(program, m.command.name);
-            out = out ++ &[_]Node{.{
-                .spec = m.command.spec(),
-                .path = here,
-                .program = name,
-                .children = childrenOf(m, name, here),
-            }};
-        }
-        return out;
-    }
-}
-
-fn joined(comptime program: []const u8, comptime name: []const u8) []const u8 {
-    return program ++ "-" ++ name;
-}
+/// What a command is called as a program of its own: `m8-` and its name.
+pub const prefix = "m8-";
 
 /// The command a path reaches, for a binary that is only ever that one.
 ///
-/// Comptime, and the whole of why a split-out command is small: the walk
-/// touches every module's name and returns one command, so one `run` is
-/// referenced and the rest of the registry is names that cost nothing.
-pub fn commandAt(comptime path: []const []const u8) ?Command {
-    comptime return among(modules, path);
-}
-
-fn among(comptime ms: anytype, comptime path: []const []const u8) ?Command {
+/// Comptime, and the whole of why a command built on its own is small: the
+/// walk touches every module's name and returns one command, so one `run` is
+/// referenced and the rest of the registry is names that cost nothing. It
+/// reads every command there is, since the one asked for is by definition
+/// not among the ones the launcher holds.
+pub fn commandAt(comptime name: []const u8) ?Command {
     comptime {
-        if (path.len == 0) return null;
-        for (ms) |m| {
-            if (!std.mem.eql(u8, m.command.name, path[0])) continue;
-            if (path.len == 1) return m.command;
-            if (@hasDecl(m, "subs") and path.len == 2) {
-                for (m.subs) |sub| if (std.mem.eql(u8, sub.name, path[1])) return sub;
-            }
-            return null;
-        }
+        for (every) |m| if (std.mem.eql(u8, m.command.name, name)) return m.command;
         return null;
     }
 }
 
-/// The same walk at runtime, for the single binary answering to a name it was
-/// installed as. It reaches every command, which is what the single binary is.
-pub fn at(path: []const []const u8) ?Command {
-    if (path.len == 0) return null;
-    var where: []const Command = &all;
-    var found: ?Command = null;
-    for (path, 0..) |word, depth| {
-        found = for (where) |c| {
-            if (std.mem.eql(u8, c.name, word)) break c;
-        } else return null;
-        where = childrenAt(path[0 .. depth + 1]);
-    }
-    return found;
-}
-
-/// What lives under a path, as commands. The tree already says what lives
-/// where; this is the same shape with the implementations attached.
-fn childrenAt(path: []const []const u8) []const Command {
-    const node = byPath(path) orelse return &.{};
-    if (node.children.len == 0) return &.{};
-    inline for (modules) |m| {
-        if (@hasDecl(m, "subs") and std.mem.eql(u8, m.command.name, path[path.len - 1]))
-            return &m.subs;
-    }
-    return &.{};
-}
-
-/// A program's path, as the words a build option spells with spaces.
-pub fn words(comptime spelling: []const u8) []const []const u8 {
-    comptime {
-        var out: []const []const u8 = &.{};
-        var it = std.mem.splitScalar(u8, spelling, ' ');
-        while (it.next()) |w| if (w.len > 0) {
-            out = out ++ &[_][]const u8{w};
-        };
-        return out;
-    }
-}
-
-/// The node a program name belongs to, for a binary working out which command
-/// it was installed as.
-pub fn byProgram(name: []const u8) ?Node {
-    return search(tree, name);
-}
-
-fn search(where: []const Node, name: []const u8) ?Node {
-    for (where) |n| {
-        if (std.mem.eql(u8, n.program, name)) return n;
-        if (search(n.children, name)) |found| return found;
-    }
-    return null;
-}
-
-/// The node reached by walking words from the top, for a launcher turning a
-/// command line into a program.
-pub fn byPath(path: []const []const u8) ?Node {
-    var where = tree;
-    var found: ?Node = null;
-    for (path) |word| {
-        found = for (where) |n| {
-            if (std.mem.eql(u8, n.spec.name, word)) break n;
-        } else return null;
-        where = found.?.children;
-    }
-    return found;
-}
-
-/// What a command line names, as far as its words reach a command.
-///
-/// A launcher dispatches the command it reached and lets that command parse
-/// the rest, so `shield ask` is reached as `shield` — but a complaint reads
-/// better for naming the whole of what was typed, and walking the words to
-/// the end of it here is the whole of the difference.
-pub fn named(
-    arena: std.mem.Allocator,
-    path: []const []const u8,
-    args: []const []const u8,
-) ![]const u8 {
-    var where = byPath(path) orelse return std.mem.join(arena, " ", path);
-    for (args) |word| {
-        var deeper: ?Node = null;
-        for (where.children) |n| if (std.mem.eql(u8, n.spec.name, word)) {
-            deeper = n;
-            break;
-        };
-        where = deeper orelse break;
-    }
-    return std.mem.join(arena, " ", where.path);
+/// The command a program name belongs to, for a binary working out which
+/// command it was installed as.
+pub fn byProgram(name: []const u8) ?Command {
+    if (!std.mem.startsWith(u8, name, prefix)) return null;
+    return find(name[prefix.len..]);
 }
 
 // ---------------------------------------------------------------- tests
@@ -242,8 +125,6 @@ test "every command has a name and a summary" {
 }
 
 test "every command has a page of its own" {
-    // The shared writer can fall back to a summary, which is better than
-    // nothing and is not good enough for a command that ships.
     for (all) |c| try testing.expect(c.help != null);
 }
 
@@ -253,113 +134,68 @@ test "no two commands share a name" {
     };
 }
 
-test "the tree gives every command a program spelling" {
-    try testing.expectEqualStrings("m8-ref", byPath(&.{"ref"}).?.program);
-    try testing.expectEqualStrings("m8-munge", byPath(&.{"munge"}).?.program);
-    // Munge's operations belong to one command, not split programs.
-    try testing.expect(byPath(&.{ "munge", "read" }) == null);
-
-    // And back again, which is how a binary knows which command it is.
-    try testing.expectEqualStrings("munge", byProgram("m8-munge").?.spec.name);
+test "a program name finds its command" {
+    try testing.expectEqualStrings("munge", byProgram("m8-munge").?.name);
+    try testing.expect(byProgram("munge") == null);
     try testing.expect(byProgram("m8-nosuch") == null);
+    // Munge's operations belong to one command, not programs of their own.
+    try testing.expect(byProgram("m8-read") == null);
 }
 
-test "a complaint names the path the words reached, not the top of it" {
-    const a = testing.allocator;
-
-    // The launcher calls `shield` and lets it read `ask`, so the words are
-    // what says which of the two failed.
-    const both_words = try named(a, &.{"shield"}, &.{ "ask", "--", "echo" });
-    defer a.free(both_words);
-    try testing.expectEqualStrings("shield ask", both_words);
-
-    // A word that names nothing under it is the command's own argument.
-    const top = try named(a, &.{"shield"}, &.{"bogus"});
-    defer a.free(top);
-    try testing.expectEqualStrings("shield", top);
-
-    // And a command already reached by its whole path stays itself.
-    const leaf_path = try named(a, &.{ "shield", "ask" }, &.{ "--", "echo" });
-    defer a.free(leaf_path);
-    try testing.expectEqualStrings("shield ask", leaf_path);
+test "a command built on its own is the one the registry holds" {
+    try testing.expectEqualStrings("munge", comptime commandAt("munge").?.name);
+    try testing.expect(comptime commandAt("nosuch") == null);
 }
 
-test "a program name is unique, and every node carries its own path" {
-    var seen: std.ArrayList([]const u8) = .empty;
-    defer seen.deinit(testing.allocator);
-    try walk(tree, &seen);
-}
+test "every command has a page, and it says which command it is" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
 
-fn walk(where: []const Node, seen: *std.ArrayList([]const u8)) !void {
-    for (where) |n| {
-        for (seen.items) |had| try testing.expect(!std.mem.eql(u8, had, n.program));
-        try seen.append(testing.allocator, n.program);
-        // The path is what a launcher hands on, so it has to reach the node.
-        try testing.expectEqualStrings(n.spec.name, byPath(n.path).?.spec.name);
-        try walk(n.children, seen);
+    // No HOME and no XDG, so anything that reads a config reads the copy
+    // compiled in rather than whatever is on the machine running the tests.
+    var env: std.process.Environ.Map = .init(arena);
+    var thrown: std.Io.Writer.Allocating = .init(arena);
+
+    for (all) |c| {
+        var page_out: std.Io.Writer.Allocating = .init(arena);
+        try c.help.?(.{
+            .arena = arena,
+            .io = threaded.io(),
+            .mode = .md,
+            .env = &env,
+            .args = &.{},
+            .in = "",
+            .out = &page_out.writer,
+            .err = &thrown.writer,
+            .tty = null,
+        }, &page_out.writer);
+
+        const said = page_out.written();
+        try testing.expect(said.len > 0);
+        try testing.expect(std.mem.indexOf(u8, said, c.name) != null);
+        // A page is prose for a person, not a document. It never opens like
+        // one, or piping it somewhere would read as a ledger.
+        try testing.expect(said[0] != '#');
     }
 }
 
-test "what the tree names is what a command binary would run" {
-    // The tree is read by a launcher and `commandAt` by a leaf's own root.
-    // Two walks over one registry, so they are checked against each other
-    // rather than trusted to stay in step.
-    try testing.expectEqualStrings("munge", comptime commandAt(words("munge")).?.name);
-    try testing.expect(comptime commandAt(words("munge read")) == null);
-    try testing.expect(comptime commandAt(words("nosuch")) == null);
-}
-
-test "the runtime walk reaches what the comptime one does" {
-    // The single binary answering to a program name and a split-out binary
-    // being that command must land on the same one.
-    try testing.expectEqualStrings("munge", at(&.{"munge"}).?.name);
-    try testing.expect(at(&.{ "munge", "read" }) == null);
-    try testing.expect(at(&.{"nosuch"}) == null);
-
-    // Every node in the tree is reachable both ways, and is the same command.
-    try both(tree);
-}
-
-fn both(where: []const Node) !void {
-    for (where) |n| {
-        try testing.expectEqualStrings(n.spec.name, at(n.path).?.name);
-        try testing.expectEqual(n.spec.takes, at(n.path).?.takes);
-        try both(n.children);
-    }
-}
-
-test "the split set is exactly the tree" {
-    // `build.zig` cannot walk a comptime tree, so it reads a list. This is
-    // where that list is held to the registry: a command added here and not
-    // there is a failing test rather than a program nobody ships, and the
-    // other way round is a build that fails for no stated reason.
-    const listed = @embedFile("commands.txt");
+test "the commands are exactly the files in src/command" {
+    // `build.zig` cannot walk a comptime registry, so it reads the folder: a
+    // file directly in it is a command, named for it. This is where the two
+    // are held to each other, so a command added in one and not the other is
+    // a failing test rather than a program nobody can build.
+    const files = @import("build_options").commands;
 
     var count: usize = 0;
-    var lines = std.mem.splitScalar(u8, listed, '\n');
-    while (lines.next()) |line| {
-        const path = std.mem.trim(u8, line, " \t\r");
-        if (path.len == 0 or path[0] == '#') continue;
-        count += 1;
-
-        var parts: std.ArrayList([]const u8) = .empty;
-        defer parts.deinit(testing.allocator);
-        var it = std.mem.splitScalar(u8, path, ' ');
-        while (it.next()) |word| if (word.len > 0) try parts.append(testing.allocator, word);
-
-        const node = byPath(parts.items) orelse {
-            std.debug.print("commands.txt names '{s}', which the registry has not\n", .{path});
+    var it = std.mem.tokenizeScalar(u8, files, ',');
+    while (it.next()) |name| : (count += 1) {
+        if (find(name) == null) {
+            std.debug.print("src/command/{s}.zig is no command in the registry\n", .{name});
             return error.NotACommand;
-        };
-        // And what the build calls it is what the registry calls it.
-        try testing.expect(std.mem.startsWith(u8, node.program, "m8"));
+        }
     }
-
-    try testing.expectEqual(size(tree), count);
-}
-
-fn size(where: []const Node) usize {
-    var n: usize = 0;
-    for (where) |node| n += 1 + size(node.children);
-    return n;
+    try testing.expectEqual(all.len, count);
 }

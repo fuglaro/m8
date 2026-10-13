@@ -13,7 +13,7 @@ const config = @import("../config.zig");
 const agent = @import("../agent.zig");
 const ledger = @import("../ledger.zig");
 const doc = @import("../m8/doc.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -70,8 +70,6 @@ fn target(ctx: Ctx, records: []const doc.Record) !codec.Target {
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 encode — write a ledger as some api's request
-        \\
         \\  m8 encode [FORMAT]
         \\
         \\With no FORMAT, the ledger is written as m8, the lossless format.

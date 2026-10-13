@@ -37,7 +37,7 @@ either of them cheating.
 * `src/zmachine/` is the machine and has never heard of m8. It
   loads a story file, runs it, and hands back text. It cannot
   reach a ledger, so it cannot become stateful by accident.
-* `src/command/providers/zmachine.zig` is the provider and has
+* `src/command/toy-provider/zmachine.zig` is the provider and has
   never heard of an opcode. It finds the file, derives the
   seed, replays the 🙋 records, and writes a 🤖. It cannot
   reach the machine's insides, so replay is its only way to

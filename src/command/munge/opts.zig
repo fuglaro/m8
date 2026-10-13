@@ -6,7 +6,7 @@
 //! say anything.
 
 const std = @import("std");
-const api = @import("../api.zig");
+const api = @import("../../api.zig");
 const Ctx = api.Ctx;
 
 pub const Kind = enum { text, number, flag };

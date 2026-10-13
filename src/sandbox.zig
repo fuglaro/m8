@@ -29,7 +29,7 @@ pub const Restriction = struct {
     summary: []const u8,
 };
 
-/// Every restriction `m8 shield secure` knows, in the order help lists them.
+/// Every restriction `m8 secure-shield` knows, in the order help lists them.
 ///
 /// Atoms only. A level such as `sandbox` or `jail` is a composition an agent
 /// writes or includes, which is a place it can be read.
@@ -38,8 +38,10 @@ pub const Restriction = struct {
 /// it.
 pub const all = [_]Restriction{
     .{ .name = "contain-reads", .summary = "no reading outside cwd, TMP, system and tool dirs" },
-    .{ .name = "private", .summary = "as above, and tool dirs go too" },
+    .{ .name = "contain-reads-home", .summary = "as above, with HOME readable too" },
+    .{ .name = "private", .summary = "as contain-reads, and tool dirs go too" },
     .{ .name = "contain-writes", .summary = "writes confined to cwd and TMP" },
+    .{ .name = "contain-writes-home", .summary = "writes confined to cwd, TMP and HOME" },
     .{ .name = "no-writes", .summary = "nothing is writable, including TMP" },
     .{ .name = "airgap", .summary = "no internet; loopback and unix sockets stay" },
     .{ .name = "no-loop", .summary = "no loopback or unix sockets; internet stays" },
@@ -100,9 +102,7 @@ pub fn makeTmp(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map
 
 /// `sandbox-exec -p <resolved> -D ... -- argv`
 ///
-/// The profile is handed over as text rather than as a file. One `secure`
-/// may stand inside another, and a sandbox that contains reads does not let
-/// the next `sandbox-exec` open a profile from disk.
+/// The profile is handed over as text rather than written to a temporary file.
 pub fn exec(
     arena: Allocator,
     io: std.Io,
@@ -116,6 +116,18 @@ pub fn exec(
     const len = try std.process.currentPath(io, &buf);
     const cwd = try arena.dupe(u8, buf[0..len]);
     const parent = std.fs.path.dirname(cwd) orelse "/";
+    // macOS matches the resolved path. Resolve HOME for the restrictions that
+    // use it just as currentPath resolved CWD; without HOME they grant only TMP.
+    // A contain-home wrapper has already replaced the value before we arrive.
+    var home: []const u8 = tmp;
+    for (active) |name| {
+        if (!std.mem.eql(u8, name, "contain-reads-home") and
+            !std.mem.eql(u8, name, "contain-writes-home")) continue;
+        const raw = env.get("HOME") orelse break;
+        if (raw.len > 0)
+            home = try std.Io.Dir.cwd().realPathFileAlloc(io, raw, arena);
+        break;
+    }
 
     var full: std.ArrayList([]const u8) = .empty;
     try full.appendSlice(arena, &.{
@@ -128,6 +140,8 @@ pub fn exec(
         try std.fmt.allocPrint(arena, "PARENTWD={s}", .{parent}),
         "-D",
         try std.fmt.allocPrint(arena, "TMP={s}", .{tmp}),
+        "-D",
+        try std.fmt.allocPrint(arena, "HOME={s}", .{home}),
     });
     try full.appendSlice(arena, argv);
     return full.items;
@@ -136,6 +150,7 @@ pub fn exec(
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+const test_tmp = @import("test_tmp.zig");
 
 fn res(arena: Allocator, active: []const []const u8) ![]const u8 {
     return resolve(arena, template, active);
@@ -172,6 +187,30 @@ test "restrictions only subtract, so combining them commutes" {
     const other = try res(arena, &.{ "airgap", "private" });
     try testing.expectEqualStrings(one, other);
     try testing.expect(one.len < template.len);
+}
+
+test "home containment leaves HOME and washes out under stricter containment" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const home_read = "(allow file-read* (subpath (param \"HOME\")))";
+    const home_write = "(allow file-write* (subpath (param \"HOME\")))";
+
+    const reads_home = try res(arena, &.{"contain-reads-home"});
+    try testing.expect(std.mem.indexOf(u8, reads_home, home_read) != null);
+    const reads_strict = try res(arena, &.{"contain-reads"});
+    try testing.expect(std.mem.indexOf(u8, reads_strict, home_read) == null);
+    try testing.expectEqualStrings(reads_strict, try res(arena, &.{ "contain-reads-home", "contain-reads" }));
+    const reads_private = try res(arena, &.{"private"});
+    try testing.expectEqualStrings(reads_private, try res(arena, &.{ "contain-reads-home", "private" }));
+
+    const writes_home = try res(arena, &.{"contain-writes-home"});
+    try testing.expect(std.mem.indexOf(u8, writes_home, home_write) != null);
+    const writes_strict = try res(arena, &.{"contain-writes"});
+    try testing.expect(std.mem.indexOf(u8, writes_strict, home_write) == null);
+    try testing.expectEqualStrings(writes_strict, try res(arena, &.{ "contain-writes-home", "contain-writes" }));
+    const writes_none = try res(arena, &.{"no-writes"});
+    try testing.expectEqualStrings(writes_none, try res(arena, &.{ "contain-writes-home", "no-writes" }));
 }
 
 test "a tampering restriction removes the allow, never the deny" {
@@ -241,6 +280,18 @@ test "the mob's scratch stays writable under every restriction" {
 // component anchor in them broke twice under hand testing before it was
 // right, and nothing about the regex text says whether it holds.
 
+fn canApplySandbox(io: std.Io) !bool {
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "sandbox-exec", "-p", "(version 1) (allow default)", "/usr/bin/true" },
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return false;
+    return switch (try child.wait(io)) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
 fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []const u8, script: []const u8) !bool {
     var a: std.heap.ArenaAllocator = .init(gpa);
     defer a.deinit();
@@ -258,7 +309,8 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []
             path,                                                                                  "-D",
             try std.fmt.allocPrint(arena, "CWD={s}", .{dir}),                                      "-D",
             try std.fmt.allocPrint(arena, "PARENTWD={s}", .{std.fs.path.dirname(dir) orelse "/"}), "-D",
-            try std.fmt.allocPrint(arena, "TMP={s}", .{dir}),                                      "/bin/sh",
+            try std.fmt.allocPrint(arena, "TMP={s}", .{dir}),                                      "-D",
+            try std.fmt.allocPrint(arena, "HOME={s}", .{dir}),                                     "/bin/sh",
             "-c",                                                                                  script,
         },
         .cwd = .{ .path = dir },
@@ -272,15 +324,12 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []
 }
 
 /// The CWD parameter has to be a *resolved* path. macOS matches the profile
-/// against resolved paths, and /tmp is a symlink to /private/tmp — so a cwd
-/// given as /tmp/x never matches (subpath (param "CWD")) and contain-writes
-/// denies the working directory itself. `currentPath` resolves, so this only
-/// bites somewhere like here, where the path is built by hand.
+/// against resolved paths, and /tmp is commonly a symlink — so a cwd given in
+/// its unresolved spelling does not match (subpath (param "CWD")) and
+/// contain-writes denies the working directory itself. `currentPath` resolves;
+/// the shared test helper does the same for paths built by hand.
 fn scratch(gpa: Allocator, io: std.Io, name: []const u8) ![]const u8 {
-    const base = try std.fs.path.join(gpa, &.{ "/private/tmp", name });
-    std.Io.Dir.cwd().deleteTree(io, base) catch {};
-    try std.Io.Dir.cwd().createDirPath(io, base);
-    return base;
+    return test_tmp.make(gpa, io, name);
 }
 
 test "a config directory cannot be staged elsewhere and renamed in" {
@@ -288,6 +337,7 @@ test "a config directory cannot be staged elsewhere and renamed in" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
+    if (!try canApplySandbox(io)) return error.SkipZigTest;
 
     const dir = try scratch(testing.allocator, io, "m8-restriction-rename");
     defer testing.allocator.free(dir);
@@ -307,6 +357,7 @@ test "a config directory cannot be reached through a symlink" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
+    if (!try canApplySandbox(io)) return error.SkipZigTest;
 
     const dir = try scratch(testing.allocator, io, "m8-restriction-symlink");
     defer testing.allocator.free(dir);
@@ -322,6 +373,7 @@ test "a restriction leaves ordinary work alone" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
+    if (!try canApplySandbox(io)) return error.SkipZigTest;
 
     const dir = try scratch(testing.allocator, io, "m8-restriction-control");
     defer testing.allocator.free(dir);

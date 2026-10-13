@@ -11,7 +11,7 @@
 const std = @import("std");
 const config = @import("../config.zig");
 const address = @import("../address.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -25,8 +25,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 reset — start a chat over, or say what it follows
-        \\
         \\  m8 reset [--new | --to @TARGET] @CHAT
         \\
         \\Takes the chat's pointer away, so it reads as its parent again: a

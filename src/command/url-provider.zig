@@ -1,4 +1,4 @@
-//! `providers url` — post the request to a url.
+//! `url-provider` — post the request to a url.
 //!
 //! The one provider command that reaches a network, and it is a command like
 //! any other rather than the privileged path: it reads a request on stdin and
@@ -13,7 +13,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const api = @import("../api.zig");
-const provider = @import("../../provider.zig");
+const provider = @import("../provider.zig");
 const Ctx = api.Ctx;
 
 /// The default keeps the provider tiny and delegates TLS, certificates, proxy
@@ -23,8 +23,8 @@ const Ctx = api.Ctx;
 const no_curl_dep = build_options.no_curl_dep;
 
 pub const command: api.Command = .{
-    .name = "url",
-    .summary = "post the request to $M8_PROVIDER_URL",
+    .name = "url-provider",
+    .summary = "post a request to $M8_PROVIDER_URL",
     // The request is read from the descriptor as it arrives, not handed
     // over: `url` streams it straight back out again.
     .takes = .nothing,
@@ -35,86 +35,35 @@ pub const command: api.Command = .{
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 providers url — post the request, hand the answer back
+        \\  ... | m8 url-provider
+        \\  m8 url-provider --get URL
         \\
-        \\  ... | m8 providers url
+        \\Posts stdin to $M8_PROVIDER_URL as JSON and writes the response to
+        \\stdout as it arrives. `--get URL` sends a GET to URL instead, with
+        \\the same headers, and reads no stdin.
         \\
-        \\Posts what arrives on stdin to $M8_PROVIDER_URL and writes the
-        \\response back as it arrives, in whatever size it arrives in — so a
-        \\provider that streams reaches whatever is next in the pipe while the
-        \\model is still saying it.
-        \\
-    );
-    if (comptime no_curl_dep) {
-        try w.writeAll(
-            \\The posting is done by m8's Zig standard-library HTTP client, so
-            \\this build does not need curl. Whatever the api answers is passed
-            \\on, an error as much as a reply; only a url that could not be
-            \\reached at all is a failure here.
-            \\
-        );
-    } else {
-        try w.writeAll(
-            \\The posting is done by `curl`, which has to be on PATH. Whatever
-            \\the api answers is passed on, an error as much as a reply; only a
-            \\url that could not be reached at all is a failure here.
-            \\
-        );
-    }
-    try w.writeAll(
-        \\
-        \\There is no path m8 appends. Which api lives where is a fact about a
-        \\provider rather than about a format, so the whole endpoint is the url.
+        \\A response is passed on whatever its status. Only a url that cannot
+        \\be reached is a failure.
         \\
         \\environment:
         \\
-        \\  M8_PROVIDER_URL       the whole endpoint. Required.
-        \\  M8_PROVIDER_HEADER_*  one per header. Each is a shell command,
-        \\                        and its output is that header's value.
-        \\                        Optional, and a command that fails or says
-        \\                        nothing leaves its header off.
-        \\
-        \\A header is named by the entry key it came from, so `header-x-api-key`
-        \\arrives as M8_PROVIDER_HEADER_X_API_KEY and goes out as `x-api-key`.
-        \\
-        \\Each is a command rather than a value so a config can commit safely and
-        \\still reach a keychain; a constant is `echo`. That is this command's
-        \\convention rather than m8's — everything else the entry said arrives
-        \\here too, under its own M8_PROVIDER_ name, and means whatever you make
-        \\of it.
-        \\
-        \\A bearer token, an api version and a beta flag are all just headers,
-        \\and not one of them is a format's business — which is the same reason
-        \\there is no path m8 appends to a url.
-        \\
-        \\Two entries that name it:
-        \\
-        \\  "local": {
-        \\    "cmd": ["m8", "providers", "url"],
-        \\    "encode": ["m8", "encode", "openai-completions"],
-        \\    "parse": ["m8", "parse", "openai-completions"],
-        \\    "url": "http://127.0.0.1:11337/v1/chat/completions",
-        \\    "header-authorization": "echo Bearer $(security find-generic-password -s omlx -w)"
-        \\  }
-        \\
-        \\  "anthropic": {
-        \\    "cmd": ["m8", "providers", "url"],
-        \\    "encode": ["m8", "encode", "anthropic-messages"],
-        \\    "parse": ["m8", "parse", "anthropic-messages"],
-        \\    "url": "https://api.anthropic.com/v1/messages",
-        \\    "header-anthropic-version": "echo 2023-06-01",
-        \\    "header-x-api-key": "security find-generic-password -s anthropic-api-key -w"
-        \\  }
+        \\  M8_PROVIDER_URL          the endpoint to post to
+        \\  M8_PROVIDER_HEADER_NAME  a shell command whose output is sent as
+        \\                           header NAME: HEADER_X_API_KEY is x-api-key.
+        \\                           One that fails or prints nothing is left off.
         \\
     );
+    try w.writeAll(if (comptime no_curl_dep)
+        "\nThis build carries its own HTTP client.\n"
+    else
+        "\nNeeds `curl` on PATH.\n");
 }
 
 /// Post the request and hand the answer back as it arrives.
 ///
 /// `M8_PROVIDER_URL` is the whole endpoint. There is no path m8 appends to
 /// it: which api lives where is a fact about a provider, not about a format,
-/// and keeping a table of those is the sort of thing m8 stopped doing when
-/// `models` left providers.json.
+/// and keeping a table of those is not something m8 does.
 ///
 /// Every `M8_PROVIDER_HEADER_*` is run as a shell command and its output is
 /// that header's value. That is this command's convention rather than m8's,
@@ -122,36 +71,50 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
 /// keychain. A bearer token, an api version and a beta flag are all headers,
 /// so there is one rule here rather than a field per vendor habit.
 fn run(ctx: Ctx) !u8 {
+    // Asking rather than posting: the url is said here, because the entry's
+    // own is where requests go, and nothing is read from stdin.
+    if (ctx.args.len > 0 and std.mem.eql(u8, ctx.args[0], "--get")) {
+        if (ctx.args.len != 2) {
+            try ctx.err.writeAll("m8 url-provider: --get takes one url\n");
+            return 1;
+        }
+        if (comptime no_curl_dep) return runStdlib(ctx, ctx.args[1], .GET);
+        return runCurl(ctx, ctx.args[1], true);
+    }
+
     // m8 runs a provider with a pipe on stdin. A terminal is nobody piping a
     // request, so what was wanted is the page rather than a provider left
     // waiting for an end of file that is not coming.
     if (std.Io.File.stdin().isTty(ctx.io) catch false) {
-        try ctx.err.writeAll("m8 providers url: no request on stdin\n");
+        try ctx.err.writeAll("m8 url-provider: no request on stdin\n");
         try page(ctx, ctx.err);
         try ctx.err.flush();
         return 1;
     }
 
     const endpoint = ctx.env.get(provider.env_prefix ++ "URL") orelse {
-        try ctx.err.writeAll("m8 providers url: no " ++ provider.env_prefix ++ "URL\n");
+        try ctx.err.writeAll("m8 url-provider: no " ++ provider.env_prefix ++ "URL\n");
         return 1;
     };
 
     // This is a comptime choice, not a runtime mode. In particular, the
     // curl build never references std.http.Client and the stdlib build never
     // carries the curl command line or its curl-spawn path.
-    if (comptime no_curl_dep) return runStdlib(ctx, endpoint);
-    return runCurl(ctx, endpoint);
+    if (comptime no_curl_dep) return runStdlib(ctx, endpoint, .POST);
+    return runCurl(ctx, endpoint, false);
 }
 
 /// The no-curl transport. The stdlib client owns TLS and certificate lookup,
 /// which is the useful tradeoff for a self-contained binary. Keep this
 /// deliberately behind the comptime branch above: std.http is a substantial
 /// dependency and should not affect the default curl build.
-fn runStdlib(ctx: Ctx, endpoint: []const u8) !u8 {
+fn runStdlib(ctx: Ctx, endpoint: []const u8, method: std.http.Method) !u8 {
     var in_buf: [64 * 1024]u8 = undefined;
     var input = std.Io.File.stdin().readerStreaming(ctx.io, &in_buf);
-    const request_body = try input.interface.allocRemaining(ctx.arena, .unlimited);
+    const request_body: []const u8 = if (method == .POST)
+        try input.interface.allocRemaining(ctx.arena, .unlimited)
+    else
+        "";
 
     var extra: std.ArrayList(std.http.Header) = .empty;
     try headersStdlib(ctx, &extra);
@@ -160,27 +123,32 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8) !u8 {
     defer client.deinit();
 
     const uri = std.Uri.parse(endpoint) catch {
-        try ctx.err.print("m8 providers url: '{s}' is not a url\n", .{endpoint});
+        try ctx.err.print("m8 url-provider: '{s}' is not a url\n", .{endpoint});
         return 1;
     };
 
-    var req = client.request(.POST, uri, .{
-        .headers = .{ .content_type = .{ .override = "application/json" } },
+    // No encoding is asked for, as curl asks for none: what comes back is
+    // passed on as it is, and nothing here would undo a compressed body.
+    var req = client.request(method, uri, .{
+        .headers = .{
+            .content_type = if (method == .POST) .{ .override = "application/json" } else .default,
+            .accept_encoding = .omit,
+        },
         .extra_headers = extra.items,
     }) catch |e| {
-        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
+        try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
         return 1;
     };
     defer req.deinit();
 
-    req.sendBodyComplete(@constCast(request_body)) catch |e| {
-        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
+    (if (method == .POST) req.sendBodyComplete(@constCast(request_body)) else req.sendBodiless()) catch |e| {
+        try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
         return 1;
     };
 
     var redirect_buf: [8192]u8 = undefined;
     var response = req.receiveHead(&redirect_buf) catch |e| {
-        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
+        try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
         return 1;
     };
 
@@ -203,7 +171,7 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8) !u8 {
 
 /// The default transport. curl keeps TLS, certificates, proxies and HTTP out
 /// of the executable, which is why it is the small build.
-fn runCurl(ctx: Ctx, endpoint: []const u8) !u8 {
+fn runCurl(ctx: Ctx, endpoint: []const u8, get: bool) !u8 {
     var lines: std.ArrayList(u8) = .empty;
     try headers(ctx, &lines);
 
@@ -218,13 +186,13 @@ fn runCurl(ctx: Ctx, endpoint: []const u8) !u8 {
     // what the api said — the codec reads it as it reads any other answer.
     // What is left to fail is the reaching itself, which curl says on stderr.
     var child = std.process.spawn(ctx.io, .{
-        .argv = &.{ "sh", "-c", script, "m8 providers url", endpoint },
+        .argv = &.{ "sh", "-c", if (get) get_script else script, "m8 url-provider", endpoint },
         .environ_map = environ,
-        .stdin = .inherit,
+        .stdin = if (get) .ignore else .inherit,
         .stdout = .inherit,
         .stderr = .inherit,
     }) catch |e| {
-        try ctx.err.print("m8 providers url: {s}\n", .{@errorName(e)});
+        try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
         return 1;
     };
     return switch (child.wait(ctx.io) catch return 1) {
@@ -242,7 +210,16 @@ const headers_var = "M8_PROVIDER_URL_HEADERS";
 /// argument is in `ps` for every user on the machine, and one of these is a
 /// key.
 const script =
-    \\exec curl -sS -N -H 'content-type: application/json' -H @/dev/fd/3 --data-binary @- "$1" 3<<M8_END
+    \\exec curl -sS -N -H 'content-type: application/json' -H @/dev/fd/3 --data-binary @- "$1"
+++ heredoc;
+
+/// The same, asking rather than posting: no body, so nothing says what one is.
+const get_script =
+    \\exec curl -sS -N -H @/dev/fd/3 "$1"
+++ heredoc;
+
+const heredoc =
+    \\ 3<<M8_END
     \\$
 ++ headers_var ++
     \\
@@ -331,3 +308,25 @@ fn ran(ctx: Ctx, cmd: []const u8) !?[]const u8 {
 }
 
 // ---------------------------------------------------------------- inbuilt
+
+test "the page names what it reads" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    var env: std.process.Environ.Map = .init(a.allocator());
+    var out: std.Io.Writer.Allocating = .init(a.allocator());
+    const ctx: Ctx = .{
+        .arena = a.allocator(),
+        .io = undefined,
+        .mode = .md,
+        .env = &env,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &out.writer,
+        .tty = null,
+    };
+    try page(ctx, &out.writer);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_URL") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_HEADER_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), if (no_curl_dep) "own HTTP client" else "`curl`") != null);
+}

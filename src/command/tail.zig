@@ -16,7 +16,7 @@
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
 const sigil = @import("../m8/sigil.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -32,8 +32,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 tail — the last record of a document, or the last of some kind
-        \\
         \\  m8 tail [--sigil SIGIL]... [--value | --block]
         \\
         \\Writes the last record of the document on stdin. With `--sigil`,

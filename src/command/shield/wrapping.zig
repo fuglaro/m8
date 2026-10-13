@@ -6,7 +6,7 @@
 //! the whole of that, and neither is any one shield's business.
 
 const std = @import("std");
-const api = @import("../api.zig");
+const api = @import("../../api.zig");
 const Ctx = api.Ctx;
 
 pub const Error = error{

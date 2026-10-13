@@ -25,7 +25,7 @@ const Allocator = std.mem.Allocator;
 const config = @import("../../config.zig");
 const doc = @import("../../m8/doc.zig");
 const zm = @import("../../zmachine/zmachine.zig");
-const api = @import("../api.zig");
+const api = @import("../../api.zig");
 const Ctx = api.Ctx;
 
 /// What a model name begins with to be one of these. A model whose name ends
@@ -186,7 +186,7 @@ fn lessThan(_: void, a: []const u8, b: []const u8) bool {
 pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
     const wanted = storyName(model);
     const found = find(ctx, wanted) catch |why| {
-        try ctx.err.print("m8 providers toy: {s}\n", .{switch (why) {
+        try ctx.err.print("m8 toy-provider: {s}\n", .{switch (why) {
             Error.NameEscapes => "a story file is named inside models/Z-Machine, not outside it",
             else => "no story file called that",
         }});
@@ -211,7 +211,7 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
         if (r.sigil == .user) try said.append(ctx.arena, r.content orelse "");
     }
     if (said.items.len == 0) {
-        try ctx.err.writeAll("m8 providers toy: nothing to derive a seed from\n");
+        try ctx.err.writeAll("m8 toy-provider: nothing to derive a seed from\n");
         try ctx.err.flush();
         return 1;
     }
@@ -222,7 +222,7 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
     const inputs = said.items[1..];
 
     const outcome = zm.play(ctx.arena, found.bytes, seed, inputs) catch |why| {
-        try ctx.err.print("m8 providers toy: {s} would not run: {s}\n", .{
+        try ctx.err.print("m8 toy-provider: {s} would not run: {s}\n", .{
             found.path,
             @errorName(why),
         });

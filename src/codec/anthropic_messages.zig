@@ -41,7 +41,6 @@ pub const codec: api.Codec = .{
     .name = codec_name,
     .summary = "Anthropic messages",
     .encode = encode,
-    .decode = decode,
     .parse = parse,
 };
 
@@ -719,180 +718,6 @@ const Building = struct {
     }
 };
 
-// ------------------------------------------------------------------ decode
-
-pub fn decode(arena: Allocator, bytes: []const u8) ![]const doc.Record {
-    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, api.request_options) catch
-        return error.MalformedRequest;
-    if (v != .object) return error.MalformedRequest;
-
-    var out: std.ArrayList(doc.Record) = .empty;
-
-    // Everything the request asked for, back onto the 🧠 that asked. m8 knows
-    // none of these by name, so one it has never heard of comes back too.
-    //
-    // Nothing on the wire says whose model it was. That is the one loss the
-    // round trip is allowed, and naming a provider at `send` is what answers
-    // it.
-    if (str(v.object.get("model"))) |name| {
-        var params: std.ArrayList(modelform.Param) = .empty;
-        var it = v.object.iterator();
-        while (it.next()) |e| {
-            if (structural(e.key_ptr.*)) continue;
-            try params.append(arena, .{
-                .key = e.key_ptr.*,
-                .value = try modelform.written(arena, e.value_ptr.*),
-            });
-        }
-        try out.append(arena, .{
-            .sigil = .agent,
-            .value = try modelform.render(arena, .{ .name = name, .params = params.items }),
-        });
-    }
-
-    if (v.object.get("tools")) |tools| if (tools == .array) {
-        for (tools.array.items) |t| try readTool(arena, &out, t);
-    };
-
-    // The api's own field, so there is nothing to hoist on the way back: it
-    // was never a message and does not become one.
-    if (v.object.get("system")) |system| switch (system) {
-        .string => |text| try out.append(arena, .{ .sigil = .system, .content = text }),
-        // The cached form is a list of text blocks. What they say is what a
-        // 🧭 says; `cache_control` is the request's business.
-        .array => |blocks| for (blocks.items) |block| {
-            if (block != .object) continue;
-            if (str(block.object.get("text"))) |text|
-                try out.append(arena, .{ .sigil = .system, .content = text });
-        },
-        else => {},
-    };
-
-    const messages = v.object.get("messages") orelse return out.items;
-    if (messages != .array) return out.items;
-    for (messages.array.items) |m| try readMessage(arena, &out, m);
-    return out.items;
-}
-
-fn readMessage(arena: Allocator, out: *std.ArrayList(doc.Record), m: std.json.Value) !void {
-    if (m != .object) return;
-    const role = str(m.object.get("role")) orelse return;
-    const assistant = std.mem.eql(u8, role, "assistant");
-    if (!assistant and !std.mem.eql(u8, role, "user")) return;
-
-    const content = m.object.get("content") orelse return;
-    if (content == .string) {
-        try out.append(arena, .{
-            .sigil = if (assistant) .bot else .user,
-            .content = content.string,
-        });
-        return;
-    }
-    if (content != .array) return;
-    for (content.array.items) |block| {
-        if (block != .object) continue;
-        try readBlock(arena, out, block, assistant);
-    }
-}
-
-fn readBlock(
-    arena: Allocator,
-    out: *std.ArrayList(doc.Record),
-    block: std.json.Value,
-    assistant: bool,
-) !void {
-    const which = str(block.object.get("type")) orelse return;
-
-    if (std.mem.eql(u8, which, "text")) {
-        try out.append(arena, .{
-            .sigil = if (assistant) .bot else .user,
-            .content = str(block.object.get("text")) orelse "",
-        });
-    } else if (std.mem.eql(u8, which, "thinking")) {
-        try thinking(
-            arena,
-            out,
-            str(block.object.get("thinking")) orelse "",
-            str(block.object.get("signature")) orelse "",
-        );
-    } else if (std.mem.eql(u8, which, "tool_use")) {
-        var buf: std.Io.Writer.Allocating = .init(arena);
-        if (block.object.get("input")) |input|
-            try std.json.Stringify.value(input, .{}, &buf.writer);
-        const raw = if (buf.written().len == 0) "{}" else buf.written();
-        try out.append(arena, .{
-            .sigil = .call,
-            .value = try std.fmt.allocPrint(arena, "{s},{s}", .{
-                str(block.object.get("name")) orelse "",
-                str(block.object.get("id")) orelse "",
-            }),
-            .content = try toolbox.renderArgs(arena, .md, raw),
-        });
-    } else if (std.mem.eql(u8, which, "tool_result")) {
-        // `is_error` is what this api can say and chat completions cannot, so
-        // a failure comes home a 🚫 rather than flattening to a 🧾. The 🟢 a
-        // success would have had is not here to be recovered: the api has no
-        // field for it, so it never went out.
-        const bad = if (block.object.get("is_error")) |e| (e == .bool and e.bool) else false;
-        try out.append(arena, .{
-            .sigil = if (bad) .failed else .result,
-            .value = str(block.object.get("tool_use_id")) orelse "",
-            .content = try resultText(arena, block.object.get("content")),
-        });
-    }
-}
-
-/// What a tool result said. The api takes a string or a list of blocks, and
-/// what a ledger keeps is what was said either way.
-fn resultText(arena: Allocator, content: ?std.json.Value) ![]const u8 {
-    const v = content orelse return "";
-    if (v == .string) return v.string;
-    if (v != .array) return "";
-    var out: std.ArrayList(u8) = .empty;
-    for (v.array.items) |block| {
-        if (block != .object) continue;
-        const text = str(block.object.get("text")) orelse continue;
-        if (out.items.len > 0) try out.append(arena, '\n');
-        try out.appendSlice(arena, text);
-    }
-    return out.items;
-}
-
-/// A tool on the wire is a schema, so this is the inverse of
-/// `toolbox.writeParameters`. The 🔌 is not here to be recovered — it never
-/// went out.
-fn readTool(arena: Allocator, out: *std.ArrayList(doc.Record), t: std.json.Value) !void {
-    if (t != .object) return;
-    const name = str(t.object.get("name")) orelse return;
-
-    var props: std.ArrayList(toolbox.Property) = .empty;
-    if (t.object.get("input_schema")) |schema|
-        try toolbox.readParameters(arena, &props, schema);
-
-    try out.append(arena, .{
-        .sigil = .tool,
-        .value = name,
-        .content = try toolbox.render(arena, .md, .{
-            .name = name,
-            .description = str(t.object.get("description")) orelse "",
-            .properties = props.items,
-        }),
-    });
-    // Being on the wire at all is what it means for a tool to be offered, and
-    // a 🧰 with no block is how that is said.
-    try out.append(arena, .{ .sigil = .tool, .value = name });
-}
-
-/// The fields that are the request's shape rather than something asked for.
-/// `stream` is among them: it belongs to a run, not to a conversation, and m8
-/// decides it each time.
-fn structural(key: []const u8) bool {
-    for ([_][]const u8{ "model", "messages", "tools", "system", "stream" }) |k| {
-        if (std.mem.eql(u8, key, k)) return true;
-    }
-    return false;
-}
-
 fn str(v: ?std.json.Value) ?[]const u8 {
     const got = v orelse return null;
     return if (got == .string) got.string else null;
@@ -918,19 +743,7 @@ test "an extra that collides with m8's own key never reaches the wire" {
     const records = [_]doc.Record{.{ .sigil = .user, .content = "Hi." }};
     const first = try encode(arena, &records, .{ .model = "tiny", .tools = &.{tool} });
     try testing.expect(std.mem.indexOf(u8, first, "extra") == null);
-
-    const back = try decode(arena, first);
-    const tools = for (back) |r| {
-        if (r.sigil == .tool and r.content != null) break r;
-    } else return error.TestUnexpectedResult;
-    try testing.expectEqualStrings("* q string,pattern:^a\n  native", tools.content.?);
-
-    const again = try encode(arena, &records, .{
-        .model = "tiny",
-        .tools = &.{try toolbox.parse(arena, .md, tools.value, tools.content.?)},
-    });
-    try testing.expect(std.mem.indexOf(u8, again, "extra") == null);
-    try testing.expect(std.mem.indexOf(u8, again, "\"pattern\":\"^a\"") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "\"pattern\":\"^a\"") != null);
 }
 
 fn requestOf(arena: Allocator, records: []const doc.Record, target: api.Target) !std.json.Value {
@@ -1291,41 +1104,4 @@ test "an error is what the api said, and the reply says so" {
         "(invalid x-api-key - failed with authentication_error)",
         again.got.records.items[0].value,
     );
-}
-
-test "a request decodes to a ledger and encodes back to the same request" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-
-    const request =
-        \\{"model":"claude-opus-5","max_tokens":2048,"system":"Be brief.","messages":[{"role":"user","content":[{"type":"text","text":"Say hi."}]},{"role":"assistant","content":[{"type":"thinking","thinking":"hmm","signature":"abc"},{"type":"tool_use","id":"toolu_1","name":"say","input":{"text":"hi"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"nope","is_error":true}]}],"tools":[{"name":"say","description":"Say a thing.","input_schema":{"type":"object","properties":{"text":{"type":"string","description":"What to say"}},"required":["text"]}}]}
-    ;
-    const records = try decode(arena, request);
-
-    // What the wire held, as records. A 🧠 with the parameters it asked for,
-    // the tool and the 🧰 that offers it, the 🧭, and then what was said.
-    try testing.expectEqual(sigil.Sigil.agent, records[0].sigil);
-    try testing.expectEqualStrings("/claude-opus-5,max_tokens:2048", records[0].value);
-    try testing.expectEqual(sigil.Sigil.tool, records[1].sigil);
-    try testing.expectEqual(sigil.Sigil.tool, records[2].sigil);
-    try testing.expectEqual(sigil.Sigil.system, records[3].sigil);
-    try testing.expectEqual(sigil.Sigil.user, records[4].sigil);
-    try testing.expectEqual(sigil.Sigil.thought, records[5].sigil);
-    try testing.expectEqualStrings("hmm", records[5].content.?);
-    try testing.expectEqualStrings(api.snip, records[6].value);
-    try testing.expectEqualStrings(":lock_with_ink_pen:abc", records[6].content.?);
-    try testing.expectEqual(sigil.Sigil.call, records[7].sigil);
-    // is_error survives the round trip, which is this api's own; chat
-    // completions could only ever hand back a 🧾.
-    try testing.expectEqual(sigil.Sigil.failed, records[8].sigil);
-
-    const m = (try modelform.parse(arena, records[0].value)).?;
-    const tool = try toolbox.parse(arena, .md, records[1].value, records[1].content.?);
-    const back = try encode(arena, records, .{
-        .model = m.name,
-        .params = m.params,
-        .tools = &.{tool},
-    });
-    try testing.expectEqualStrings(request, back);
 }

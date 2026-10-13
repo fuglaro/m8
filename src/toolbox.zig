@@ -20,11 +20,11 @@ const Allocator = std.mem.Allocator;
 const sigil = @import("m8/sigil.zig");
 const doc = @import("m8/doc.zig");
 const Mode = sigil.Mode;
-const api = @import("command/api.zig");
+const api = @import("api.zig");
 const shield = @import("shield.zig");
 const markdown = @import("m8/markdown.zig");
 const model = @import("m8/model.zig");
-const argname = @import("command/argname.zig");
+const argname = @import("argname.zig");
 
 pub const Error = error{
     /// A property line had no type.
@@ -421,129 +421,6 @@ fn segment(name: []const u8, prefix: []const u8) ?[]const u8 {
     return if (std.mem.indexOfScalar(u8, rest, '.') == null) rest else null;
 }
 
-/// Stated explicitly because `readObject` and `readType` are mutually
-/// recursive, and an inferred set cannot close over itself.
-pub const ReadError = Allocator.Error;
-
-/// Read a schema back into properties: the inverse of `writeParameters`.
-///
-/// Nested objects flatten back to dotted paths, an array's items give the
-/// `[]` suffix, and an enum's values rejoin with `|`. A 🔌 is not here to be
-/// recovered — it never went out.
-pub fn readParameters(
-    arena: Allocator,
-    props: *std.ArrayList(Property),
-    schema: std.json.Value,
-) ReadError!void {
-    return readObject(arena, props, schema, "");
-}
-
-fn readObject(
-    arena: Allocator,
-    props: *std.ArrayList(Property),
-    schema: std.json.Value,
-    prefix: []const u8,
-) ReadError!void {
-    if (schema != .object) return;
-    const properties = schema.object.get("properties") orelse return;
-    if (properties != .object) return;
-
-    var required: []const std.json.Value = &.{};
-    if (schema.object.get("required")) |req| {
-        if (req == .array) required = req.array.items;
-    }
-
-    var it = properties.object.iterator();
-    while (it.next()) |e| {
-        const key = e.key_ptr.*;
-        const full = if (prefix.len == 0)
-            key
-        else
-            try std.fmt.allocPrint(arena, "{s}.{s}", .{ prefix, key });
-        const is_required = for (required) |rv| {
-            if (rv == .string and std.mem.eql(u8, rv.string, key)) break true;
-        } else false;
-        try readType(arena, props, e.value_ptr.*, full, is_required, null);
-    }
-}
-
-fn readType(
-    arena: Allocator,
-    props: *std.ArrayList(Property),
-    v: std.json.Value,
-    name: []const u8,
-    required: bool,
-    /// The array node this is the items of, which is where its extras live.
-    array: ?std.json.Value,
-) ReadError!void {
-    if (v != .object) return;
-    const t = str(v.object.get("type")) orelse "string";
-
-    // Arrayness lives on the parent type, so the items decide what it is an
-    // array of and the `[]` is put back here.
-    if (std.mem.eql(u8, t, "array")) {
-        const items = v.object.get("items") orelse return;
-        return readType(arena, props, items, name, required, array orelse v);
-    }
-    const suffix = if (array != null) "[]" else "";
-
-    if (std.mem.eql(u8, t, "object")) {
-        try props.append(arena, .{
-            .name = name,
-            .type = try std.fmt.allocPrint(arena, "object{s}", .{suffix}),
-            .required = required,
-            .extras = if (array) |an|
-                try readExtras(arena, an, &.{ "type", "items" })
-            else
-                try readExtras(arena, v, &.{ "type", "properties", "required" }),
-        });
-        // Parents are always declared, never inferred, so the children follow.
-        return readObject(arena, props, v, name);
-    }
-
-    var base: []const u8 = t;
-    if (v.object.get("enum")) |en| if (en == .array) {
-        var joined: std.ArrayList(u8) = .empty;
-        for (en.array.items, 0..) |item, i| {
-            if (i > 0) try joined.append(arena, '|');
-            if (item == .string) try joined.appendSlice(arena, item.string);
-        }
-        if (joined.items.len > 0) base = joined.items;
-    };
-
-    try props.append(arena, .{
-        .name = name,
-        .type = try std.fmt.allocPrint(arena, "{s}{s}", .{ base, suffix }),
-        .description = str(v.object.get("description")) orelse "",
-        .required = required,
-        .extras = if (array) |an|
-            try readExtras(arena, an, &.{ "type", "items" })
-        else
-            try readExtras(arena, v, &.{ "type", "enum", "description" }),
-    });
-}
-
-/// Every key on a node other than the ones m8 writes there itself.
-///
-/// Which keys those are is decided per node rather than by a list of JSON
-/// Schema's vocabulary, so a key comes back as an extra exactly when it could
-/// only have gone out as one. A duplicate from a request m8 did not write has
-/// already been settled by the time it gets here — one value per key.
-fn readExtras(arena: Allocator, v: std.json.Value, own: []const []const u8) ReadError![]const Extra {
-    var out: std.ArrayList(Extra) = .empty;
-    var it = v.object.iterator();
-    next: while (it.next()) |e| {
-        for (own) |k| if (std.mem.eql(u8, k, e.key_ptr.*)) continue :next;
-        try out.append(arena, .{ .key = e.key_ptr.*, .value = e.value_ptr.* });
-    }
-    return out.items;
-}
-
-fn str(v: ?std.json.Value) ?[]const u8 {
-    const got = v orelse return null;
-    return if (got == .string) got.string else null;
-}
-
 /// Write a 🧰's content: the inverse of `parse`, in `mode`.
 ///
 /// Nested content carries the quote of the document it sits in, so a tool
@@ -846,14 +723,6 @@ test "a key written twice goes out once, as m8's own" {
     // With nothing of m8's own to lose to, the extra is what goes out.
     const bare = try parse(arena, .md, "t", "* q string,description:extra");
     try testing.expect(std.mem.indexOf(u8, try schemaOf(arena, bare), "{\"description\":\"extra\",\"type\":\"string\"}") != null);
-
-    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, got, .{});
-    var props: std.ArrayList(Property) = .empty;
-    try readParameters(arena, &props, v.object.get("function").?.object.get("parameters").?);
-    try testing.expectEqualStrings("native", props.items[0].description);
-    try testing.expectEqual(@as(usize, 1), props.items[0].extras.len);
-    try testing.expectEqualStrings("pattern", props.items[0].extras[0].key);
-    try testing.expectEqualStrings("* q string,pattern:^a\n  native", try render(arena, .md, .{ .name = "t", .properties = props.items }));
 }
 
 test "logical property names become their environment spellings" {

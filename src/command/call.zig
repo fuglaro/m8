@@ -18,9 +18,9 @@
 //! it arrived so the run that made the call can put it to them.
 
 const std = @import("std");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const doc = @import("../m8/doc.zig");
-const argline = @import("argline.zig");
+const argline = @import("call/argline.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -306,8 +306,6 @@ fn help(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 call — run a program
-        \\
         \\  m8 call PROG [ARGS]
         \\
         \\The program's stdout becomes a 🧾 receipt, followed by 🟢 or 🚫 for
@@ -337,7 +335,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\What a program may not do is a 🛡 rather than a flag here. A shield
         \\is the process a program runs inside, so it is arranged around this
-        \\rather than asked about within it. See `m8 shield`.
+        \\rather than asked about within it. See `m8 secure-shield` and `m8 ask-shield`.
         \\
     );
 }

@@ -1,7 +1,7 @@
 //! The m8 api: the language itself.
 //!
 //! The one codec whose view is the whole ledger, which is why encoding loses
-//! nothing and `decode m8` is a null operation. A provider declaring this api
+//! nothing. A provider declaring this api
 //! is handed everything — 🧰 with its 🔌 and its 🔒 included — rather than a
 //! projection, and is trusted with it because a provider command lives in
 //! `core/`.
@@ -21,7 +21,6 @@ pub const codec: api.Codec = .{
     .name = "m8",
     .summary = "the language itself; encoding is writing it out",
     .encode = encode,
-    .decode = decode,
     .parse = parse,
 };
 
@@ -29,11 +28,6 @@ fn encode(arena: Allocator, records: []const doc.Record, target: api.Target) ![]
     var buf: std.Io.Writer.Allocating = .init(arena);
     try ledger.writeAll(&buf.writer, arena, target.mode, records);
     return buf.written();
-}
-
-fn decode(arena: Allocator, bytes: []const u8) ![]const doc.Record {
-    var diag: doc.Diagnostic = .{};
-    return doc.parse(arena, bytes, &diag);
 }
 
 /// Read a reply as it is written.

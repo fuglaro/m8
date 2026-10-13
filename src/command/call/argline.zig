@@ -5,7 +5,7 @@
 //! one, so what a call said cannot become syntax in whatever runs.
 
 const std = @import("std");
-const argname = @import("argname.zig");
+const argname = @import("../../argname.zig");
 
 pub const Error = error{
     /// A placeholder was opened and not closed.

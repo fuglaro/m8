@@ -27,7 +27,7 @@ const assembly = @import("assembly.zig");
 const converse = @import("converse.zig");
 const ledger = @import("ledger.zig");
 const Keeping = @import("keeping.zig").Keeping;
-const api = @import("command/api.zig");
+const api = @import("api.zig");
 const Ctx = api.Ctx;
 
 /// Return the prompt words after the address. A command-line prompt must be

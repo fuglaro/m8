@@ -15,7 +15,7 @@ const doc = @import("../m8/doc.zig");
 const config = @import("../config.zig");
 const address = @import("../address.zig");
 const session = @import("../session.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -28,8 +28,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 tag — keep a turn, and point an address at it
-        \\
         \\  m8 tag [--no-advance] @ADDRESS
         \\
         \\A document that is one 🧠 names a turn already, so the address is

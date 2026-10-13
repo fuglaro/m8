@@ -1,4 +1,4 @@
-//! `providers toy` — answer the request here, with no network.
+//! `toy-provider` — answer the request here, with no network.
 //!
 //! These exist so that the loop, tool calling, and picking up a call that was
 //! never answered can all be run without a model. `api: "m8"`, so the request
@@ -6,18 +6,18 @@
 
 const std = @import("std");
 const api = @import("../api.zig");
-const doc = @import("../../m8/doc.zig");
-const ledger = @import("../../ledger.zig");
-const modelform = @import("../../m8/model.zig");
-const eliza = @import("eliza.zig");
-const zmachine = @import("zmachine.zig");
+const doc = @import("../m8/doc.zig");
+const ledger = @import("../ledger.zig");
+const modelform = @import("../m8/model.zig");
+const eliza = @import("toy-provider/eliza.zig");
+const zmachine = @import("toy-provider/zmachine.zig");
 const Ctx = api.Ctx;
 
 const testing = std.testing;
 
 pub const command: api.Command = .{
-    .name = "toy",
-    .summary = "answer it here, with no network",
+    .name = "toy-provider",
+    .summary = "answer a request here, with no network",
     // The request is read from the descriptor as it arrives, not handed
     // over: `url` streams it straight back out again.
     .takes = .nothing,
@@ -26,73 +26,24 @@ pub const command: api.Command = .{
 };
 
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
     try w.writeAll(
-        \\m8 providers toy — answer the request here, with no network
+        \\  ... | m8 toy-provider
+        \\  m8 toy-provider --models
         \\
-        \\  ... | m8 providers toy
-        \\
-        \\Speaks m8, so the request is the ledger itself and the answer is the
-        \\records it adds to one. It answers without a network, which is what
-        \\makes the loop, tool calling, and picking up a call that was never
-        \\answered testable rather than only demonstrable.
+        \\Reads a ledger on stdin and writes the turn that answers it, both as
+        \\m8. The last 🧠 in the ledger names the model. `--models` prints
+        \\every name that answers, one a line.
         \\
         \\models:
         \\
         \\
     );
-    for (models) |m| try w.print("  /toy/{s: <14} {s}\n", .{ m.name, m.summary });
+    for (models) |m| try w.print("  {s: <16} {s}\n", .{ m.name, m.summary });
     try w.writeAll(
         \\
-        \\  m8 @/toy/echo -- hello
-        \\  m8 @/toy/runner -- 'RUN;;;say;;;text=hi'
-        \\  m8 @/toy/eliza -- "I am not sleeping well."
-        \\  m8 @/toy/Z-Machine/zork1 -- "I would like to play"
-        \\
-        \\A name ending in ... is a family rather than one model: what follows
-        \\it is the model's own business. Z-Machine takes the name of a story
-        \\file, which is a Z-machine game — Zork and everything after it —
-        \\played through the same ledger as anything else. The first thing you
-        \\say is not played: it is hashed, and the hash is the world's seed.
-        \\
-        \\Story files are looked for under models/Z-Machine in every config
-        \\directory, nearest first, so a project can carry the story its agents
-        \\are tested against and a collection of your own lives in yours:
-        \\
-        \\  ./.m8-st8/models/Z-Machine/
-        \\  ~/.config/m8-st8/models/Z-Machine/
-        \\
-        \\The name is the file's stem and the folder's, spelled the way they
-        \\are — like every other name in m8 — across .z1 to .z8 and Blorb
-        \\containers. m8 ships with none: it plays whichever you put there.
-        \\Zork I to III are MIT-licensed source from Microsoft and are
-        \\compiled in their repositories.
-        \\
-    );
-
-    // Which story files are actually here. Unlike the models a provider on
-    // the far end of a wire serves, these are files on this machine, so the
-    // page can say — and a page that can say should.
-    const stories = zmachine.available(ctx) catch &.{};
-    if (stories.len == 0) {
-        try w.print("\nstory files (none under {s} anywhere):\n\n", .{zmachine.subdir});
-        try w.writeAll("  put one there and it is a model\n");
-    } else {
-        try w.print("\nstory files ({s}):\n\n", .{zmachine.subdir});
-        for (stories) |one| try w.print("  /toy/{s}{s}\n", .{ zmachine.prefix, one });
-    }
-    try w.writeByte('\n');
-
-    try w.writeAll(
-        \\A 🧠 written with a leading / names a model, and what it says before
-        \\its first / is the provider it is asked of. These are the only models
-        \\m8 has of its own; every other one is whatever the provider you
-        \\reached offers.
-        \\
-        \\The entry, which m8 ships with:
-        \\
-        \\  "toy": { "cmd": ["m8", "providers", "toy"] }
-        \\
-        \\It reads nothing from the environment.
+        \\A Z-Machine name is a story file's stem, from models/Z-Machine in a
+        \\config directory.
         \\
     );
 }
@@ -146,7 +97,7 @@ const models = [_]Model{
     },
     .{
         .name = "Z-Machine/" ++ family_mark,
-        .summary = "a story file, played as a model: see the page below",
+        .summary = "a story file, played as a model",
         .answer = zmachine.answer,
     },
 };
@@ -158,11 +109,13 @@ const models = [_]Model{
 /// never answered can all be run without a model — which is what makes them
 /// testable rather than only demonstrable.
 fn run(ctx: Ctx) !u8 {
+    if (ctx.args.len > 0 and std.mem.eql(u8, ctx.args[0], "--models")) return names(ctx);
+
     // m8 runs a provider with a pipe on stdin. A terminal is nobody piping a
     // request, so what was wanted is the page rather than a provider left
     // waiting for an end of file that is not coming.
     if (std.Io.File.stdin().isTty(ctx.io) catch false) {
-        try ctx.err.writeAll("m8 providers toy: no request on stdin\n");
+        try ctx.err.writeAll("m8 toy-provider: no request on stdin\n");
         try page(ctx, ctx.err);
         try ctx.err.flush();
         return 1;
@@ -177,7 +130,7 @@ fn run(ctx: Ctx) !u8 {
     const mode = doc.detect(request) orelse .md;
 
     const m = (try ledger.runsOn(ctx.arena, records)) orelse {
-        try ctx.err.writeAll("m8 providers toy: the request names no model\n");
+        try ctx.err.writeAll("m8 toy-provider: the request names no model\n");
         try ctx.err.flush();
         return 1;
     };
@@ -187,12 +140,28 @@ fn run(ctx: Ctx) !u8 {
             return candidate.answer(ctx, mode, records, m.name);
     }
 
-    try ctx.err.print("m8 providers toy: no model named '{s}'\n", .{m.name});
+    try ctx.err.print("m8 toy-provider: no model named '{s}'\n", .{m.name});
     for (models) |candidate| try ctx.err.print("  /toy/{s}\n", .{candidate.name});
     // Buffered, and the process is about to end: without this the caller is
     // told a provider failed and never told why.
     try ctx.err.flush();
     return 1;
+}
+
+/// Every model there is to ask for, one a line: what an entry's `models`
+/// command says. A family is the story files that are here, since those are
+/// the names that answer.
+fn names(ctx: Ctx) !u8 {
+    for (models) |m| {
+        if (!std.mem.endsWith(u8, m.name, family_mark)) {
+            try ctx.out.print("{s}\n", .{m.name});
+            continue;
+        }
+        const head = m.name[0 .. m.name.len - family_mark.len];
+        for (zmachine.available(ctx) catch &.{}) |story| try ctx.out.print("{s}{s}\n", .{ head, story });
+    }
+    try ctx.out.flush();
+    return 0;
 }
 
 fn echo(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const u8) !u8 {
@@ -280,7 +249,7 @@ fn runner(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []const 
         try calls.append(ctx.arena, .{
             .sigil = .call,
             .value = try std.fmt.allocPrint(ctx.arena, "{s},run-{d}", .{ tool, n }),
-            .content = try @import("../../toolbox.zig").renderArgs(ctx.arena, mode, json.written()),
+            .content = try @import("../toolbox.zig").renderArgs(ctx.arena, mode, json.written()),
         });
     }
 

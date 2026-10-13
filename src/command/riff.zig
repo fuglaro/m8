@@ -17,7 +17,7 @@
 
 const std = @import("std");
 const posix = std.posix;
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -33,8 +33,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 riff — talk to a command from an editor pinned under its output
-        \\
         \\  m8 riff [-c] [-t] [-s N] CMD [ARGS]
         \\
         \\Each message sent starts CMD, hands it the message on stdin, and lets
@@ -69,8 +67,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  m8 riff -c -s 2 python3 -i -u -q
         \\
-        \\CMD is given no terminal: it runs in a detatched session of its own
-        \\via `m8 riff --detached CMD`. Its environment is riff's as it
+        \\CMD is given no terminal: it runs in a detached session of its own,
+        \\which is riff run again with `--detached CMD`. Its environment is riff's as it
         \\arrived, apart from COLUMNS tracking the terminal width.
         \\
     );
@@ -396,16 +394,27 @@ const Riff = struct {
         }
     }
 
+    /// How riff is started again: the way this one was. Of the first two
+    /// words it was started with, a program named for riff is the whole of
+    /// it, and `riff` after a launcher is the two of them. Anything else is
+    /// the first word alone.
+    fn again(ctx: Ctx) ![]const []const u8 {
+        const said = ctx.argv;
+        if (said.len == 0) return ctx.arena.dupe([]const u8, &.{ ctx.self, "riff" });
+        const me = try @import("../provider.zig").selfPath(ctx.arena, ctx.io, ctx.env, said[0]);
+        const named = std.mem.endsWith(u8, std.fs.path.basename(said[0]), "riff");
+        if (!named and said.len > 1 and std.mem.eql(u8, said[1], "riff"))
+            return ctx.arena.dupe([]const u8, &.{ me, "riff" });
+        return ctx.arena.dupe([]const u8, &.{me});
+    }
+
     /// Start the command on one message. The message is written before
     /// anything is read back, which a command reading its stdin first allows.
     fn spawn(r: *Riff, message: []const u8) !void {
         const arena = r.ctx.arena;
         const io = r.ctx.io;
         var argv: std.ArrayList([]const u8) = .empty;
-        if (@import("build_options").split) {
-            const dir = std.fs.path.dirname(r.ctx.self) orelse ".";
-            try argv.append(arena, try std.fs.path.join(arena, &.{ dir, "m8-riff" }));
-        } else try argv.appendSlice(arena, &.{ r.ctx.self, "riff" });
+        try argv.appendSlice(arena, try again(r.ctx));
         try argv.append(arena, detached);
         try argv.appendSlice(arena, r.cmd);
 

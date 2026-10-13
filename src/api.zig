@@ -10,7 +10,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const doc = @import("../m8/doc.zig");
+const doc = @import("m8/doc.zig");
 
 pub const Ctx = struct {
     arena: Allocator,
@@ -33,6 +33,9 @@ pub const Ctx = struct {
     /// What a call hands its tool, in the environment rather than in the
     /// command, which is the one way a call is carried.
     extra_env: []const EnvVar = &.{},
+    /// The words this process was started with, its own name first. Empty
+    /// where there is no process around a command, as in a test.
+    argv: []const []const u8 = &.{},
     /// Arguments after the command name.
     args: []const []const u8,
     /// The incoming document. Empty when nothing was piped in.
@@ -120,24 +123,6 @@ pub const Takes = enum {
     nothing,
 };
 
-/// What a launcher needs to know about a command, which is not what the
-/// command does.
-///
-/// The separation is the whole of how one registry serves two builds. A
-/// launcher reads a `Spec` to decide what goes on a child's stdin and what to
-/// call it; it never touches `run`. Nothing in here is a function pointer, so
-/// a launcher that only reads specs links none of the implementations — the
-/// registry costs it a couple of kilobytes rather than the whole stack.
-///
-/// Two places say the same thing, and that is deliberate: a command declares
-/// what it expects, a launcher promises it, and keeping the two in step is a
-/// maintainer's job rather than something the type system hides.
-pub const Spec = struct {
-    name: []const u8,
-    summary: []const u8,
-    takes: Takes = .stdin,
-};
-
 pub const Command = struct {
     name: []const u8,
     summary: []const u8,
@@ -149,8 +134,8 @@ pub const Command = struct {
     terminal: bool = false,
     /// The exit status. A filter returns 0; `call` returns whatever it ran.
     run: *const fn (Ctx) anyerror!u8,
-    /// This command at length: what it takes, what it answers with, and
-    /// whatever is under it.
+    /// This command at length, after the line that names it: what it takes
+    /// and what it answers with. `page` writes that line from `summary`.
     ///
     /// The writer is handed in rather than taken from `Ctx`, because which
     /// channel a page belongs on is the caller's business: a page somebody
@@ -158,19 +143,8 @@ pub const Command = struct {
     /// handed back instead of what they asked for goes to stderr where it
     /// cannot become part of a document.
     ///
-    /// `ctx.args` are the words after the command's own name, so a command
-    /// with subcommands under it can hand out the page for one of them.
+    /// `ctx.args` are the words after the command's own name.
     help: ?*const fn (Ctx, *std.Io.Writer) anyerror!void = null,
-
-    /// The half of this a launcher reads. Comptime, so taking it leaves `run`
-    /// unreferenced and the implementation out of the binary.
-    pub fn spec(c: Command) Spec {
-        return .{
-            .name = c.name,
-            .summary = c.summary,
-            .takes = c.takes,
-        };
-    }
 };
 
 /// Whether the next word is asking for a page rather than naming anything.
@@ -178,6 +152,17 @@ pub const Command = struct {
 /// Asked once, here, so no command has to remember to answer `--help` and no
 /// two answer it differently. m8 reads it before a command sees its arguments;
 /// prompt words after an `@` are prose only after their `--` separator.
+/// A command's page as `--help` answers it: its name and summary on the first
+/// line, the way a manual's NAME line reads, and then whatever the command
+/// has to say for itself. The line is written here and nowhere else, so what
+/// a listing says about a command is what its own page opens with.
+pub fn page(c: Command, ctx: Ctx, w: *std.Io.Writer) !void {
+    try w.print("m8 {s} - {s}\n", .{ c.name, c.summary });
+    const body = c.help orelse return;
+    try w.writeByte('\n');
+    try body(ctx, w);
+}
+
 pub fn wantsHelp(args: []const []const u8) bool {
     return args.len > 0 and std.mem.eql(u8, args[0], "--help");
 }

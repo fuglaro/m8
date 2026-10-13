@@ -15,7 +15,7 @@
 //! one it is decides what comes back rather than which name was called.
 
 const std = @import("std");
-const api = @import("../api.zig");
+const api = @import("../../api.zig");
 const opts = @import("opts.zig");
 const Ctx = api.Ctx;
 const Dir = std.Io.Dir;

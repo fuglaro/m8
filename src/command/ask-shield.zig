@@ -1,4 +1,4 @@
-//! `shield ask` — put the command to the person.
+//! `ask-shield` — put the command to the person.
 //!
 //! It asks the way any tool does: by stopping with the question, and being
 //! run again once it is answered. So it needs no terminal, and whoever
@@ -6,11 +6,11 @@
 
 const std = @import("std");
 const api = @import("../api.zig");
-const wrapping = @import("wrapping.zig");
+const wrapping = @import("shield/wrapping.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
-    .name = "ask",
+    .name = "ask-shield",
     .summary = "ask the person before running it",
     .takes = .nothing,
     .run = run,
@@ -46,9 +46,7 @@ fn run(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     _ = ctx;
     try out.writeAll(
-        \\m8 shield ask — ask the person before running it
-        \\
-        \\  m8 shield ask [NAME] -- CMD [ARGS]
+        \\  m8 ask-shield [NAME] -- CMD [ARGS]
         \\
         \\NAME is who it asks as, which a shield definition says with
         \\{{SHIELD}}. Without one it is ask_1.

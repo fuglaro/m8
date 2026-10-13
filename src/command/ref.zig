@@ -20,7 +20,7 @@ const config = @import("../config.zig");
 const address = @import("../address.zig");
 const assembly = @import("../assembly.zig");
 const ledger = @import("../ledger.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -35,8 +35,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 ref — the 🧠 an address reads as, and what is said to it
-        \\
         \\  m8 ref [--piped] @ADDRESS [MESSAGE]
         \\
         \\Writes the 🧠 that address reads as now — the turn a chat has got

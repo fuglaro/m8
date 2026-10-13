@@ -1,8 +1,8 @@
 //! `parse` — an api's response, as the turn it holds.
 //!
-//! The third direction. `encode` and `decode` are about requests, which are
-//! ledger-shaped; a response is turn-shaped, so it is not decoded into a
-//! ledger but read into the records it adds to one.
+//! The other direction. `encode` is about requests, which are ledger-shaped;
+//! a response is turn-shaped, so it is read into the records it adds to a
+//! ledger rather than into one.
 //!
 //! Reading is incremental whether or not the provider streamed. A provider
 //! that wrote everything at once is a stream of one chunk, so parsing this
@@ -18,7 +18,7 @@ const codec = @import("../codec.zig");
 const doc = @import("../m8/doc.zig");
 const sigil = @import("../m8/sigil.zig");
 const toolbox = @import("../toolbox.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -33,17 +33,16 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 parse — read an api's response as the turn it holds
-        \\
         \\  ... | m8 parse FORMAT
         \\
-        \\The third direction. `encode` and `decode` are about requests, which
-        \\are ledger-shaped; a response is turn-shaped, so it is not decoded
-        \\into a ledger but read into the records it adds to one.
+        \\The other direction. `encode` is about requests, which are
+        \\ledger-shaped; a response is turn-shaped, so it is read into the
+        \\records it adds to a ledger rather than into one.
         \\
-        \\  echo "Say hi." | m8 @mathy encode openai-completions \
-        \\    | m8 providers url \
-        \\    | m8 parse openai-completions
+        \\  m8 ref @mathy "Say hi." \
+        \\    | m8 encode openai-responses \
+        \\    | M8_PROVIDER_URL=http://127.0.0.1:8000/v1/responses m8 url-provider \
+        \\    | m8 parse openai-responses
         \\
         \\Reading is incremental whether or not the provider streamed, so what
         \\it writes reaches the next command in the pipe while the model is

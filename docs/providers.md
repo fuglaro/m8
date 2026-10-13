@@ -66,10 +66,12 @@ plan. So the entry is a url and a command that reads the token:
 
 ```json
 "codex": {
-  "cmd": ["m8", "providers", "url"],
+  "cmd": ["m8", "url-provider"],
   "encode": ["m8", "encode", "openai-responses"],
   "parse": ["m8", "parse", "openai-responses"],
   "url": "https://chatgpt.com/backend-api/codex/responses",
+  "models-url": "https://chatgpt.com/backend-api/codex/models?client_version=99.0.0",
+  "models": ["sh", "-c", "\"$M8\" url-provider --get \"$M8_PROVIDER_MODELS_URL\" | tr ',' '\\n' | sed -n 's/.*\"slug\" *: *\"\\([^\"]*\\)\".*/\\1/p'"],
   "header-authorization": "echo Bearer $(...access_token from ~/.codex/auth.json...)",
   "header-chatgpt-account-id": "...the account id claim in that token...",
   "header-originator": "echo m8",
@@ -86,7 +88,7 @@ somebody else's would be a lie told to a server that asked.
 
 The endpoint speaks websockets first and falls back to server-sent
 events, so posting to it is a supported path rather than a trick.
-That is the whole reason `m8 providers url` can reach it at all.
+That is the whole reason `m8 url-provider` can reach it at all.
 
 Two things the codec sends without being asked, because every
 client that speaks this api sends them and a ledger cannot do
@@ -98,11 +100,20 @@ overrules it. One gotcha that is neither: the subscription
 endpoint refuses `max_output_tokens`, so do not put one on a
 🧠 aimed at it.
 
+`m8 models codex` lists what the plan serves:
+
+* The list is a sibling url, asked with the same headers.
+* It refuses a request with no `client_version`, and shows
+  a client naming an old one fewer models. So the entry
+  names a high one.
+* Each model is named by its `slug` there, where the public
+  api says `id`.
+
 An api key instead, which reaches the same codec:
 
 ```json
 "openai": {
-  "cmd": ["m8", "providers", "url"],
+  "cmd": ["m8", "url-provider"],
   "encode": ["m8", "encode", "openai-responses"],
   "parse": ["m8", "parse", "openai-responses"],
   "url": "https://api.openai.com/v1/responses",

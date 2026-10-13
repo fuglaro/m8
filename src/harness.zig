@@ -2,7 +2,7 @@
 //!
 //! A command is handed a `Ctx` and answers with a status. Building that from a
 //! process — the writers, the terminal, the document — is the same work in the
-//! single binary and in a split-out command, so it is written once here and
+//! launcher and in a command built on its own, so it is written once here and
 //! every root calls it.
 //!
 //! It is also where an error becomes something a person reads. A command
@@ -11,21 +11,19 @@
 //! way cannot say it two ways.
 
 const std = @import("std");
-const api = @import("command/api.zig");
+const api = @import("api.zig");
 const provider = @import("provider.zig");
 const launch = @import("launch.zig");
 const doc = @import("m8/doc.zig");
 
-/// A command with its process around it: the whole of a split-out binary.
+/// A command with its process around it: the whole of a command built on its own.
 ///
 /// Stdin is read for anything that expects a document, because out here there
 /// is no command line to assemble one from — whatever reaches this process on
 /// stdin is what the launcher promised it.
 ///
-/// `called` is the path that reached this command, spelled the way it was
-/// typed — `shield ask` rather than `shield` — because that is what a
-/// complaint names, and the two builds saying different things about the same
-/// failure is the one difference worth not having.
+/// `called` is the command's name, which is what a complaint names, so both
+/// builds say the same thing about the same failure.
 pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
     const arena = init.arena.allocator();
     const io = init.io;
@@ -48,6 +46,7 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
         .env = init.environ_map,
         .self = self,
         .verbosity = verbosity(init.environ_map),
+        .argv = @ptrCast(argv),
         .args = args,
         .in = "",
         .out = out,
@@ -58,12 +57,12 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
 
     // The flag is m8's wherever it is written, so a command split out answers
     // it the way the launcher above it would have.
-    if (c.help) |page| if (api.wantsHelp(args)) {
+    if (api.wantsHelp(args)) {
         ctx.args = args[1..];
-        try page(ctx, out);
+        try api.page(c, ctx, out);
         try out.flush();
         return 0;
-    };
+    }
 
     var in_buf: [64 * 1024]u8 = undefined;
     // Stdin belongs to whatever a `.nothing` command hands it to.
@@ -84,8 +83,8 @@ pub fn run(
     env: *const std.process.Environ.Map,
     reach: launch.Reach,
     name: []const u8,
+    argv: []const []const u8,
     args: []const []const u8,
-    input: launch.Stdin,
     self: []const u8,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
@@ -97,12 +96,11 @@ pub fn run(
         .mode = switch (reach) {
             .prompt => mode(io),
             .call => |c| if (c.terminal) mode(io) else .md,
-            // A program of its own decides for itself.
-            .spawn => .md,
         },
         .env = env,
         .self = self,
         .verbosity = verbosity(env),
+        .argv = argv,
         .args = &.{},
         .in = "",
         .out = out,
@@ -110,7 +108,7 @@ pub fn run(
         .stdout_pipe = stdoutPipe(io),
         .tty = api.openTty(io, &tty_storage),
     };
-    return finish(ctx, name, launch.under(ctx, reach, args, input));
+    return finish(ctx, name, launch.under(ctx, reach, args));
 }
 
 /// Everything on its way out, and whatever went wrong said once.
@@ -147,7 +145,7 @@ fn verbosity(env: *const std.process.Environ.Map) u8 {
 
 /// Where the m8 launcher is, from where this binary is.
 ///
-/// A split-out command is installed beside the launcher, so the launcher is
+/// A command built on its own is installed beside the launcher, so the launcher is
 /// its sibling named `m8`. Worked out here rather than inherited, so a command
 /// run straight from a shell knows it too.
 fn m8Path(
@@ -186,8 +184,7 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
         error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
         error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),
         error.NoProvider => try err.writeAll(
-            "m8: that ledger names a model but not whose; write it /PROVIDER/MODEL, " ++
-                "or `m8 decode FORMAT PROVIDER`\n",
+            "m8: that ledger names a model but not whose; write it /PROVIDER/MODEL\n",
         ),
         error.NoMainChat => try err.writeAll("m8: pick an agent with `m8 @agent`\n"),
         error.NothingToReset => try err.writeAll(

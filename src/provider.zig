@@ -47,6 +47,9 @@ pub const Provider = struct {
     /// neither, the command is handed m8 and answers in it.
     encode: ?[]const []const u8 = null,
     parse: ?[]const []const u8 = null,
+    /// What lists the models it serves, one name a line. `m8 models` runs
+    /// it; nothing else does.
+    models: ?[]const []const u8 = null,
     /// Everything else the entry said, for the environment. Only string
     /// values with lowercase-and-hyphen keys make it this far.
     args: []const Arg,
@@ -94,6 +97,7 @@ pub fn read(arena: Allocator, providers: std.json.ObjectMap, name: []const u8) !
         .cmd = cmd,
         .encode = try words(arena, o.get("encode")),
         .parse = try words(arena, o.get("parse")),
+        .models = try words(arena, o.get("models")),
         .args = args.items,
     };
 }
@@ -350,6 +354,7 @@ pub fn run(
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+const test_tmp = @import("test_tmp.zig");
 
 fn providersFrom(arena: Allocator, json: []const u8) !std.json.ObjectMap {
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, json, .{});
@@ -363,7 +368,7 @@ test "an entry is its commands, and whatever else it wants to say" {
 
     const ps = try providersFrom(arena,
         \\{"local": {
-        \\  "cmd": ["m8", "providers", "url"],
+        \\  "cmd": ["m8", "url-provider"],
         \\  "encode": ["m8", "encode", "openai-completions"],
         \\  "url": "http://x/v1/chat/completions",
         \\  "key": "cat ~/.key",
@@ -377,7 +382,7 @@ test "an entry is its commands, and whatever else it wants to say" {
     // A stage it did not name is not there: the command is handed m8.
     try testing.expectEqualStrings("openai-completions", p.encode.?[2]);
     try testing.expect(p.parse == null);
-    try testing.expectEqual(@as(usize, 3), p.cmd.len);
+    try testing.expectEqual(@as(usize, 2), p.cmd.len);
     try testing.expectEqualStrings("m8", p.cmd[0]);
 
     // Strings with nameable keys go through; `cmd` never does, and neither
@@ -414,9 +419,7 @@ test "a command is found the way a shell would find it" {
     const arena = a.allocator();
     const io = threaded.io();
 
-    const core_dir = try std.fs.path.join(arena, &.{ "/private/tmp", "m8-provider-resolve" });
-    std.Io.Dir.cwd().deleteTree(io, core_dir) catch {};
-    try std.Io.Dir.cwd().createDirPath(io, core_dir);
+    const core_dir = try test_tmp.make(arena, io, "m8-provider-resolve");
     defer std.Io.Dir.cwd().deleteTree(io, core_dir) catch {};
 
     const runnable = try std.fs.path.join(arena, &.{ core_dir, "runnable" });
@@ -428,7 +431,7 @@ test "a command is found the way a shell would find it" {
     const self = "/opt/m8/bin/m8";
     try testing.expectEqualStrings(
         self,
-        (try resolve(arena, io, self, &.{core_dir}, &.{ "m8", "providers", "url" }))[0],
+        (try resolve(arena, io, self, &.{core_dir}, &.{ "m8", "url-provider", "--get" }))[0],
     );
     // An absolute path is one.
     try testing.expectEqualStrings("/bin/sh", (try resolve(arena, io, self, &.{core_dir}, &.{"/bin/sh"}))[0]);
@@ -447,9 +450,9 @@ test "a command is found the way a shell would find it" {
         resolve(arena, io, self, &.{core_dir}, &.{"nope/missing"}),
     );
     // Arguments are carried through untouched.
-    const full = try resolve(arena, io, self, &.{core_dir}, &.{ "m8", "providers", "url" });
+    const full = try resolve(arena, io, self, &.{core_dir}, &.{ "m8", "url-provider", "--get" });
     try testing.expectEqual(@as(usize, 3), full.len);
-    try testing.expectEqualStrings("providers", full[1]);
+    try testing.expectEqualStrings("url-provider", full[1]);
 }
 
 test "the m8 that is running is named absolutely, however it was found" {
@@ -513,7 +516,9 @@ test "a provider is a command: what it writes is the answer" {
     const reply = try run(
         arena,
         io,
-        .{ .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> said it\n'" }, },
+        .{
+            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> said it\n'" },
+        },
         null,
         "#### :raising_hand:\n> ask\n",
         collect.sink(),
@@ -539,7 +544,9 @@ test "a provider that fails says why, and the run stops" {
     try testing.expectError(Error.ProviderFailed, run(
         arena,
         io,
-        .{ .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; echo 'that api is not supported' >&2; exit 3" }, },
+        .{
+            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; echo 'that api is not supported' >&2; exit 3" },
+        },
         null,
         "",
         collect.sink(),
@@ -623,7 +630,9 @@ test "everything the entry said reaches the command, and nothing else does" {
     _ = try run(
         arena,
         io,
-        .{ .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> %s\n' \"$M8_PROVIDER_URL\"" }, },
+        .{
+            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> %s\n' \"$M8_PROVIDER_URL\"" },
+        },
         &environ,
         "",
         collect.sink(),

@@ -18,14 +18,16 @@
 ;; subtract, so any combination is safe and order never matters.
 ;;
 ;; Filesystem reads
-;;   contain-reads   no reading outside cwd, TMP, system and
-;;                   tool dirs (/opt/homebrew, /usr/local, ...)
-;;   private         as above, and tool dirs go too; also revokes
-;;                   the blanket XPC lookup that system.sb grants
+;;   contain-reads       no reading outside cwd, TMP, system and
+;;                       tool dirs (/opt/homebrew, /usr/local, ...)
+;;   contain-reads-home  as above, with HOME readable too
+;;   private             as contain-reads, and tool dirs go too; also
+;;                       revokes the blanket XPC lookup system.sb grants
 ;;
 ;; Filesystem writes
-;;   contain-writes  writes confined to cwd and TMP
-;;   no-writes       nothing is writable, including TMP
+;;   contain-writes       writes confined to cwd and TMP
+;;   contain-writes-home  writes confined to cwd, TMP and HOME
+;;   no-writes            nothing is writable, including TMP
 ;;
 ;; Network
 ;;   airgap          no internet; loopback and unix sockets stay
@@ -60,10 +62,11 @@
 ;; TMPDIR should be pre-created and set inside a safe area like:
 ;;   private/var/tmp/m8call-UUID
 ;; Example run command:
-;;  sandbox-exec -f resolved.sb \
+;;   sandbox-exec -f resolved.sb \
 ;;    -D CWD="$(pwd)" \
 ;;    -D PARENTWD="$(dirname "$(pwd)")" \
 ;;    -D TMP="$TMPDIR" \
+;;    -D HOME="$HOME" \
 ;;    date
 
 (debug deny)
@@ -120,8 +123,15 @@
   (subpath "/usr/local/lib")          ;;!! !private
   (subpath "/Library/Frameworks"))    ;;!! !private
 
-(allow file-read* (subpath "/"))      ;;!! !private !contain-reads
-(allow file-write* (subpath "/"))     ;;!! !contain-writes !no-writes
+(allow file-read* (subpath "/"))      ;;!! !private !contain-reads !contain-reads-home
+(allow file-write* (subpath "/"))     ;;!! !contain-writes !contain-writes-home !no-writes
+
+;; --- the real home directory ---
+;; The home-aware restrictions leave these narrower allows behind. Every
+;; stricter restriction tags them away, so combinations silently take the
+;; most restrictive form.
+(allow file-read* (subpath (param "HOME")))  ;;!! !private !contain-reads
+(allow file-write* (subpath (param "HOME"))) ;;!! !contain-writes !no-writes
 
 ;; --- the temp directory ---
 (allow file-read*

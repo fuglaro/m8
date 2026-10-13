@@ -9,7 +9,7 @@ const doc = @import("../m8/doc.zig");
 const config = @import("../config.zig");
 const address = @import("../address.zig");
 const session = @import("../session.zig");
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -23,8 +23,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 top — name a file for what it says about itself
-        \\
         \\  m8 top @SKILL
         \\
         \\Writes a 📚 naming SKILL, and nothing else. A 📚 expands to the

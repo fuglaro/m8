@@ -22,7 +22,7 @@ const assembly = @import("../assembly.zig");
 const converse = @import("../converse.zig");
 const ledger = @import("../ledger.zig");
 const Keeping = @import("../keeping.zig").Keeping;
-const api = @import("api.zig");
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -39,8 +39,6 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\m8 query — say something to a chat, and answer with what it said back
-        \\
         \\  m8 query [-v | -vv] [--no-advance | --no-store] [--new | --parent] [--piped] @ADDRESS [MESSAGE]
         \\
         \\Says MESSAGE to the address, runs until it replies or asks, keeps

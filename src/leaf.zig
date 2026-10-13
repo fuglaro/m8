@@ -1,22 +1,21 @@
-//! The root of a split-out command: one binary that is one command.
+//! The root of a command built on its own: one binary that is one command.
 //!
-//! Which command is a build option rather than a file per program, so adding a
-//! command to the registry adds a binary to the split set and there is no
-//! second list to keep in step. The lookup is comptime, so the command this
-//! binary is, is the only implementation it carries.
+//! Which command is a build option rather than a file per program, so there
+//! is no second list to keep in step with the registry. The lookup is
+//! comptime, so the command this binary is, is the only implementation it
+//! carries.
 
 const std = @import("std");
 const command = @import("command.zig");
 const harness = @import("harness.zig");
 
-/// The path, spelled the way a command line spells it: `call munge read`.
+/// The command's name.
 const which = @import("build_options").command;
 
 pub fn main(init: std.process.Init) !u8 {
-    const path = comptime command.words(which);
     return harness.leaf(
         init,
-        comptime command.commandAt(path) orelse @compileError("no command at '" ++ which ++ "'"),
+        comptime command.commandAt(which) orelse @compileError("no command at '" ++ which ++ "'"),
         which,
     );
 }
