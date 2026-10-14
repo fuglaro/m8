@@ -37,6 +37,7 @@ const every = .{
     @import("command/toy-provider.zig"),
     @import("command/models.zig"),
     @import("command/riff.zig"),
+    @import("command/watch.zig"),
 };
 
 /// The commands this binary holds. `-Dsplit` names the ones built as programs

@@ -161,7 +161,7 @@ pub fn expand(
         .records = (try Split.of(parsed)).body,
         .mode = doc.detect(src) orelse .md,
         .name = name,
-    });
+    }, .{});
 }
 
 /// Expand the 🧠 references inside records that are already in hand.
@@ -177,7 +177,34 @@ pub fn expandRecords(
     records: []const doc.Record,
     mode: doc.Mode,
 ) ExpandError!Ledger {
-    return walk(arena, io, dirs, .{ .records = (try Split.of(records)).body, .mode = mode });
+    return expandUntil(arena, io, dirs, records, mode, .{});
+}
+
+/// Where a walk stops short: a 🧠 it leaves as it was written rather than
+/// following. What comes out is still a ledger, and reads as the whole of
+/// what it was cut from, because the 🧠 left standing names the rest.
+pub const Breaks = struct {
+    names: []const []const u8 = &.{},
+    /// A snip is kept aside to be out of the way, and stays there.
+    snips: bool = false,
+
+    fn at(b: Breaks, name: []const u8) bool {
+        if (b.snips and session.namesSnip(name)) return true;
+        for (b.names) |n| if (std.mem.eql(u8, n, name)) return true;
+        return false;
+    }
+};
+
+/// `expandRecords`, stopping at whatever `breaks` names.
+pub fn expandUntil(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    records: []const doc.Record,
+    mode: doc.Mode,
+    breaks: Breaks,
+) ExpandError!Ledger {
+    return walk(arena, io, dirs, .{ .records = (try Split.of(records)).body, .mode = mode }, breaks);
 }
 
 /// Read a document and everything it names, in order.
@@ -198,6 +225,7 @@ fn walk(
     io: std.Io,
     dirs: []const []const u8,
     root: Frame,
+    breaks: Breaks,
 ) ExpandError!Ledger {
     var out: std.ArrayList(doc.Record) = .empty;
     var stack: std.ArrayList(Frame) = .empty;
@@ -247,12 +275,13 @@ fn walk(
         // being inherited, so a top may advertise what it builds on and a body
         // may pull in a skill's advertisement.
         //
-        // A 🧠 written with the mark names a model and is kept as it is.
+        // A 🧠 written with the mark names a model and is kept as it is, and
+        // so is one a break names.
         // Anything else names an agent, and only an agent — nothing is looked
         // up to decide which, so a name that is not there is a missing agent
         // rather than a model nobody configured.
         const want: Part = switch (r.sigil) {
-            .agent => if (model.is(r.value)) {
+            .agent => if (model.is(r.value) or breaks.at(r.value)) {
                 try out.append(arena, try canonical(arena, top.mode, r));
                 continue;
             } else .body,
@@ -1036,4 +1065,45 @@ test "a call that asked is still owed, and is handed what was answered" {
     try testing.expectEqualStrings("tool", asker("tool,c1"));
     try testing.expectEqualStrings("c1", askedId("tool,c1"));
     try testing.expectEqual(@as(?[]const u8, null), asking(records[0..8]));
+}
+
+test "a break leaves its 🧠 standing, and what follows it is all that is read" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-break");
+    defer f.deinit(arena);
+    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :compass:\n> Be mathy.\n");
+    try f.agent(arena, "mathy/+/aaaaaaaaaa.md", "#### :brain:mathy\n\n#### :raising_hand:\n> one\n");
+    try f.agent(arena, "mathy/+/snip-bbbbbbbbbb.md", "#### :thought_balloon:snip\n> :lock_with_ink_pen:c2ln\n");
+    try f.agent(arena, "mathy/+/cccccccccc.md",
+        \\#### :brain:mathy/+/aaaaaaaaaa
+        \\
+        \\#### :brain:mathy/+/snip-bbbbbbbbbb
+        \\
+        \\#### :robot:
+        \\> two
+    );
+
+    const dirs = [_][]const u8{f.dir};
+    const head: []const doc.Record = &.{.{ .sigil = .agent, .value = "mathy/+/cccccccccc" }};
+
+    // From a turn on: the 🧠 naming it, and what was added after.
+    const since = try expandUntil(arena, f.io, &dirs, head, .md, .{
+        .names = &.{"mathy/+/aaaaaaaaaa"},
+        .snips = true,
+    });
+    try testing.expectEqual(@as(usize, 3), since.records.len);
+    try testing.expectEqualStrings("mathy/+/aaaaaaaaaa", since.records[0].value);
+    try testing.expectEqualStrings("mathy/+/snip-bbbbbbbbbb", since.records[1].value);
+    try testing.expectEqualStrings("two", since.records[2].content.?);
+
+    // A name never met breaks nothing, so the agent is the other place to stop.
+    const whole = try expandUntil(arena, f.io, &dirs, head, .md, .{ .names = &.{ "mathy/+/zzzzzzzzzz", "mathy" } });
+    try testing.expectEqualStrings("mathy", whole.records[0].value);
+    try testing.expectEqualStrings("one", whole.records[1].content.?);
+    try testing.expectEqual(doc.Sigil.thought, whole.records[2].sigil);
 }

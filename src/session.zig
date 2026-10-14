@@ -68,6 +68,11 @@ pub fn isSnip(r: doc.Record) bool {
     return r.sigil == .thought and r.content != null and std.mem.eql(u8, r.value, snip);
 }
 
+/// Whether a name is a snip's: the file a kept-aside thought was written to.
+pub fn namesSnip(name: []const u8) bool {
+    return std.mem.startsWith(u8, std.fs.path.basename(name), snip_prefix);
+}
+
 /// The main chat. A pointer with no chat folder around it, so on disk it sits
 /// at `+/+.md`.
 pub const main = pointer;

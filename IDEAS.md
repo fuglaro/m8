@@ -2,9 +2,7 @@
 
 ## TODO (Upcoming and WIP)
 
-* m8 @crew/cody/chat-- to new rather than parent...
 
-* m8 watch -> watch live chat - useful to see subagents!
 
 * Review everything again on the mission statement in the README.md.
 
@@ -18,12 +16,14 @@
 
 
 
+* DONE: `m8 watch @chat` writes a chat out as it moves, on the walk `m8 encode --break` stops (src/command/watch.zig).
 * DONE (for devyn): Cody needs to be able to have sub-agents so it isn't a token burner.
 * DONE: Prompt to riff: m8 @agent alone at a terminal launches riff (src/main.zig:138). Riff to itself: riff re-spawns as m8 riff --detached, or m8-riff in a split build (src/command/riff.zig:405).
 * DONE: Clean: Shield to its subcommands: m8 shield dispatches to secure and ask, spawning m8-shield-secure in a split build (src/command/shield.zig:53).
 * DONE: turn `m8 shield ask` into `m8 ask-shield`, and `m8 shield secure` into `m8 secure-shield`, and clean out `m8 shield`
 * DONE: -Dformats=openai-completions,anthropic-messages,openai-responses (defaults all, always includes m8, applies to encode and parse)
 * OMIT(achieble with any FastCGI tool or even ncat for raw m8 over TCP): m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
+* DONE: m8 @crew/cody/chat-- to new rather than parent...
 
 ## Framework
 

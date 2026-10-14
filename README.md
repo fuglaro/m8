@@ -662,6 +662,7 @@ m8 ref @ hi | m8 send | m8 tag @mathy/other     keep a run somewhere else
 m8 ref @ | m8 encode >.m8-st8/@/notes.md        a chat, flattened into an agent
 m8 ref @mathy | m8 encode | m8 render           a chat, as a person reads it
 m8 query @critic/job "Review that."             the reply alone, as text
+m8 watch @crew/cody/delegated                   a chat, as it moves
 ```
 
 * `ref @X` writes the 🧠 that X reads as now.
@@ -715,6 +716,15 @@ m8 query @critic/job "Review that."             the reply alone, as text
     starts and whether anything moves.
   * `--no-store` keeps nothing, so nothing moves either.
   * `--piped` reads stdin as prose, as it does for `ref`.
+* `watch @X` writes a chat out as it moves, which is how to
+  look on at one something else is running.
+  * Each piece opens with the 🧠 it continues.
+  * A chat that is reset starts over under its agent's 🧠.
+  * It arrives a turn at a time: a reply once it is whole,
+    and a call once it is answered.
+  * Only the chat's own pointer is read, so a chat with none
+    is waited on rather than shown as the chat above it.
+  * A snip stays the 🧠 that names it.
 * `top @X` is `ref`'s twin for 📚: it names a file for
   what it says about itself, and nothing else. See Tops.
 
@@ -814,7 +824,7 @@ much a riff as a chat is.
 ### Encoding
 
 ```bash
-m8 encode [FORMAT]                 a ledger, as some api sees it
+m8 encode [--break NAME] [FORMAT]  a ledger, as some api sees it
 m8 parse FORMAT                    that api's response, as a turn
 m8 send                            run a ledger and write the turn
 ```
@@ -846,6 +856,20 @@ m8 ref @mathy | m8 encode m8 >full-ledger-copy.md
 m8 ref @mathy | m8 encode openai-completions
 m8 encode openai-completions <full-ledger-copy.md >openai.json
 ```
+
+`--break NAME` leaves a 🧠 naming NAME as it was written
+rather than expanding it, so what comes out is the ledger
+from there on.
+
+```bash
+m8 ref @mathy | m8 encode --break mathy/+/tduyxbutjb
+m8 ref @mathy | m8 encode --break mathy     # the chat, without its agent
+```
+
+* NAME is what a 🧠 says: a turn, or an agent.
+* It may be said more than once.
+* What is written still reads as the whole ledger, because
+  the 🧠 left standing names the rest.
 
 A ledger always has an api view. An api request never has
 a ledger. That asymmetry is not a gap in any one format —
