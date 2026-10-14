@@ -218,11 +218,24 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             try reply.finish();
             try out.flush();
 
-            // A 📲 is appended below instead: a call and the answer to it belong
-            // together, and the loop that runs the tool is what knows where that
-            // is.
+            // A provider that said only thoughts, or said nothing at all, has
+            // still answered: keep a visible value so the transcript and
+            // callers do not mistake the invocation for one that never ran.
+            // Tool calls are different — their answer is the tool's records,
+            // so a tool-only response stays exactly that.
+            var no_response = answered.calls.len == 0;
+            for (reply.said.records.items) |r| if (r.sigil == .bot) {
+                no_response = false;
+                break;
+            };
             try records.appendSlice(arena, reply.said.records.items);
             try turn.appendSlice(arena, reply.kept.items);
+            if (no_response) {
+                const record: doc.Record = .{ .sigil = .bot, .value = "(no response)" };
+                try show(arena, out, mode, &shown, record);
+                try records.append(arena, record);
+                try turn.append(arena, record);
+            }
             try progress.keep(arena, turn.items);
             if (answered.calls.len == 0) break;
             const calls = answered.calls;

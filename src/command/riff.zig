@@ -176,8 +176,10 @@ fn run(ctx: Ctx) !u8 {
 /// stop, or it is the person's turn and this is the key that does something.
 const working = "Dispatched...\n";
 const stopping = "Stopping...";
-const waiting_empty = "Waiting (ctrl-c:cancel,ctrl-d:exit)...";
-const waiting_written = "Waiting (enter:dispatch,alt-enter/ctrl-j:newline)...";
+const empty_hint = "(ctrl-c:cancel,ctrl-d:exit)...";
+const written_hint = "(enter:dispatch,alt-enter/ctrl-j:newline)...";
+const waiting_empty = "Waiting " ++ empty_hint;
+const waiting_written = "Waiting " ++ written_hint;
 
 /// What a line on stderr leads with when it carries the panel: the panel
 /// follows, up to a pair of colons or the end of the line.
@@ -211,6 +213,8 @@ const Riff = struct {
     pasting: bool = false,
     /// The command has been interrupted and has not ended yet.
     stopping: bool = false,
+    /// How the last child stopped: its exit code or signal number.
+    stopped: ?u32 = null,
     /// A run is kept and sent each message, where otherwise each message is
     /// a run of its own.
     continuous: bool = false,
@@ -327,6 +331,9 @@ const Riff = struct {
                 try r.ask(.check);
             };
             if (r.queue.items.len > 0 and (r.child == null or r.continuous)) {
+                // A new dispatch clears how the last command stopped before
+                // this one gets a chance to say its own status.
+                r.stopped = null;
                 // Said first, so it shows until the command says something.
                 // Sending ends whatever line the command had left open, as
                 // the Enter a terminal echoes would have.
@@ -383,7 +390,12 @@ const Riff = struct {
                 }
             }
             if (r.child != null and r.streams[0] == null and r.streams[1] == null) {
-                _ = r.child.?.wait(r.ctx.io) catch {};
+                const term = r.child.?.wait(r.ctx.io) catch std.process.Child.Term{ .unknown = 0 };
+                r.stopped = switch (term) {
+                    .exited => |code| if (code == 0) null else code,
+                    .signal, .stopped => |signal| @intFromEnum(signal),
+                    else => null,
+                };
                 r.child = null;
                 // Whatever it left half said is not owed an ending.
                 r.scan.state = .text;
@@ -598,6 +610,7 @@ const Riff = struct {
         if (r.e > 0 and cur.row >= r.top + r.e) r.top = cur.row + 1 - r.e;
 
         var any = false;
+        var waiting_line: [128]u8 = undefined;
         const line = &r.line;
         for (0..l) |k| {
             line.clearRetainingCapacity();
@@ -623,7 +636,15 @@ const Riff = struct {
                 // against it, while that leaves it room to say something.
                 const panel = r.panel[0..r.panel_len];
                 const aside = if (k == 0 and span(panel) + 8 <= room) span(panel) else 0;
-                const used = try put(w, r.above(up), room - aside);
+                var said = r.above(up);
+                if (up == 0 and r.child == null and r.queue.items.len == 0 and r.stopped != null) {
+                    said = std.fmt.bufPrint(
+                        &waiting_line,
+                        "Stopped({d}) and waiting {s}",
+                        .{ r.stopped.?, if (r.buf.items.len == 0) empty_hint else written_hint },
+                    ) catch said;
+                }
+                const used = try put(w, said, room - aside);
                 try w.splatByteAll(' ', room - aside -| used);
                 if (aside > 0) _ = try put(w, panel, aside);
                 try w.writeAll(if (!bezel) grey ++ "\x1b[27m" else if (up > 0) grey ++ "\x1b[27m▙" else grey ++ "\x1b[27m▙▂");
@@ -1180,6 +1201,33 @@ test "the status line is the last line said, cut to fit" {
     defer out.deinit();
     try testing.expectEqual(@as(usize, 5), try put(&out.writer, "\x1b[1m💭 thinking", 5));
     try testing.expectEqualStrings("💭 t…", out.written());
+}
+
+test "a stopped child changes the waiting line as the editor changes" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var ctx: Ctx = undefined;
+    ctx.arena = arena;
+    var r: Riff = .{ .ctx = ctx, .out = &out.writer, .cmd = &.{}, .h = 3, .w = 100 };
+    defer r.line.deinit();
+
+    r.stopped = 7;
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "Stopped(7) and waiting " ++ empty_hint) != null);
+
+    try r.buf.appendSlice(arena, "next");
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "Stopped(7) and waiting " ++ written_hint) != null);
+
+    r.stopped = @intFromEnum(posix.SIG.TERM);
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "Stopped(15) and waiting " ++ written_hint) != null);
+
+    r.stopped = null;
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, waiting_written) != null);
 }
 
 test "a line that leads with stats is the panel, and the rest is the line" {

@@ -5,10 +5,54 @@
 
 
 * Review everything again on the mission statement in the README.md.
+  - and on our implied style guide. One agent reflected after direction:
+    That principle helps beyond this instance too: in this codebase, a one-use helper
+    is suspect unless it removes a real conceptual boundary—not merely several nearby lines.
+    Tests should not push complexity into the code - but they may hold the complexity.
 
 * Reconsider tool calls in serial.
 
 * "{{SHIELD}} x {{SHIELD}}" - WHY IS THIS ALLOWED?
+````
+│ On the actual questions:
+│
+│ - **`{{SHIELD}}` is currently replaced anywhere inside each argv word**, including multiple times.
+│   - `shield.resolve()` calls `said()` on every word.
+│   - `said()` performs substring replacement in a loop.
+│   - Tests explicitly bless both `as={{SHIELD}}` and `"{{SHIELD}} x {{SHIELD}}"`.
+│ - That is inconsistent with the safer, simpler rule used by `m8 call`: placeholders there are recognized **only when the entire argv element is the placeholder**.
+│ - I don’t see a compelling need for shield-name interpolation. The shipped `ask` form uses it as a whole argument. I would change `{{SHIELD}}` to whole-value-only and
+remove the tests legitimizing interpolation. The TODO in `IDEAS.md` is correctly suspicious.
+│
+│ For `{{secures|}}`:
+│
+│ 1. `🛡 secure secures airgap` becomes an activation whose environment key is `__secures__`.
+│ 2. `shield.resolve()` accumulates its values.
+│ 3. `converse.answer()` adds that environment to the tool execution.
+│ 4. It flattens wrappers and the tool command into one argv.
+│ 5. It calls `call.execute(...)`.
+│ 6. `call.execute()` currently runs `argline.line()` across that **entire flattened argv**, so `{{secures|}}` is expanded before the outermost wrapper starts.
+│
+│ So it is **not** expanded by `secure-shield`, and the shield template does not invoke `m8 call`. It is expanded incidentally because the harness executes tools through
+ the implementation behind `m8 call`.
+│
+│ That looks like an architectural leak/regression relative to the README’s claim that expansion belongs to explicit `m8 call`, and that deleting `call` leaves the frame
+work whole. Right now, tool placeholders are also expanded by the harness even when the tool definition does not explicitly say `m8 call`.
+│
+│ I think the intended separation should be:
+│
+│ - `call.execute`: execute an already-built argv and handle the m8 answer protocol.
+│ - The `m8 call` command path: apply argument-template expansion, then execute.
+│ - Shield-only substitutions, if retained, happen during shield resolution and obey whole-argument semantics.
+│ - `secure-shield` should probably read its accumulated restrictions directly from its shield environment—or shields need an explicit non-framing argv expander. Simply
+changing its template to `m8 call m8 secure-shield ...` risks framing the wrapped tool’s m8 output and changing protocol behavior.
+│
+│ So yes: your recollection is right. The current `{{secures|}}` behavior is still being supplied by the shared `call.execute` path, contrary to the conceptual move into
+ `m8 call`.
+````
+
+
+
 * "{{CODE}}" - can it always be passed at the end?
   or two list with a post args?
 

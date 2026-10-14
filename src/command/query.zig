@@ -175,7 +175,11 @@ fn run(ctx: Ctx) !u8 {
         var n = turn.len;
         while (n > given.len) : (n -= 1) {
             const r = turn[n - 1];
-            if ((r.sigil == .bot or r.sigil == .question) and r.content != null) break :reply r.content.?;
+            if (r.sigil == .bot) {
+                if (r.content) |text| break :reply text;
+                if (r.value.len > 0) break :reply r.value;
+            }
+            if (r.sigil == .question and r.content != null) break :reply r.content.?;
         }
         try ctx.err.writeAll("m8 query: the run ended without a reply or a question\n");
         return 1;

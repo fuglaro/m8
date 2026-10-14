@@ -47,6 +47,12 @@ The mission:
 * Small enough for a distribution to carry for thirty
   years.
 
+The implementation keeps the same discipline. Keep detail where it
+happens; stream or write it in place when it has one use. A helper earns
+its distance by naming a real boundary, not by making a unit test easy.
+When testing simple code needs awkward setup, put that complexity in the
+test rather than routing it through the program.
+
 Four things make it different:
 
 * One format does four jobs. An agent definition, a
@@ -779,6 +785,8 @@ line rather than beside it.
   * `-s N` is N status lines, from 1 to 8: the last N it wrote,
     newest at the bottom.
   * What riff says itself takes the bottom one.
+  * A nonzero exit remains `Stopped(N) and waiting ...` until
+    the next message is dispatched. A signal uses its number.
 * A stderr line that leads with `::stats::` carries a panel.
   * The panel is what follows, up to a `::` or the line's end.
   * It sits at the right end of the top status line, hard
@@ -1315,6 +1323,8 @@ value and nothing under it.
   * The last word is the provider's own term, untouched.
 * Finishing, and asking for tools, say nothing - the ledger
   already shows both.
+* A provider that returns neither a reply nor a tool call leaves
+  `🤖(no response)`. The invocation happened, so the ledger says so.
 * m8 carries it and never reads it.
   * No loop decision is made on it - a call made while
     bailing runs as asked.
