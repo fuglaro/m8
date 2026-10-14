@@ -25,6 +25,23 @@ const doc = @import("m8/doc.zig");
 const sigil = @import("m8/sigil.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
+const posix = std.posix;
+
+/// Ctrl-C reaches a run and the tool it is running together, as one process
+/// group. The tool stops however it stops; the run outlives it long enough
+/// to write down how, close what it will not now run, and keep all of it.
+var interrupted = std.atomic.Value(bool).init(false);
+
+fn onInterrupt(sig: posix.SIG) callconv(.c) void {
+    // A second one is someone who meant it: stop where it stands.
+    if (interrupted.swap(true, .monotonic)) {
+        posix.sigaction(sig, &.{ .handler = .{ .handler = posix.SIG.DFL }, .mask = posix.sigemptyset(), .flags = 0 }, null);
+        posix.raise(sig) catch {};
+    }
+}
+
+const stopped = "Not run: the run was interrupted.";
+const died = "Interrupted: the run stopped while this was running, so it may or may not have finished.";
 
 pub const Options = struct {
     /// Write the ledger that arrived ahead of what the run adds, so what goes
@@ -151,6 +168,9 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // terminal is the only reader that can watch a reply arrive.
     const live = mode == .m8;
 
+    for ([_]posix.SIG{ .INT, .TERM }) |sig|
+        posix.sigaction(sig, &.{ .handler = .{ .handler = onInterrupt }, .mask = posix.sigemptyset(), .flags = posix.SA.RESTART }, null);
+
     // A call and its answer are two records, so a ledger can arrive between
     // them. What it already asked for and never got is owed before anything
     // new is said, and nothing already answered is run a second time.
@@ -159,7 +179,25 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // but its question, so it is run again with whatever they answered.
     talking: {
         const owed = try ledger.outstanding(arena, records.items);
+        // Only a question leaves a call owed, and it writes down the call that
+        // asked and those made alongside it ahead of the ❓. One with no ❓
+        // after it was running when its run stopped. How far it got nobody
+        // can say, so it is closed rather than run a second time, and what to
+        // do about it is the model's.
+        var unasked = records.items.len;
+        while (unasked > 0 and records.items[unasked - 1].sigil != .question) unasked -= 1;
         for (owed, 0..) |asked, n| {
+            const cut = for (records.items[unasked..]) |r| {
+                if (r.sigil == .call and std.mem.eql(u8, ledger.callId(r.value), ledger.callId(asked.value))) break true;
+            } else false;
+            if (cut or interrupted.load(.monotonic)) {
+                const closed = (try failure(arena, ledger.callId(asked.value), "{s}", .{if (cut) died else stopped}))[0];
+                try show(arena, out, mode, &shown, closed);
+                try records.append(arena, closed);
+                try turn.append(arena, closed);
+                try progress.keep(arena, turn.items);
+                continue;
+            }
             const c: codec.Call = .{
                 .id = ledger.callId(asked.value),
                 .name = ledger.callName(asked.value),
@@ -191,6 +229,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
         // tools for, and where to stop is the trust model's business — `ask`
         // already gates every call for anyone who wants that.
         while (true) {
+            if (interrupted.load(.monotonic)) return error.Interrupted;
             var reply: LiveReply = .{
                 .arena = arena,
                 .io = io,
@@ -243,12 +282,26 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             for (calls, 0..) |c, n| {
                 const asked = try called(arena, c);
                 // Show the call before running it: on a terminal that is the only
-                // sign anything is happening while a tool takes its time.
+                // sign anything is happening while a tool takes its time. And
+                // keep it: a call is the truth the moment it is made, and one
+                // left with nothing under it by a run that died is closed as
+                // interrupted by the next, never run again.
                 try show(arena, out, mode, &shown, asked);
                 try out.flush();
                 try status.call(arena, c);
                 try records.append(arena, asked);
                 try turn.append(arena, asked);
+
+                // Made, and never started.
+                if (interrupted.load(.monotonic)) {
+                    const closed = (try failure(arena, c.id, "{s}", .{stopped}))[0];
+                    try show(arena, out, mode, &shown, closed);
+                    try records.append(arena, closed);
+                    try turn.append(arena, closed);
+                    try progress.keep(arena, turn.items);
+                    continue;
+                }
+                try progress.keep(arena, turn.items);
 
                 // The answer comes from the tool, not the model, and was already
                 // checked against what a tool may say.
@@ -269,9 +322,6 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                     try turn.append(arena, record);
                 }
                 try out.flush();
-                // A call is kept with its answer and never ahead of it: a 📲
-                // with nothing under it is owed, and one kept before its tool had
-                // finished would be run a second time by whoever picked it up.
                 try progress.keep(arena, turn.items);
                 if (how == .asked) break :talking;
             }
@@ -520,6 +570,10 @@ fn answer(
     var diag: doc.Diagnostic = .{};
     const records = doc.parse(arena, captured.written(), &diag) catch
         return failure(arena, c.id, "the tool did not answer in m8", .{});
+    // Stopped by Ctrl-C before it could say how it went, which is then all
+    // there is to say. One that finished first keeps its own answer.
+    if (interrupted.load(.monotonic) and !hasVerdict(records, c.id))
+        return failure(arena, c.id, "Interrupted while it was running.", .{});
     if (records.len == 0) return if (status == 0)
         failure(arena, c.id, "the tool wrote nothing", .{})
     else if (complaint.len > 0)

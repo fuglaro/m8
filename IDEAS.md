@@ -9,20 +9,8 @@
     is suspect unless it removes a real conceptual boundary—not merely several nearby lines.
     Tests should not push complexity into the code - but they may hold the complexity.
 
-* Reconsider tool calls in serial.
 
-
-* DONE: `m8 watch @chat` writes a chat out as it moves, on the walk `m8 encode --break` stops (src/command/watch.zig).
-* DONE (for devyn): Cody needs to be able to have sub-agents so it isn't a token burner.
-* DONE: Prompt to riff: m8 @agent alone at a terminal launches riff (src/main.zig:138). Riff to itself: riff re-spawns as m8 riff --detached, or m8-riff in a split build (src/command/riff.zig:405).
-* DONE: Clean: Shield to its subcommands: m8 shield dispatches to secure and ask, spawning m8-shield-secure in a split build (src/command/shield.zig:53).
-* DONE: turn `m8 shield ask` into `m8 ask-shield`, and `m8 shield secure` into `m8 secure-shield`, and clean out `m8 shield`
-* DONE: -Dformats=openai-completions,anthropic-messages,openai-responses (defaults all, always includes m8, applies to encode and parse)
-* OMIT(achieble with any FastCGI tool or even ncat for raw m8 over TCP): m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
-* DONE: m8 @crew/cody/chat-- to new rather than parent...
-* DONE(removed entirely): "{{SHIELD}} x {{SHIELD}}" - WHY IS THIS ALLOWED?
-* OMIT: Maybe use jq instead of sed scraping in the example configs?
-* DONE(suffix): "{{CODE}}" - can it always be passed at the end? or two list with a post args?
+* OMIT: Reconsider tool calls in serial.
 
 ## Framework
 
@@ -57,6 +45,10 @@
   * path, record, line, value, include lineage
   * `m8: BadEnvironmentName` alone costs a hunt.
 * Render nested marckdown.
+  * Terminal rendering of robot/user block content depending on the provider.
+* Tool call terminal rendering.
+* Tool response terminal rendering (esp. diffs)
+* Directive to snip some tool responses.
 
 ### MAYBE: Attachments
 

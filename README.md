@@ -2126,11 +2126,17 @@ with each.
 
 * A model call is a turn: what it said, under the turn
   it continues.
-* A tool call is a turn: the 📲 and its answer.
+* A tool call is two: the 📲 as it is made, and then its
+  answer.
 * A run that dies keeps everything up to where it died,
   and the chat reads as that.
-* A 📲 is kept with its answer and never ahead of it, so
-  nothing half run is owed to whoever carries on.
+* A 📲 left with nothing under it and no ❓ after it was
+  running when its run died. Whoever carries on closes it
+  with a 🚫 saying so, and never runs it again: how far
+  it got nobody can say, so it is the model's to decide.
+* Ctrl-C lets the tool stop however it stops, writes down
+  how, closes the calls it will not now run, and ends
+  the run. A second Ctrl-C ends it where it stands.
 
 A turn goes in the `+/` of the chat it advances. One
 that advances no chat — a side question, or a turn
