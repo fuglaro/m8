@@ -1,7 +1,8 @@
 //! Finding configuration.
 //!
 //! Config directories are searched nearest first: every `.m8-st8/` from the
-//! working directory upward, the way git finds `.git`, then the user's own.
+//! working directory upward, the way git finds `.git`, then the user's own,
+//! then the system's.
 //!
 //! `core/` is searched the same way. A file is taken from the nearest
 //! directory that has one, and `providers.json` is merged through all of them,
@@ -28,12 +29,25 @@ pub fn discover(arena: Allocator, io: std.Io, env: *const std.process.Environ.Ma
     }
 
     if (try userDir(arena, env)) |d| try dirs.append(arena, d);
+    if (exists(io, system_dir)) try dirs.append(arena, system_dir);
     return dirs.toOwnedSlice(arena);
 }
 
 /// Hidden beside a project, plain under the user's config root.
 pub const dir_name = ".m8-st8";
 pub const user_dir_name = "m8-st8";
+
+/// What an administrator puts beneath everyone, and so the last searched. Its
+/// `core/` and `@/` are read like any other; it holds no `+/`, because state
+/// belongs to whoever made it, and nothing is ever written here.
+pub const system_dir = "/etc/m8-st8";
+
+/// Where something new is kept: the nearest directory, unless the only one
+/// there is the system's.
+pub fn saveDir(dirs: []const []const u8) ?[]const u8 {
+    if (dirs.len == 0 or std.mem.eql(u8, dirs[0], system_dir)) return null;
+    return dirs[0];
+}
 
 /// The user's own config directory, if there is one.
 pub fn userDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const u8 {
@@ -137,6 +151,7 @@ pub fn where(
     rel: []const u8,
 ) !?[]const u8 {
     for (dirs) |dir| {
+        if (std.mem.eql(u8, dir, system_dir) and std.mem.startsWith(u8, rel, state_dir ++ "/")) continue;
         if (hasFile(io, try std.fs.path.join(arena, &.{ dir, rel }))) return dir;
     }
     return null;
@@ -160,16 +175,15 @@ pub fn mobTmp(
     dirs: []const []const u8,
     agent: []const u8,
 ) !?[]const u8 {
-    if (dirs.len == 0) return null;
-
     // The mob is where the agent lives, so one named below the top keeps its
     // scratch below the top too. A ledger handed straight in names no agent,
-    // and takes the nearest config's own.
-    var base = dirs[0];
+    // and takes the nearest config's own, as does an agent the system
+    // defines, since scratch is state.
+    var base = saveDir(dirs) orelse return null;
     var mob: []const u8 = "";
     if (agent.len > 0) {
         if (try where(arena, io, dirs, try nameFile(arena, agent))) |found| {
-            base = found;
+            if (!std.mem.eql(u8, found, system_dir)) base = found;
             mob = std.fs.path.dirname(agent) orelse "";
         }
     }
@@ -183,6 +197,7 @@ pub fn mobTmp(
 /// Read a file from the nearest config directory that has one.
 pub fn read(arena: Allocator, io: std.Io, dirs: []const []const u8, rel: []const u8) !?[]const u8 {
     for (dirs) |dir| {
+        if (std.mem.eql(u8, dir, system_dir) and std.mem.startsWith(u8, rel, state_dir ++ "/")) continue;
         const path = try std.fs.path.join(arena, &.{ dir, rel });
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file)) catch continue;
         return bytes;
@@ -366,4 +381,17 @@ test "the user directory follows XDG, then HOME" {
 
     var none: std.process.Environ.Map = .init(arena);
     try testing.expect((try userDir(arena, &none)) == null);
+}
+
+test "the system's directory is never where anything is kept" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    try testing.expect(saveDir(&.{}) == null);
+    try testing.expect(saveDir(&.{system_dir}) == null);
+    try testing.expectEqualStrings("/u", saveDir(&.{ "/u", system_dir }).?);
+    try testing.expect((try mobTmp(arena, threaded.io(), &.{system_dir}, "")) == null);
 }

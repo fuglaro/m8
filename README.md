@@ -2042,6 +2042,13 @@ working directory and searching outwards:
 
 * `./.m8-st8/` and every `.m8-st8/` above it
 * `$XDG_CONFIG_HOME/m8-st8/` else `~/.config/m8-st8/`
+* `/etc/m8-st8/`, for what an administrator puts beneath
+  everyone
+  * Its `core/` and `@/` are read like any other.
+  * It holds no `+/`. State belongs to whoever made it, so
+    nothing is read from or written there, and an agent it
+    defines keeps its chats and scratch in the nearest
+    config.
 
 `core/` holds what a restriction *means* and what a provider
 *is*, and is searched the same way.

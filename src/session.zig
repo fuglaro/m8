@@ -55,7 +55,7 @@ pub fn keepSnip(
     folder: []const u8,
     content: []const u8,
 ) ![]const u8 {
-    if (dirs.len == 0) return Error.NoConfigDir;
+    if (config.saveDir(dirs) == null) return Error.NoConfigDir;
     const name = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, try newSnip(arena, io) });
     try writeFile(arena, io, dirs, name, &.{.{ .sigil = .thought, .value = snip, .content = content }});
     return name;
@@ -296,7 +296,7 @@ pub fn write(
     name: []const u8,
     records: []const doc.Record,
 ) !void {
-    if (dirs.len == 0) return Error.NoConfigDir;
+    if (config.saveDir(dirs) == null) return Error.NoConfigDir;
     const kept = if (isTurn(name)) try keepAside(arena, io, dirs, name, records) else records;
     return writeFile(arena, io, dirs, name, kept);
 }
@@ -326,7 +326,8 @@ fn writeFile(
     name: []const u8,
     records: []const doc.Record,
 ) !void {
-    const path = try std.fs.path.join(arena, &.{ dirs[0], try config.nameFile(arena, name) });
+    const base = config.saveDir(dirs) orelse return Error.NoConfigDir;
+    const path = try std.fs.path.join(arena, &.{ base, try config.nameFile(arena, name) });
 
     // A file is markdown. The rendered spelling is only ever for a terminal.
     var buf: std.Io.Writer.Allocating = .init(arena);
