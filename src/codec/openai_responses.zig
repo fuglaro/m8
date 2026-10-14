@@ -759,56 +759,24 @@ const Building = struct {
     }
 };
 
-/// What a finished response says it cost, as a line: how much went in, how
-/// much of that the prompt cache already held, and how much came out.
-///
-/// It leads with the same in a few cells, for something that keeps a panel:
-/// what came out, a block as tall as the share the cache held, what went in.
+/// What a finished response says it cost, as a line. `input_tokens` is the
+/// whole prompt here, with the cached share a detail of it.
 fn cost(arena: Allocator, response: std.json.Value) ![]const u8 {
     if (response != .object) return "";
     const u = response.object.get("usage") orelse return "";
     if (u != .object) return "";
-    const in = num(u.object.get("input_tokens")) orelse 0;
-    const out = num(u.object.get("output_tokens")) orelse 0;
-    var cached: i64 = 0;
-    var written: i64 = 0;
-    var thinking: i64 = 0;
+    var c: api.Cost = .{
+        .in = num(u.object.get("input_tokens")) orelse 0,
+        .out = num(u.object.get("output_tokens")) orelse 0,
+    };
     if (u.object.get("input_tokens_details")) |d| if (d == .object) {
-        cached = num(d.object.get("cached_tokens")) orelse 0;
-        written = num(d.object.get("cache_write_tokens")) orelse 0;
+        c.cached = num(d.object.get("cached_tokens")) orelse 0;
+        c.written = num(d.object.get("cache_write_tokens")) orelse 0;
     };
     if (u.object.get("output_tokens_details")) |d| if (d == .object) {
-        thinking = num(d.object.get("reasoning_tokens")) orelse 0;
+        c.thinking = num(d.object.get("reasoning_tokens")) orelse 0;
     };
-
-    const hit = if (in > 0) @divTrunc(cached * 100, in) else 0;
-    var a: [8]u8 = undefined;
-    var b: [8]u8 = undefined;
-    var line: std.Io.Writer.Allocating = .init(arena);
-    const w = &line.writer;
-    try w.print("::stats::\u{2725}{s}{s}{s}::", .{ short(&a, out), held(cached, hit), short(&b, in) });
-    try w.print("\u{1F9EE} {d} in, {d} cached ({d}%)", .{ in, cached, hit });
-    if (written > 0) try w.print(", {d} written", .{written});
-    try w.print(", {d} out", .{out});
-    if (thinking > 0) try w.print(" ({d} thinking)", .{thinking});
-    return line.written();
-}
-
-/// A count in at most four characters: 999, 1K, 16K, 160K, 1M.
-fn short(buf: *[8]u8, count: i64) []const u8 {
-    var n: u64 = @intCast(@max(0, count));
-    var unit: usize = 0;
-    while (n >= 1000 and unit < 5) : (unit += 1) n /= 1000;
-    return std.fmt.bufPrint(buf, "{d}{s}", .{ n % 10000, " KMGTP"[unit..][0..@min(unit, 1)] }) catch unreachable;
-}
-
-/// A block as tall as the share of the prompt the cache held, and a line
-/// along the bottom for none of it. It stops short of a whole block, which
-/// would be a hole in a status bar.
-fn held(cached: i64, percent: i64) []const u8 {
-    if (cached <= 0) return "_";
-    const blocks = [_][]const u8{ "\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}", "\u{2585}", "\u{2586}", "\u{2587}" };
-    return blocks[@intCast(std.math.clamp(@divTrunc(percent * 7, 100), 0, 6))];
+    return api.costLine(arena, c);
 }
 
 fn num(v: ?std.json.Value) ?i64 {
@@ -1399,19 +1367,4 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[2].value);
     try testing.expect(collect.got.records.items[2].content == null);
-}
-
-test "a count is cut to four characters, and a cache share is a block" {
-    var b: [8]u8 = undefined;
-    try testing.expectEqualStrings("19", short(&b, 19));
-    try testing.expectEqualStrings("999", short(&b, 999));
-    try testing.expectEqualStrings("1K", short(&b, 1234));
-    try testing.expectEqualStrings("16K", short(&b, 16_400));
-    try testing.expectEqualStrings("999K", short(&b, 999_999));
-    try testing.expectEqualStrings("1M", short(&b, 1_000_000));
-    try testing.expectEqualStrings("2G", short(&b, 2_500_000_000));
-    try testing.expectEqualStrings("_", held(0, 0));
-    try testing.expectEqualStrings("\u{2581}", held(5, 1));
-    try testing.expectEqualStrings("\u{2587}", held(6656, 87));
-    try testing.expectEqualStrings("\u{2587}", held(10, 100));
 }

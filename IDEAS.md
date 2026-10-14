@@ -12,17 +12,16 @@
 
 * OMIT: Reconsider tool calls in serial.
 * DONE(can be configured with tui that launches riff with a wrapper around each run. in-wrapper post hooks can inspect the last entris in the ledger for a question or robot sigil.): Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
+* OMIT(can be done in anthropic by model parameters): Cache breakpoint managment:
+  * 5min ttl in tool loops - upgrade to 1hr on hand to user?
+  * Options on model def? or provider directive sigils? Or just do in providers?
+
 
 ## Framework
 
 
-* Cache breakpoint managment:
-  * 5min ttl in tool loops - upgrade to 1hr on hand to user?
-  * Options on model def? or provider directive sigils? Or just do in providers?
 * System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger).
 
-
-  * Do they belong in history at all?
 
 
 ### Tools

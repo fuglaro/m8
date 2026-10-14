@@ -294,6 +294,52 @@ fn briefLine(arena: Allocator, text: []const u8) ![]const u8 {
     return line.items;
 }
 
+/// What a response says it cost, in counts every api can be read into.
+/// `in` is the whole prompt, cached or not.
+pub const Cost = struct {
+    in: i64 = 0,
+    cached: i64 = 0,
+    written: i64 = 0,
+    out: i64 = 0,
+    thinking: i64 = 0,
+};
+
+/// A cost as a line: how much went in, how much of that the prompt cache
+/// already held, and how much came out.
+///
+/// It leads with the same in a few cells, for something that keeps a panel:
+/// what came out, a block as tall as the share the cache held, what went in.
+pub fn costLine(arena: Allocator, c: Cost) ![]const u8 {
+    const hit = if (c.in > 0) @divTrunc(c.cached * 100, c.in) else 0;
+    var a: [8]u8 = undefined;
+    var b: [8]u8 = undefined;
+    var line: std.Io.Writer.Allocating = .init(arena);
+    const w = &line.writer;
+    try w.print("::stats::\u{2725}{s}{s}{s}::", .{ short(&a, c.out), cacheBlock(c.cached, hit), short(&b, c.in) });
+    try w.print("\u{1F9EE} {d} in, {d} cached ({d}%)", .{ c.in, c.cached, hit });
+    if (c.written > 0) try w.print(", {d} written", .{c.written});
+    try w.print(", {d} out", .{c.out});
+    if (c.thinking > 0) try w.print(" ({d} thinking)", .{c.thinking});
+    return line.written();
+}
+
+/// A count in at most four characters: 999, 1K, 16K, 160K, 1M.
+fn short(buf: *[8]u8, count: i64) []const u8 {
+    var n: u64 = @intCast(@max(0, count));
+    var unit: usize = 0;
+    while (n >= 1000 and unit < 5) : (unit += 1) n /= 1000;
+    return std.fmt.bufPrint(buf, "{d}{s}", .{ n % 10000, " KMGTP"[unit..][0..@min(unit, 1)] }) catch unreachable;
+}
+
+/// A block as tall as the share of the prompt the cache held, and a line
+/// along the bottom for none of it. It stops short of a whole block, which
+/// would be a hole in a status bar.
+fn cacheBlock(cached: i64, percent: i64) []const u8 {
+    if (cached <= 0) return "_";
+    const blocks = [_][]const u8{ "\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}", "\u{2585}", "\u{2586}", "\u{2587}" };
+    return blocks[@intCast(std.math.clamp(@divTrunc(percent * 7, 100), 0, 6))];
+}
+
 /// The records an api can be told, which is all of them but a 🤖 with nothing
 /// under it. How a reply stopped is the ledger's to keep and no api takes it
 /// back, and an empty assistant turn is something several refuse outright.
@@ -496,4 +542,19 @@ test "a long last line with no newline on it is still given up" {
 
     try testing.expectEqualStrings(body, (try nextLine(arena, r)).?);
     try testing.expect((try nextLine(arena, r)) == null);
+}
+
+test "a count is cut to four characters, and a cache share is a block" {
+    var b: [8]u8 = undefined;
+    try testing.expectEqualStrings("19", short(&b, 19));
+    try testing.expectEqualStrings("999", short(&b, 999));
+    try testing.expectEqualStrings("1K", short(&b, 1234));
+    try testing.expectEqualStrings("16K", short(&b, 16_400));
+    try testing.expectEqualStrings("999K", short(&b, 999_999));
+    try testing.expectEqualStrings("1M", short(&b, 1_000_000));
+    try testing.expectEqualStrings("2G", short(&b, 2_500_000_000));
+    try testing.expectEqualStrings("_", cacheBlock(0, 0));
+    try testing.expectEqualStrings("\u{2581}", cacheBlock(5, 1));
+    try testing.expectEqualStrings("\u{2587}", cacheBlock(6656, 87));
+    try testing.expectEqualStrings("\u{2587}", cacheBlock(10, 100));
 }
