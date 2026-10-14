@@ -14,8 +14,6 @@
 * "{{CODE}}" - can it always be passed at the end?
   or two list with a post args?
 
-* Maybe use jq instead of sed scraping in the example configs?
-
 
 
 * DONE: `m8 watch @chat` writes a chat out as it moves, on the walk `m8 encode --break` stops (src/command/watch.zig).
@@ -27,6 +25,7 @@
 * OMIT(achieble with any FastCGI tool or even ncat for raw m8 over TCP): m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
 * DONE: m8 @crew/cody/chat-- to new rather than parent...
 * DONE(removed entirely): "{{SHIELD}} x {{SHIELD}}" - WHY IS THIS ALLOWED?
+* OMIT: Maybe use jq instead of sed scraping in the example configs?
 
 ## Framework
 

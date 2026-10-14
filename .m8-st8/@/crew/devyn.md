@@ -1,6 +1,6 @@
 #### :brain:crew/cody
 
-#### :brain:/codex/gpt-5.6-sol,reasoning:{"summary":"auto","effort":"medium"}
+#### :brain:/codex/gpt-6.1-sol,reasoning:{"summary":"auto","effort":"medium"}
 
 #### :compass:
 > Delegate bounded code exploration or implementation tasks to Cody when doing

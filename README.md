@@ -2472,8 +2472,8 @@ hash is the seed the world is built from, so "hello" and
 "hello!" are two different games.
 
 ```
-.m8-st8/models/Z-Machine/       nearest first, like everything
-~/.config/m8-st8/models/Z-Machine/
+.m8-st8/core/Z-Machine/       nearest first, like everything
+~/.config/m8-st8/core/Z-Machine/
 ```
 
 m8 ships with no story files: it plays whichever are there,

@@ -42,7 +42,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     for (models) |m| try w.print("  {s: <16} {s}\n", .{ m.name, m.summary });
     try w.writeAll(
         \\
-        \\A Z-Machine name is a story file's stem, from models/Z-Machine in a
+        \\A Z-Machine name is a story file's stem, from core/Z-Machine in a
         \\config directory.
         \\
     );
@@ -57,7 +57,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
 /// follows the prefix is that model's own business, and the model decides what
 /// to make of it. That is how a story file comes to be a model without m8
 /// keeping a list of story files — one row on the page, and every file in
-/// `models/Z-Machine` reachable through it.
+/// `core/Z-Machine` reachable through it.
 const Model = struct {
     name: []const u8,
     summary: []const u8,

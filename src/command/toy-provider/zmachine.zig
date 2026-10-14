@@ -33,9 +33,7 @@ const Ctx = api.Ctx;
 pub const prefix = "Z-Machine/";
 
 /// Where story files are looked for, under every config directory in turn.
-/// Not `core/`: a story file is data rather than a command, and `core/` is for
-/// the things a cloned project must not be able to define.
-pub const subdir = "models/Z-Machine";
+pub const subdir = "core/Z-Machine";
 
 /// What a story file may be called. Blorb containers hold one inside them and
 /// are unwrapped before anything else looks.
@@ -78,7 +76,7 @@ pub const Found = struct {
 /// Find a story file by name, nearest config directory first.
 ///
 /// The name may hold a path — `infocom/trinity` — and it is taken relative to
-/// each `models/Z-Machine` in turn. It may not climb out of one: a story file
+/// each `core/Z-Machine` in turn. It may not climb out of one: a story file
 /// somewhere else is named by putting it there, which is how every other file
 /// in m8 comes to have a name.
 ///
@@ -187,7 +185,7 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
     const wanted = storyName(model);
     const found = find(ctx, wanted) catch |why| {
         try ctx.err.print("m8 toy-provider: {s}\n", .{switch (why) {
-            Error.NameEscapes => "a story file is named inside models/Z-Machine, not outside it",
+            Error.NameEscapes => "a story file is named inside core/Z-Machine, not outside it",
             else => "no story file called that",
         }});
         try ctx.err.print("  looked for '{s}' under {s}/ in every config directory\n", .{ wanted, subdir });
