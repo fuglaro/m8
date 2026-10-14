@@ -45,9 +45,6 @@ pub const Error = error{
     BadEnvironmentName,
 };
 
-/// The placeholder a runner puts a code block into.
-pub const code_mark = "{{CODE}}";
-
 /// Which shield, and what it appends to which environment variable.
 pub const Activation = struct {
     name: []const u8,
@@ -67,8 +64,9 @@ pub const Definition = struct {
     steps: []const Step = &.{},
 };
 
-/// An argv with `{{CODE}}` somewhere in it, which is how a code block becomes
-/// something runnable without m8 knowing a single scripting language.
+/// An argv the code block is appended to, as a shebang's interpreter is
+/// handed its script, which is how a code block becomes something runnable
+/// without m8 knowing a single scripting language.
 pub const Runner = struct {
     name: []const u8,
     argv: []const []const u8,
@@ -191,7 +189,7 @@ pub fn parseBody(
 }
 
 /// A fenced block as something runnable: the 🏃 its language names, with the
-/// code in place of `{{CODE}}`.
+/// code appended.
 ///
 /// A block naming a runner that is not defined above it is refused rather than
 /// run bare. Not knowing how something should be launched is never a reason to
@@ -204,16 +202,10 @@ pub fn through(
     const runner = for (runners) |r| {
         if (std.mem.eql(u8, r.name, f.runner)) break r;
     } else return Error.UnknownRunner;
-    return fill(arena, runner.argv, f.code);
-}
-
-/// A runner's argv with the code in place of `{{CODE}}`.
-fn fill(arena: Allocator, argv: []const []const u8, code: []const u8) Allocator.Error![]const []const u8 {
-    var out: std.ArrayList([]const u8) = .empty;
-    for (argv) |word| {
-        try out.append(arena, if (std.mem.eql(u8, word, code_mark)) code else word);
-    }
-    return out.items;
+    const argv = try arena.alloc([]const u8, runner.argv.len + 1);
+    @memcpy(argv[0..runner.argv.len], runner.argv);
+    argv[runner.argv.len] = f.code;
+    return argv;
 }
 
 /// Flatten activations into the wrappers they stand for.
@@ -356,21 +348,20 @@ test "a code block runs through the runner its language names" {
 
     const runners = [_]Runner{.{
         .name = "bash",
-        .argv = &.{ "m8", "call", "bash", "-c", code_mark, "bash" },
+        .argv = &.{ "m8", "call", "bash", "-c" },
     }};
-    const steps = try parseBody(arena, .md, "```bash\nexec m8 ask-shield -- \"$@\"\n```", &runners);
+    const steps = try parseBody(arena, .md, "```bash\nexec m8 ask-shield \"$0\" \"$@\"\n```", &runners);
     try testing.expectEqual(@as(usize, 1), steps.len);
+    // The code is appended, as a shebang's script is.
     const argv = steps[0].command;
-    try testing.expectEqual(@as(usize, 6), argv.len);
-    try testing.expectEqualStrings("exec m8 ask-shield -- \"$@\"", argv[4]);
-    // The argv0 placeholder is the author's, not m8's.
-    try testing.expectEqualStrings("bash", argv[5]);
+    try testing.expectEqual(@as(usize, 5), argv.len);
+    try testing.expectEqualStrings("exec m8 ask-shield \"$0\" \"$@\"", argv[4]);
 
     try testing.expectError(Error.UnknownRunner, parseBody(arena, .md, "```python\nx\n```", &runners));
     // The whole info string is the name, so a word after the language picks
     // another runner rather than being dropped.
     try testing.expectError(Error.UnknownRunner, parseBody(arena, .md, "```bash raw\nx\n```", &runners));
-    const both = [_]Runner{ runners[0], .{ .name = "bash raw", .argv = &.{ "bash", "-c", code_mark, "bash" } } };
+    const both = [_]Runner{ runners[0], .{ .name = "bash raw", .argv = &.{ "bash", "-c" } } };
     const raw = try parseBody(arena, .md, "```bash raw\nexec \"$@\"\n```", &both);
     try testing.expectEqualStrings("bash", raw[0].command[0]);
     try testing.expectEqualStrings("exec \"$@\"", raw[0].command[2]);

@@ -11,10 +11,6 @@
 
 * Reconsider tool calls in serial.
 
-* "{{CODE}}" - can it always be passed at the end?
-  or two list with a post args?
-
-
 
 * DONE: `m8 watch @chat` writes a chat out as it moves, on the walk `m8 encode --break` stops (src/command/watch.zig).
 * DONE (for devyn): Cody needs to be able to have sub-agents so it isn't a token burner.
@@ -26,6 +22,7 @@
 * DONE: m8 @crew/cody/chat-- to new rather than parent...
 * DONE(removed entirely): "{{SHIELD}} x {{SHIELD}}" - WHY IS THIS ALLOWED?
 * OMIT: Maybe use jq instead of sed scraping in the example configs?
+* DONE(suffix): "{{CODE}}" - can it always be passed at the end? or two list with a post args?
 
 ## Framework
 

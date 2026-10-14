@@ -1054,7 +1054,7 @@ Agent definition:
 │   Optional, so ? on the name
 
 ▐ 🏃bash
-│ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
+│ `m8` `call` `bash` `-e` `-c`
 
 ▐ 🧰Tool Name
 │ │ A fenced block runs through the 🏃 it names.
@@ -1483,7 +1483,7 @@ definition's business.
 
 ```m8
 ▐ 🏃bash
-│ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
+│ `m8` `call` `bash` `-e` `-c`
 
 ▐ 🧰search
 │ │ Look for something.
@@ -1716,10 +1716,10 @@ and all of them stack around the one command.
 
 ```m8
 ▐ 🏃bash
-│ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
+│ `m8` `call` `bash` `-e` `-c`
 
 ▐ 🏃bash raw
-│ `bash` `-e` `-c` `{{CODE}}`
+│ `bash` `-e` `-c`
 
 ▐ 🛡️passthrough
 │ ```bash raw
@@ -1727,8 +1727,19 @@ and all of them stack around the one command.
 │ ```
 ```
 
-A 🏃 is what makes a block runnable: an argv with
-`{{CODE}}` in it.
+A 🏃 is what makes a block runnable: an argv the code is
+appended to, the way a shebang's interpreter is handed its
+script. Whatever follows comes after the code, so for
+`bash -c` the code is the script and `$0` is the next
+argument, a shield's name.
+
+A language that wants something after its code goes
+through `sh`, which puts the code wherever it is needed:
+
+```m8
+▐ 🏃foo
+│ `sh` `-c` `exec foo "$0" --after-code "$@"`
+```
 
 * It must be defined before a block names it, so a
   document reads in one pass.

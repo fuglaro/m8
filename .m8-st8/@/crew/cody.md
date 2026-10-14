@@ -81,6 +81,9 @@
 > * pages? string
 >   Paginate results to browse through many matches e.g. "11-20".
 
+#### :runner:bash
+> `m8` `call` `bash` `-e` `-c`
+
 #### :toolbox:bash
 > > Run a bash command.
 > :shield:workbench
@@ -96,9 +99,6 @@
 >   The bash command to run.
 > * timeout? number
 >   Seconds before stopping the command (default 30).
-
-#### :runner:bash
-> `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
 
 #### :toolbox:webfetch
 > > Download a web page for viewing.

@@ -52,8 +52,9 @@ pub const Sigil = enum {
     // makes any combination safe and the order of no consequence to what is
     // permitted.
     shield,
-    // 🏃 turns a code block into something runnable: an argv with {{CODE}} in
-    // it. Defined before it is named, so a document reads in one pass.
+    // 🏃 turns a code block into something runnable: an argv the code is
+    // appended to, as a shebang's interpreter is handed its script. Defined
+    // before it is named, so a document reads in one pass.
     runner,
     // 🧰 has the same two forms 🛡 has, for the same reason. With a block it
     // defines a tool; with none it offers that tool here. Defining says only
