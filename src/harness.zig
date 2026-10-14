@@ -81,8 +81,7 @@ pub fn run(
     io: std.Io,
     arena: std.mem.Allocator,
     env: *const std.process.Environ.Map,
-    reach: launch.Reach,
-    name: []const u8,
+    c: api.Command,
     argv: []const []const u8,
     args: []const []const u8,
     self: []const u8,
@@ -93,10 +92,7 @@ pub fn run(
     const ctx: api.Ctx = .{
         .arena = arena,
         .io = io,
-        .mode = switch (reach) {
-            .prompt => mode(io),
-            .call => |c| if (c.terminal) mode(io) else .md,
-        },
+        .mode = if (c.terminal) mode(io) else .md,
         .env = env,
         .self = self,
         .verbosity = verbosity(env),
@@ -108,7 +104,7 @@ pub fn run(
         .stdout_pipe = stdoutPipe(io),
         .tty = api.openTty(io, &tty_storage),
     };
-    return finish(ctx, name, launch.under(ctx, reach, args));
+    return finish(ctx, c.name, launch.under(ctx, c, args));
 }
 
 /// Everything on its way out, and whatever went wrong said once.
@@ -187,6 +183,7 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
             "m8: that ledger names a model but not whose; write it /PROVIDER/MODEL\n",
         ),
         error.NoMainChat => try err.writeAll("m8: pick an agent with `m8 @agent`\n"),
+        error.BadTui => try err.writeAll("m8: tui in core/config.json is a list of words, the command first\n"),
         error.NothingToReset => try err.writeAll(
             "m8: only a chat resets; the main chat, a turn and a model have no parent to go back to\n",
         ),

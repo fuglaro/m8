@@ -514,10 +514,13 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
 ▐ 🧠mathy/+/ypfpkuimzg
 ```
 
-* `@` sits where a command would, and is not one. A
-  prompt supplied as arguments follows `--`, and its
+* `@` sits where a command would, and is short for one.
+  A prompt supplied as arguments follows `--`, and its
   words are joined with a space, so nothing has to
   arbitrate between m8's arguments and yours.
+  `m8 @mathy -p -- tell me` is `m8 at -p @mathy "tell me"`:
+  `at` takes its options before the address and the
+  prompt as one argument.
 * A bare `m8` is `m8 @`, the main chat — whichever chat
   was talked to last.
 * An address is a chat, a turn or a model:
@@ -641,7 +644,18 @@ m8 top @tight-docs | m8 @mathy -- "Tidy the README."
 Piping is not required, and neither is a prompt when
 something was piped. With neither, at a terminal, the
 address alone opens a conversation with it: `m8 @mathy`
-is `m8 riff m8 @mathy -p -v`. See Riffing.
+is `m8 riff m8 at -p -v @mathy`. See Riffing.
+
+What opens is the `tui` in `core/config.json`:
+
+```json
+{ "tui": ["m8", "riff", "m8", "at", "-p", "-v"] }
+```
+
+* The address is appended to it.
+* An `m8` first is this m8.
+* That value is also the default, for when nothing names one.
+* A build without riff says the message the plain way.
 
 `-p` after the address is one message the plain way: a
 terminal collects lines until Ctrl-D, then shows the
@@ -766,7 +780,7 @@ nothing more.
 
 ```bash
 m8 riff CMD [ARGS]         an editor pinned under CMD's output
-m8 @mathy                  at a terminal: m8 riff m8 @mathy -p -v
+m8 @mathy                  at a terminal: m8 riff m8 at -p -v @mathy
 m8 riff -c python3 -i -u -q    one Python, a message at a time
 m8 riff -c -s 2 python3 -i -u -q    with its last error above its prompt
 ```

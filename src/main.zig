@@ -4,19 +4,21 @@
 //!     m8 COMMAND [ARGS]
 //!
 //! `@` is how the command line names an address, and it sits where a command
-//! would. A prompt follows `--`, so nothing has to arbitrate between m8's
-//! arguments and yours. A bare `m8` is `m8 @`, the main chat.
+//! would: `m8 @x -p -- hi there` is `m8 at -p @x "hi there"`, and a bare `m8`
+//! is `m8 at @`, the main
+//! chat. A prompt follows `--`, its words joined into the one argument `at`
+//! takes, so nothing has to arbitrate between m8's arguments and yours.
 //!
-//! Every other command is `m8 COMMAND ARGS` with stdin, and resolves whatever
-//! it names itself: `m8 ref @mathy`. So there is one kind of command, and the
-//! `@` prompt is the pipeline of them written once.
+//! Every command is `m8 COMMAND ARGS` with stdin, and resolves whatever it
+//! names itself: `m8 ref @mathy`. So there is one kind of command, and `at`
+//! is the pipeline of them written once.
 //!
 //! `--help` is a process-level option: `m8 --help` is the overview and
 //! `m8 COMMAND --help` is that command's page. It is read before a command's
 //! own arguments, so no command has to remember to answer it and no two answer
 //! it differently.
 //!
-//! The `@` prompt writes a terminal the rendered spelling and everything else
+//! `at` writes a terminal the rendered spelling and everything else
 //! markdown. A command writes markdown whatever stdout is, and `m8 render` is
 //! how a document becomes the rendered spelling.
 //!
@@ -30,6 +32,7 @@ const provider = @import("provider.zig");
 const address = @import("address.zig");
 const harness = @import("harness.zig");
 const launch = @import("launch.zig");
+const config = @import("config.zig");
 
 /// What `m8 --help` says. This belongs to the launcher rather than command
 /// help: it describes the process syntax that the launcher itself owns.
@@ -40,16 +43,21 @@ fn overview(w: *std.Io.Writer) !void {
         \\  m8 @AGENT[:|-|--] [-p] [-v] [-- REQUEST_MESSAGE]
         \\  m8 COMMAND [ARGS]
         \\
-        \\@AGENT sends a REQUEST_MESSAGE or stdin. Put `--` before a
-        \\request supplied as command-line arguments. `-p` renders and
-        \\streams the reply even when stdout is not a terminal. `-v` says on
-        \\stderr what the run is doing: a thought opening, a tool called.
+        \\@AGENT sends a REQUEST_MESSAGE or stdin, and is short for `m8 at`.
+        \\Put `--` before a request supplied as command-line arguments. `-p`
+        \\renders and streams the reply even when stdout is not a terminal.
+        \\`-v` says on stderr what the run is doing: a thought opening, a tool
+        \\called.
         \\
         \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
         \\on whichever chat was talked to last. A chat under an agent is a fork
         \\of it, `:` asks without moving anything, `-` resets to its parent, and
         \\`--` starts from its agent instead. The prompt separator is a separate
         \\`--` after the address.
+        \\
+        \\An address alone at a terminal opens the `tui` core/config.json names,
+        \\with the address after it. With none named it is riff, sending each
+        \\message with `m8 at -p -v @AGENT`.
         \\
         \\  m8 @mathy -- "Tell me about the Riemann Sphere."
         \\  m8 @ -- "Tell me more."
@@ -117,35 +125,55 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
 
-    // An address, or nothing at all, is the prompt. The prompt parser owns
-    // the `--` separator after the address.
-    if (args.len == 0 or address.isAddress(args[0])) {
-        // An address and nothing else, at a terminal, is a conversation: the
-        // same address again and again from an editor, which is `riff` run on
-        // this m8. `-p` is how riff asks, so with it there is no going round
-        // twice, and it is also how to say one message the plain way.
-        const word: []const u8 = if (args.len > 0) args[0] else "@";
-        if (args.len <= 1 and !std.mem.endsWith(u8, word, "-") and
+    // An address, or nothing at all, is shorthand for `at`. Its grammar is
+    // resolved here so that `at` stays one plain form.
+    var line: []const []const u8 = @ptrCast(args);
+    if (line.len == 0 or address.isAddress(line[0])) {
+        const word: []const u8 = if (line.len > 0) line[0] else "@";
+        if (line.len <= 1 and !std.mem.endsWith(u8, word, "-") and
             try std.Io.File.stdin().isTty(io) and try std.Io.File.stdout().isTty(io))
-        {
-            // riff is started as a process of its own even when this binary
-            // holds it, so that what it was started with is how it starts
-            // itself again. Without riff anywhere, the one message is said
-            // the plain way.
-            if (command.find("riff") != null)
-                return launch.become(io, &.{ self, "riff", self, word, "-p", "-v" });
-            if (try launch.beside(arena, io, self, command.prefix ++ "riff")) |riff|
-                return launch.become(io, &.{ riff, self, word, "-p", "-v" });
+        tui: {
+            // An `m8` first is this m8, so a tui needs nothing on a PATH.
+            if (config.tui(arena, io, init.environ_map) catch |e| {
+                try harness.explain(err, "", e);
+                try err.flush();
+                return 1;
+            }) |named| {
+                var words: std.ArrayList([]const u8) = .empty;
+                try words.append(arena, if (std.mem.eql(u8, named[0], "m8")) self else named[0]);
+                try words.appendSlice(arena, named[1..]);
+                try words.append(arena, word);
+                return launch.become(io, words.items);
+            }
+            // A build without riff still answers, one message at a time.
+            if (command.find("riff") == null and
+                try launch.beside(arena, io, self, command.prefix ++ "riff") == null) break :tui;
+            return launch.become(io, &.{ self, "riff", self, "at", "-p", "-v", word });
         }
-        return harness.run(io, arena, init.environ_map, .prompt, "", @ptrCast(argv), @ptrCast(args), self, out, err);
+        var at: std.ArrayList([]const u8) = .empty;
+        try at.append(arena, "at");
+        var rest = line[@min(1, line.len)..];
+        while (rest.len > 0 and (std.mem.eql(u8, rest[0], "-p") or
+            std.mem.eql(u8, rest[0], "-v") or std.mem.eql(u8, rest[0], "-vv"))) : (rest = rest[1..])
+            try at.append(arena, rest[0]);
+        try at.append(arena, word);
+        if (rest.len > 0) {
+            if (!std.mem.eql(u8, rest[0], "--")) {
+                try err.writeAll("m8: put -- before what you want to say\n");
+                try err.flush();
+                return 1;
+            }
+            if (rest.len > 1) try at.append(arena, try std.mem.join(arena, " ", rest[1..]));
+        }
+        line = at.items;
     }
 
-    const cmd_args: []const []const u8 = @ptrCast(args[1..]);
-    if (command.find(args[0])) |c|
-        return harness.run(io, arena, init.environ_map, .{ .call = c }, c.name, @ptrCast(argv), cmd_args, self, out, err);
+    const cmd_args = line[1..];
+    if (command.find(line[0])) |c|
+        return harness.run(io, arena, init.environ_map, c, @ptrCast(argv), cmd_args, self, out, err);
 
     // Not held here, so a program beside this one if there is one.
-    const program = try std.mem.concat(arena, u8, &.{ command.prefix, args[0] });
+    const program = try std.mem.concat(arena, u8, &.{ command.prefix, line[0] });
     if (try launch.beside(arena, io, self, program)) |path| {
         var words: std.ArrayList([]const u8) = .empty;
         try words.append(arena, path);
@@ -153,7 +181,7 @@ pub fn main(init: std.process.Init) !u8 {
         return launch.become(io, words.items);
     }
 
-    try err.print("m8: '{s}' is not a command. See m8 --help.\n", .{args[0]});
+    try err.print("m8: '{s}' is not a command. See m8 --help.\n", .{line[0]});
     try err.flush();
     return 1;
 }

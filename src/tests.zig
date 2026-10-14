@@ -19,7 +19,6 @@ comptime {
     _ = @import("command.zig");
     _ = @import("launch.zig");
     _ = @import("address.zig");
-    _ = @import("prompt.zig");
     _ = @import("keeping.zig");
     _ = @import("zmachine/zmachine.zig");
 }

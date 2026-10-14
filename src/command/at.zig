@@ -1,4 +1,6 @@
-//! `m8 @ADDRESS [-- WORDS]` — the pipeline written once.
+//! `at` — the pipeline written once.
+//!
+//!     m8 at [-p] [-v] @ADDRESS [PROMPT]
 //!
 //!     m8 ref --piped @ADDRESS WORDS | m8 send | m8 tag @ADDRESS
 //!     m8 reset --to @ADDRESS @
@@ -10,41 +12,37 @@
 //! every tool call, each naming the one before — rather than once there is a
 //! whole run to keep.
 //!
-//! This is the shorthand, and the only place the main chat follows along. A
-//! trailing `:` is `--no-advance`, a trailing `-` is `m8 reset`, and a
-//! trailing `--` is `m8 reset --new`; a document piped in follows the address
-//! as it is.
+//! This is the only place the main chat follows along. A trailing `:` is
+//! `--no-advance`, a trailing `-` is `m8 reset`, and a trailing `--` is
+//! `m8 reset --new`; a document piped in follows the address as it is.
 //!
-//! `@` is not a command, but it sits where one would. A prompt supplied as
-//! arguments follows the `--` marker, so prose cannot be mistaken for m8
-//! syntax. `-p` before it asks for the rendered spelling whatever stdout is,
-//! and `-v` for a line on stderr as the run thinks and as it calls a tool.
+//! The prompt is one argument after the address, taken as it is, so nothing
+//! in it can be mistaken for m8 syntax. `-p` asks for the rendered spelling whatever
+//! stdout is, and `-v` for a line on stderr as the run thinks and as it calls
+//! a tool. They go before the address.
 
 const std = @import("std");
-const doc = @import("m8/doc.zig");
-const config = @import("config.zig");
-const address = @import("address.zig");
-const assembly = @import("assembly.zig");
-const converse = @import("converse.zig");
-const ledger = @import("ledger.zig");
-const Keeping = @import("keeping.zig").Keeping;
-const api = @import("api.zig");
+const doc = @import("../m8/doc.zig");
+const config = @import("../config.zig");
+const address = @import("../address.zig");
+const assembly = @import("../assembly.zig");
+const converse = @import("../converse.zig");
+const ledger = @import("../ledger.zig");
+const Keeping = @import("../keeping.zig").Keeping;
+const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
-/// Return the prompt words after the address. A command-line prompt must be
-/// explicitly separated from the address; an absent marker is distinct from
-/// an absent prompt.
-fn promptWords(args: []const []const u8) ?[]const []const u8 {
-    if (args.len == 0) return &.{};
-    const rest = args[1..];
-    if (rest.len == 0) return rest;
-    if (!std.mem.eql(u8, rest[0], "--")) return null;
-    return rest[1..];
-}
+pub const command: api.Command = .{
+    .name = "at",
+    .summary = "say something to an address, and keep the turn",
+    // It reads its own stdin: a terminal is read a submission at a time.
+    .takes = .nothing,
+    .terminal = true,
+    .run = run,
+    .help = page,
+};
 
-/// `args` are every word after `m8`: the address, followed by an optional
-/// `--` and what to say to it. None at all is the main chat.
-pub fn run(given: Ctx, all: []const []const u8) !u8 {
+fn run(given: Ctx) !u8 {
     // `-p` is pretty: what a terminal is written, whatever stdout is. It is
     // how something standing between m8 and the terminal asks for the reply
     // as a person reads it.
@@ -53,27 +51,36 @@ pub fn run(given: Ctx, all: []const []const u8) !u8 {
     // `-vv` is more so, to anything the run starts that has more to say.
     var pretty = false;
     var verbosity: u8 = 0;
-    var args = all;
-    while (args.len > 1) : (args = args[1..]) {
-        if (std.mem.eql(u8, args[1], "-p")) pretty = true else if (std.mem.eql(u8, args[1], "-v")) verbosity = 1 else if (std.mem.eql(u8, args[1], "-vv")) verbosity = 2 else break;
+    var args = given.args;
+    while (args.len > 0) : (args = args[1..]) {
+        if (std.mem.eql(u8, args[0], "-p")) pretty = true else if (std.mem.eql(u8, args[0], "-v")) verbosity = 1 else if (std.mem.eql(u8, args[0], "-vv")) verbosity = 2 else break;
+    }
+    var word: []const u8 = "@";
+    if (args.len > 0 and address.isAddress(args[0])) {
+        word = args[0];
+        args = args[1..];
+    }
+    // Absent is not empty: with none, a terminal is asked for one.
+    var said: ?[]const u8 = null;
+    if (args.len > 0) {
+        said = args[0];
+        args = args[1..];
+    }
+    if (args.len > 0) {
+        try given.err.writeAll("m8: say it as one argument, in quotes\n");
+        return 1;
     }
     var ctx = given;
     if (pretty) ctx.mode = .m8;
-
-    const words = promptWords(args) orelse {
-        try ctx.err.writeAll("m8: put -- before what you want to say\n");
-        return 1;
-    };
 
     const arena = ctx.arena;
     const io = ctx.io;
     const dirs = try config.discover(arena, io, ctx.env);
 
-    const word = if (all.len > 0) all[0] else "@";
     const a = try address.typed(arena, io, dirs, word, ctx.err);
 
     if (a.suffix == .reset or a.suffix == .reset_new) {
-        if (words.len > 0) {
+        if (said != null) {
             try ctx.err.writeAll("m8: a reset says nothing, so nothing goes after it\n");
             return 1;
         }
@@ -87,10 +94,10 @@ pub fn run(given: Ctx, all: []const []const u8) !u8 {
         return 0;
     }
 
-    const prompt = try std.mem.join(arena, " ", words);
+    const prompt = said orelse "";
     var in_buf: [64 * 1024]u8 = undefined;
     const stdin = std.Io.File.stdin();
-    const terminal_submission = ctx.in.len == 0 and words.len == 0 and try stdin.isTty(io);
+    const terminal_submission = ctx.in.len == 0 and said == null and try stdin.isTty(io);
     const piped = if (ctx.in.len > 0)
         ctx.in
     else if (terminal_submission)
@@ -194,21 +201,19 @@ fn readTerminalPrompt(
     return text.items;
 }
 
-// ---------------------------------------------------------------- tests
-
-const testing = std.testing;
-
-test "a command-line prompt needs its separator" {
-    try testing.expect(promptWords(&.{}).?.len == 0);
-    try testing.expect(promptWords(&.{"@mathy"}).?.len == 0);
-    const words = promptWords(&.{ "@mathy", "--", "hello", "--help" }).?;
-    try testing.expectEqual(@as(usize, 2), words.len);
-    try testing.expectEqualStrings("hello", words[0]);
-    try testing.expectEqualStrings("--help", words[1]);
-    // The suffix is attached to the address; the separate `--` remains the
-    // prompt separator.
-    const reset_words = promptWords(&.{ "@mathy/job--", "--", "hello" }).?;
-    try testing.expectEqual(@as(usize, 1), reset_words.len);
-    try testing.expectEqualStrings("hello", reset_words[0]);
-    try testing.expect(promptWords(&.{ "@mathy", "hello" }) == null);
+fn page(ctx: Ctx, w: *std.Io.Writer) !void {
+    _ = ctx;
+    try w.writeAll(
+        \\  m8 at [-p] [-v] @AGENT[:|-|--] ["PROMPT"]
+        \\
+        \\Sends PROMPT, one argument taken as it is, or stdin. `-p` renders and
+        \\streams the reply even when stdout is not a terminal. `-v` says on
+        \\stderr what the run is doing: a thought opening, a tool called.
+        \\
+        \\@mathy talks to mathy's own chat, and moves it on. A plain @ carries
+        \\on whichever chat was talked to last. A chat under an agent is a fork
+        \\of it, `:` asks without moving anything, `-` resets to its parent,
+        \\and `--` starts from its agent instead.
+        \\
+    );
 }

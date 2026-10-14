@@ -1,8 +1,8 @@
 //! The command registry. Adding a command means adding one line here.
 //!
 //! Every command is `m8 CMD [ARGS]` with stdin, and resolves whatever it names
-//! itself. `@` is not among them: it is launcher syntax, the pipeline of these
-//! written once.
+//! itself. `@` is not among them: it is launcher shorthand for `at`, the
+//! pipeline of these written once.
 //!
 //! The registry is written as modules rather than as command values, because
 //! a module is what carries whatever is under it. From that, `tree` names
@@ -18,6 +18,7 @@ pub const Takes = api.Takes;
 
 /// Every command there is, as the modules that hold them.
 const every = .{
+    @import("command/at.zig"),
     @import("command/ref.zig"),
     @import("command/send.zig"),
     @import("command/tag.zig"),

@@ -213,6 +213,35 @@ pub fn providers(
     return merged;
 }
 
+pub const Error = error{
+    /// `tui` in core/config.json is not a list of words.
+    BadTui,
+};
+
+/// What an address alone at a terminal opens: the `tui` of the nearest
+/// core/config.json that names one, the words of a command the address is
+/// appended to. Null when none does, which leaves it to m8's own default.
+pub fn tui(
+    arena: Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+) !?[]const []const u8 {
+    for (try coreFiles(arena, io, env, "config.json")) |path| {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file));
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
+        if (parsed != .object) continue;
+        const v = parsed.object.get("tui") orelse continue;
+        if (v != .array or v.array.items.len == 0) return Error.BadTui;
+        const words = try arena.alloc([]const u8, v.array.items.len);
+        for (v.array.items, words) |item, *w| {
+            if (item != .string) return Error.BadTui;
+            w.* = item.string;
+        }
+        return words;
+    }
+    return null;
+}
+
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;

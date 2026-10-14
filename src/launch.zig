@@ -12,7 +12,6 @@
 
 const std = @import("std");
 const api = @import("api.zig");
-const prompt_mode = @import("prompt.zig");
 const Ctx = api.Ctx;
 
 /// The program beside this one, by name.
@@ -29,22 +28,9 @@ pub fn beside(arena: std.mem.Allocator, io: std.Io, self: []const u8, program: [
     return path;
 }
 
-/// How the command under this one is reached.
-pub const Reach = union(enum) {
-    /// `@`, which is not a command.
-    prompt,
-    /// The command itself, held in this binary.
-    call: api.Command,
-};
-
-/// Run the command under this one.
-pub fn under(ctx: Ctx, reach: Reach, args: []const []const u8) !u8 {
+/// Run the command under this one, held in this binary.
+pub fn under(ctx: Ctx, c: api.Command, args: []const []const u8) !u8 {
     var inner = ctx;
-    const c = switch (reach) {
-        // `@` is launcher syntax, and it reads its own stdin.
-        .prompt => return prompt_mode.run(inner, args),
-        .call => |c| c,
-    };
     inner.args = args;
 
     // This is where a command receives its process-level option. Only the
