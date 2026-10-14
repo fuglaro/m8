@@ -12,7 +12,8 @@
 //!
 //! This is the shorthand, and the only place the main chat follows along. A
 //! trailing `:` is `--no-advance`, a trailing `-` is `m8 reset`, and a
-//! document piped in follows the address as it is.
+//! trailing `--` is `m8 reset --new`; a document piped in follows the address
+//! as it is.
 //!
 //! `@` is not a command, but it sits where one would. A prompt supplied as
 //! arguments follows the `--` marker, so prose cannot be mistaken for m8
@@ -71,13 +72,17 @@ pub fn run(given: Ctx, all: []const []const u8) !u8 {
     const word = if (all.len > 0) all[0] else "@";
     const a = try address.typed(arena, io, dirs, word, ctx.err);
 
-    if (a.suffix == .reset) {
+    if (a.suffix == .reset or a.suffix == .reset_new) {
         if (words.len > 0) {
             try ctx.err.writeAll("m8: a reset says nothing, so nothing goes after it\n");
             return 1;
         }
-        // The fresh chat is also the one being talked to now.
-        try address.reset(arena, io, dirs, a);
+        // The fresh chat is also the one being talked to now. `-` reads as
+        // the parent; `--` reads as the agent, whatever the parent has done.
+        if (a.suffix == .reset_new)
+            try address.renew(arena, io, dirs, a)
+        else
+            try address.reset(arena, io, dirs, a);
         try address.follow(arena, io, dirs, .{ .kind = .main }, a);
         return 0;
     }
@@ -200,5 +205,10 @@ test "a command-line prompt needs its separator" {
     try testing.expectEqual(@as(usize, 2), words.len);
     try testing.expectEqualStrings("hello", words[0]);
     try testing.expectEqualStrings("--help", words[1]);
+    // The suffix is attached to the address; the separate `--` remains the
+    // prompt separator.
+    const reset_words = promptWords(&.{ "@mathy/job--", "--", "hello" }).?;
+    try testing.expectEqual(@as(usize, 1), reset_words.len);
+    try testing.expectEqualStrings("hello", reset_words[0]);
     try testing.expect(promptWords(&.{ "@mathy", "hello" }) == null);
 }

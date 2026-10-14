@@ -8,9 +8,10 @@
 //!
 //! `@`, `:brain:` and 🧠 all mark one, so a 🧠 line pasted back in names what
 //! it printed. A trailing `:` asks without moving anything, and a trailing
-//! `-` takes a chat's pointer away so that it reads as its parent again.
-//! Both suffixes belong to the `@` prompt; a command says the same with an
-//! option, so nothing has to carry a mark through a parameter.
+//! `-` takes a chat's pointer away so that it reads as its parent again, and
+//! `--` starts it from its agent instead. Both reset suffixes belong to the
+//! `@` prompt; a command says the same with an option, so nothing has to carry
+//! a mark through a parameter.
 //!
 //! The main chat follows the `@` prompt and nothing else. A command moves the
 //! chat it names, and moves the main chat only when that is what it names.
@@ -34,8 +35,10 @@ pub const Suffix = enum {
     none,
     /// `:` — ask, and move no pointer.
     oneshot,
-    /// `-` — take the chat's pointer away.
+    /// `-` — take the chat's pointer away, so it reads as its parent.
     reset,
+    /// `--` — take the chat's pointer away, so it reads as its agent.
+    reset_new,
 };
 
 pub const Address = struct {
@@ -93,6 +96,10 @@ pub fn resolve(
     if (std.mem.endsWith(u8, rest, ":")) {
         suffix = .oneshot;
         rest = rest[0 .. rest.len - 1];
+    } else if (std.mem.endsWith(u8, rest, "--")) {
+        // Check the two-character suffix first: it is also a trailing `-`.
+        suffix = .reset_new;
+        rest = rest[0 .. rest.len - 2];
     } else if (std.mem.endsWith(u8, rest, "-")) {
         suffix = .reset;
         rest = rest[0 .. rest.len - 1];
@@ -427,6 +434,8 @@ test "every mark reads as an address, and suffixes are read off the end" {
     try testing.expectEqual(Kind.main, (try resolve(arena, f.io, &dirs, "@", &d)).kind);
     try testing.expectEqual(Suffix.oneshot, (try resolve(arena, f.io, &dirs, "@mob/agent:", &d)).suffix);
     try testing.expectEqual(Suffix.reset, (try resolve(arena, f.io, &dirs, "@mob/agent/c1-", &d)).suffix);
+    try testing.expectEqual(Suffix.reset_new, (try resolve(arena, f.io, &dirs, "@mob/agent/c1--", &d)).suffix);
+    try testing.expectEqualStrings("mob/agent/c1", (try resolve(arena, f.io, &dirs, "@mob/agent/c1--", &d)).name);
     try testing.expectEqual(Kind.model, (try resolve(arena, f.io, &dirs, "@/local/tiny:", &d)).kind);
     try testing.expectEqual(Kind.turn, (try resolve(arena, f.io, &dirs, "@mob/agent/+/abc", &d)).kind);
     try testing.expectError(error.UnknownAgent, resolve(arena, f.io, &dirs, "@nobody", &d));

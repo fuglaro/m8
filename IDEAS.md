@@ -2,10 +2,6 @@
 
 ## TODO (Upcoming and WIP)
 
-* m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
-* Shields:
-  * do agents under tools not need to write to state? no-edit-m8-st8? allow for subagent call which has it's own tools but not other tools?
-    separate areas?
 * m8 @crew/cody/chat-- to new rather than parent...
 
 * m8 watch -> watch live chat - useful to see subagents!
@@ -27,6 +23,7 @@
 * DONE: Clean: Shield to its subcommands: m8 shield dispatches to secure and ask, spawning m8-shield-secure in a split build (src/command/shield.zig:53).
 * DONE: turn `m8 shield ask` into `m8 ask-shield`, and `m8 shield secure` into `m8 secure-shield`, and clean out `m8 shield`
 * DONE: -Dformats=openai-completions,anthropic-messages,openai-responses (defaults all, always includes m8, applies to encode and parse)
+* OMIT(achieble with any FastCGI tool or even ncat for raw m8 over TCP): m8 serve (middleware proxy for serving a m8 interface in front of a provider specific).
 
 ## Framework
 
@@ -60,6 +57,7 @@
 * Errors that say where.
   * path, record, line, value, include lineage
   * `m8: BadEnvironmentName` alone costs a hunt.
+* Render nested marckdown.
 
 ### MAYBE: Attachments
 

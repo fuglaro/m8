@@ -1,6 +1,6 @@
 //! m8 — a composable shell harness.
 //!
-//!     m8 [@ADDRESS[:|-] [-p] [-v] [-- PROMPT]]
+//!     m8 [@ADDRESS[:|-|--] [-p] [-v] [-- PROMPT]]
 //!     m8 COMMAND [ARGS]
 //!
 //! `@` is how the command line names an address, and it sits where a command
@@ -37,7 +37,7 @@ fn overview(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 - the composable agentic shell harness
         \\
-        \\  m8 @AGENT[:|-] [-p] [-v] [-- REQUEST_MESSAGE]
+        \\  m8 @AGENT[:|-|--] [-p] [-v] [-- REQUEST_MESSAGE]
         \\  m8 COMMAND [ARGS]
         \\
         \\@AGENT sends a REQUEST_MESSAGE or stdin. Put `--` before a
@@ -47,7 +47,9 @@ fn overview(w: *std.Io.Writer) !void {
         \\
         \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
         \\on whichever chat was talked to last. A chat under an agent is a fork
-        \\of it, `:` asks without moving anything, and `-` starts a chat over.
+        \\of it, `:` asks without moving anything, `-` resets to its parent, and
+        \\`--` starts from its agent instead. The prompt separator is a separate
+        \\`--` after the address.
         \\
         \\  m8 @mathy -- "Tell me about the Riemann Sphere."
         \\  m8 @ -- "Tell me more."

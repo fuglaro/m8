@@ -460,7 +460,7 @@ relitigating them.
 ## Commands
 
 ```bash
-m8 [@ADDRESS[:|-] [-p] [-v] [-- PROMPT]]
+m8 [@ADDRESS[:|-|--] [-p] [-v] [-- PROMPT]]
 m8 COMMAND [ARGS]
 ```
 
@@ -528,6 +528,11 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
   what a side question is. A trailing `-` resets a chat,
   makes that fresh chat the main chat, and reads as its
   parent again; only a chat has a parent to go back to.
+  A trailing `--` is the `reset --new` form: it resets the
+  chat to its agent, whatever its parent chat has got to,
+  and makes that chat the main chat. The suffix is attached
+  to the address, as in `m8 @mathy/aside--`; the separate
+  `--` after an address remains the prompt separator.
 * It is a pipeline written once. `m8 @mathy -- hi` is
   `m8 ref @mathy hi | m8 send | m8 tag @mathy` and then
   `m8 reset --to @mathy @`, except that the reply is
@@ -535,9 +540,11 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
   Composing and Turns and chats.
 * It is the shorthand, and every part of it has a plain
   form underneath.
-  * `--`, `:` and `-` are marks a person types.
+  * `:`, `-` and an address-attached `--` are marks a person types;
+    a separate `--` is the prompt separator.
   * A command takes a message as one argument, `--no-advance`
-    for `:`, and `m8 reset` for `-`.
+    for `:`, and `m8 reset` (with `--new` for address-attached `--`)
+    for the reset forms.
   * So a tool calling an agent passes parameters, and
     carries no mark through one.
 * What an address reads as is appended as the 🧠 it
