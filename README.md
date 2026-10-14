@@ -976,7 +976,7 @@ m8 call PROG [ARGS]     a program from the environment
   around `call` rather than asked about within it.
 
 ```bash
-m8 secure-shield "private airgap" -- bash -c "ls"
+__secures__="private airgap" m8 secure-shield secure bash -c "ls"
 ```
 
 Output is m8: what the program writes becomes a 🧾
@@ -1546,7 +1546,9 @@ injects it directly.
 
 A placeholder is a whole argument and is never spliced
 into a larger one, so a value cannot become syntax in
-what runs.
+what runs. Only an explicit `m8 call` expands one; the
+harness passes every other command as written, and a shield
+reads what it was told from its environment.
 
 ### Definition variables
 
@@ -1621,8 +1623,9 @@ conversation.
   * A stderr that opens `QUESTION:tool:`, with the question
     after it.
 * A shield asks the same way, under its own name.
-  * `QUESTION:shield_ask_1:` is the first wrapper of `🛡️ask`.
-  * `{{SHIELD}}` in a shield's command is that name, `ask_1`.
+  * `QUESTION:shield_ask:` is `🛡️ask` asking.
+  * Every shield is handed its own name, `ask`, before
+    the command it wraps.
 * The ❓ says who asked and of which call: `❓tool,c1`.
 * The run stops on the ❓.
   * Calls the model made alongside it are written down
@@ -1655,7 +1658,7 @@ What the person answered is in the call's environment:
 ```
 M8_EXCLAMATION_1          the tool's first answer
 M8_EXCLAMATION_2          its second
-M8_EXCLAMATION_1_ask_1    a shield's first
+M8_EXCLAMATION_1_ask      a shield's first
 ```
 
 * The tool and every shield around it are handed the same
@@ -1685,13 +1688,13 @@ rests on, one level further down.
 
 Everything follows from it. Restriction is
 intersection, so the permitted set is the same however
-the wrappers stack and a repeat means nothing. A second
-definition of a name adds another wrapper rather than
-replacing one, so a mob you have not read can tighten
-what it was given and can never un-define it.
+the wrappers stack and a repeat means nothing. A name
+runs one command, so a second definition of it is an
+error once it is activated: a mob you have not read
+cannot replace what it was given, and nothing runs.
 
 ```bash
-m8 secure-shield "private airgap" -- bash -c "ls"
+__secures__="private airgap" m8 secure-shield secure bash -c "ls"
 ```
 
 ### Defining and activating
@@ -1708,15 +1711,15 @@ activates.
 
 A definition body holds a command spelled out in
 backticks, a fenced block in some language, or another
-🛡 to stand inside. Any of them may repeat, and all of
-them stack.
+🛡 to stand inside. Shields to stand inside may repeat,
+and all of them stack around the one command.
 
 ```m8
 ▐ 🏃bash
 │ `m8` `call` `bash` `-e` `-c` `{{CODE}}` `bash`
 
 ▐ 🏃bash raw
-│ `bash` `-e` `-c` `{{CODE}}` `bash`
+│ `bash` `-e` `-c` `{{CODE}}`
 
 ▐ 🛡️passthrough
 │ ```bash raw
@@ -1737,10 +1740,10 @@ A 🏃 is what makes a block runnable: an argv with
   above, a tool's block answers through `m8 call`, and a
   shield's stays a transparent wrapper.
 
-Every wrapper is handed the command it wraps as
-arguments. A wrapper whose first word is `m8` *is* an m8
+Every wrapper is handed the name it stands as and then
+the command it wraps, as arguments. A wrapper whose first word is `m8` *is* an m8
 command, and that word becomes this m8's path. `🛡️ask` is
-`` `m8` `ask-shield` `{{SHIELD}}` `--` `` and nothing else.
+`` `m8` `ask-shield` `` and nothing else.
 A tool's own command is read the same way, as is the program
 named by `m8 call`, so `` `m8` `call` `m8` `munge` … ``
 reaches this build at both executable positions.
@@ -1754,19 +1757,24 @@ rewrite its source.
 What a call said arrives in the environment, never in these
 words, so no value a model wrote is read for a command.
 
-`{{SHIELD}}` is the name a wrapper stands as.
+The name is the shield's own, made safe for a folder.
 
-* It is the shield's name and a count from one: `ask_1`.
-  * The count separates the wrappers of a name defined
-    more than once.
+* It is the shield whose command runs: `sandbox` stands
+  as the shields it is made of.
 * It is who a wrapper asks the person as, and what its
   answers are named for. See [Asking the Person](#asking-the-person).
+* A name runs one command, so two of a kind are two
+  names, such as `ask1` and `ask2`. A second command under
+  one name is an error rather than a second wrapper.
 
-Nothing inserts an argv0 for you. `bash -c` binds `$0`
-to the first argument after the script, which is why
-these are written `"$0" "$@"` and why m8 does not try
-to know that on your behalf. A shield author is
-trusted, exactly as a tool author is.
+A shield takes nothing else as words. What it was
+activated with arrives in its environment, as a tool's
+call does, so nothing in a shield's command is expanded.
+
+`bash -c` binds `$0` to the first argument after the
+script, which is the name, so a shell shield runs its
+command as `"$@"`. A shield author is trusted, exactly
+as a tool author is.
 
 ### Activation order
 
@@ -1865,10 +1873,10 @@ wrapper that changes the environment before the tool starts:
 
 ```m8
 ▐ 🛡️contain-home
-│ `bash` `-c` `HOME=$TMPDIR exec "$0" "$@"`
+│ `bash` `-c` `HOME=$TMPDIR exec "$@"`
 
 ▐ 🛡️contain-env
-│ `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8|M8_*|TMPDIR|PATH|HOME|LANG|LC_*) ;; *) unset "$v";; esac; done; exec "$0" "$@"`
+│ `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8|M8_*|TMPDIR|PATH|HOME|LANG|LC_*) ;; *) unset "$v";; esac; done; exec "$@"`
 ```
 
 * `contain-home` points `HOME` at the mob's scratch.
@@ -1888,7 +1896,7 @@ that channel is a pipe rather than a rule:
 
 ```m8
 ▐ 🛡️freeze-toolbox
-│ `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
+│ `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
 ```
 
 `m8 exclude` takes out every record of the kinds it is
@@ -1909,8 +1917,8 @@ why `deny` is `/usr/bin/false` and a filter is a pipe.
 Two need m8 itself:
 
 ```bash
-m8 secure-shield "RESTRICTIONS" -- CMD   the profile
-m8 ask-shield [NAME] -- CMD              the person
+m8 secure-shield NAME CMD   the profile, from __secures__
+m8 ask-shield NAME CMD      the person
 ```
 
 `ask-shield` puts the command to the person as a ❓, the way any

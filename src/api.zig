@@ -90,7 +90,7 @@ pub const asks_tool = "tool";
 pub const asks_shield = "shield_";
 /// What the person answered, in the environment of the call it was said to.
 /// `M8_EXCLAMATION_1` is the first thing they answered the tool, and so on
-/// up. What they answered a shield has its name after: `M8_EXCLAMATION_1_ask_1`.
+/// up. What they answered a shield has its name after: `M8_EXCLAMATION_1_ask`.
 pub const exclamation = "M8_EXCLAMATION_";
 
 /// A name as part of a variable's. Whoever chose it was not choosing a

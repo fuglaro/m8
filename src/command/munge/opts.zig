@@ -1,9 +1,11 @@
 //! The command line a munge operation takes, read the way one usually is.
 //!
-//!   --name VALUE    --flag    WORD
+//!   --name VALUE    --flag    [--]    WORD...
 //!
 //! A value is whatever follows its option, dash or not, so a replacement may
-//! say anything.
+//! say anything. Options come first: the first word ends them, so the words
+//! after it may say anything too. `--` is only for a first word that starts
+//! with `--` itself.
 
 const std = @import("std");
 const api = @import("../../api.zig");
@@ -51,9 +53,13 @@ pub fn parse(ctx: Ctx, op: []const u8, options: []const Option, max_words: usize
     var i: usize = 0;
     while (i < ctx.args.len) : (i += 1) {
         const word = ctx.args[i];
+        if (std.mem.eql(u8, word, "--")) {
+            try words.appendSlice(ctx.arena, ctx.args[i + 1 ..]);
+            break;
+        }
         if (!std.mem.startsWith(u8, word, "--")) {
-            try words.append(ctx.arena, word);
-            continue;
+            try words.appendSlice(ctx.arena, ctx.args[i..]);
+            break;
         }
 
         const name = word[2..];
@@ -122,7 +128,7 @@ test "options take a separate value, and words are what is left" {
     const arena = a.allocator();
     var err: std.Io.Writer.Allocating = .init(arena);
 
-    const got = (try read(arena, &err.writer, &.{ "--pages", "2-3", "a.md", "--byte-cap", "50", "--dry-run" }, 1)).?;
+    const got = (try read(arena, &err.writer, &.{ "--pages", "2-3", "--byte-cap", "50", "--dry-run", "a.md" }, 1)).?;
     try testing.expectEqualStrings("2-3", got.text("pages").?);
     try testing.expectEqual(@as(usize, 50), got.number("byte-cap").?);
     try testing.expect(got.flag("dry-run"));
@@ -147,6 +153,26 @@ test "option values may look like options" {
     // Empty is a value that was given, not one that was left out.
     const empty = (try read(arena, &err.writer, &.{ "--pages", "" }, 1)).?;
     try testing.expectEqualStrings("", empty.text("pages").?);
+}
+
+test "the first word ends the options, and -- ends them before one" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var err: std.Io.Writer.Allocating = .init(arena);
+
+    const got = (try read(arena, &err.writer, &.{ "--pages", "2-3", "a.md", "--no-wrap" }, 2)).?;
+    try testing.expectEqualStrings("2-3", got.text("pages").?);
+    try testing.expectEqual(@as(usize, 2), got.words.len);
+    try testing.expectEqualStrings("--no-wrap", got.words[1]);
+
+    const late = (try read(arena, &err.writer, &.{ "a.md", "--dry-run" }, 2)).?;
+    try testing.expect(!late.flag("dry-run"));
+
+    const dashed = (try read(arena, &err.writer, &.{ "--", "--a.md" }, 1)).?;
+    try testing.expectEqualStrings("--a.md", dashed.words[0]);
+
+    try testing.expect((try read(arena, &err.writer, &.{ "--", "a", "b" }, 1)) == null);
 }
 
 test "a line that cannot be read is said rather than guessed past" {

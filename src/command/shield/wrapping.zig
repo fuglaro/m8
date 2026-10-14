@@ -1,16 +1,17 @@
 //! What the shields m8 ships with have in common.
 //!
-//! A shield takes the command it wraps after `--` and runs it in its own
-//! place, so what a tool sees is one process and one exit status however many
-//! wrappers it stood inside. Splitting at `--` and standing out of the way are
-//! the whole of that, and neither is any one shield's business.
+//! A shield is told the name it stands as and then the command it wraps, and
+//! runs that command in its own place, so what a tool sees is one process and
+//! one exit status however many wrappers it stood inside. Reading that and
+//! standing out of the way are the whole of it, and neither is any one
+//! shield's business.
 
 const std = @import("std");
 const api = @import("../../api.zig");
 const Ctx = api.Ctx;
 
 pub const Error = error{
-    /// No `--`, so there is no command to wrap.
+    /// No command after the name, so there is nothing to wrap.
     NothingToWrap,
     /// A name this m8 does not ship.
     UnknownShield,
@@ -22,22 +23,18 @@ pub const Error = error{
     Refused,
 };
 
-/// What was said to this shield, and what it wraps.
+/// Who this shield stands as, and what it wraps.
 pub const Wrapped = struct {
-    head: []const []const u8,
+    name: []const u8,
     argv: []const []const u8,
 };
 
-/// Split at `--`. Nothing to wrap is an error rather than a no-op: a shield
-/// that ran nothing and answered zero would read as having allowed something.
+/// The name, then the command. Nothing to wrap is an error rather than a
+/// no-op: a shield that ran nothing and answered zero would read as having
+/// allowed something.
 pub fn cut(args: []const []const u8) !Wrapped {
-    const at = for (args, 0..) |a, i| {
-        if (std.mem.eql(u8, a, "--")) break i;
-    } else return Error.NothingToWrap;
-
-    const argv = args[at + 1 ..];
-    if (argv.len == 0) return Error.NothingToWrap;
-    return .{ .head = args[0..at], .argv = argv };
+    if (args.len < 2) return Error.NothingToWrap;
+    return .{ .name = args[0], .argv = args[1..] };
 }
 
 /// Hand the command the terminal and this process's exit status. A wrapper is

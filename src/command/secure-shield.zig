@@ -2,8 +2,8 @@
 //! away.
 //!
 //! The other one that could not be written in the shell: this needs the
-//! profile that decides what a restriction means. Its restrictions arrive as
-//! one space separated argument, which is how a 🛡 hands over what was
+//! profile that decides what a restriction means. Its restrictions arrive in
+//! `__secures__`, space separated, which is how a 🛡 hands over what was
 //! appended to its variable.
 
 const std = @import("std");
@@ -25,10 +25,8 @@ fn run(ctx: Ctx) !u8 {
     const w = try wrapping.cut(ctx.args);
 
     var names: std.ArrayList([]const u8) = .empty;
-    for (w.head) |word| {
-        var it = std.mem.tokenizeAny(u8, word, " \t");
-        while (it.next()) |name| try names.append(ctx.arena, name);
-    }
+    var it = std.mem.tokenizeAny(u8, ctx.env.get("__secures__") orelse "", " \t");
+    while (it.next()) |name| try names.append(ctx.arena, name);
     if (names.items.len == 0) return wrapping.through(ctx, w.argv, null);
 
     // A name with no line in the profile is refused. Not understanding what
@@ -62,13 +60,13 @@ fn run(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     _ = ctx;
     try out.writeAll(
-        \\  m8 secure-shield "RESTRICTIONS" -- CMD [ARGS]
+        \\  m8 secure-shield NAME CMD [ARGS]
         \\
-        \\Restrictions come as one space separated argument, which is how a
+        \\Restrictions come space separated in __secures__, which is how a
         \\🛡 hands over what was appended to its variable:
         \\
         \\  ▐ 🛡️secure
-        \\  │ `m8` `secure-shield` `{{secures|}}` `--`
+        \\  │ `m8` `secure-shield`
         \\  ▐ 🛡️secure secures airgap
         \\
     );

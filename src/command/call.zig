@@ -37,12 +37,18 @@ pub const Error = error{NothingToRun};
 
 fn run(ctx: Ctx) !u8 {
     if (ctx.args.len == 0) return help(ctx);
+    const expanded = try argline.line(ctx.arena, ctx.env, ctx.err, ctx.args);
+    if (expanded.len == 0) {
+        try ctx.err.writeAll("m8 call: everything expanded away\n");
+        return Error.NothingToRun;
+    }
+
     // Which call this answers is said in the environment, like everything
     // else a call says. Typed at a shell there is none, and the answer names
     // nothing.
     var inner = ctx;
     if (ctx.env.get("M8_CALL_ID")) |id| inner.call_id = id;
-    return execute(inner, ctx.args, .framed);
+    return execute(inner, expanded, .framed);
 }
 
 /// Run an already-built command line.
@@ -85,14 +91,7 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
     // a shield does to an environment it does in its own process, further out
     // than this one.
     const environ = try api.childEnvironment(ctx.arena, ctx, ctx.extra_env);
-
-    const expanded = try argline.line(ctx.arena, environ, ctx.err, argv);
-    if (expanded.len == 0) {
-        try ctx.err.writeAll("m8 call: everything expanded away\n");
-        return Error.NothingToRun;
-    }
-
-    const full = try executable(ctx.arena, ctx.self, expanded);
+    const full = try executable(ctx.arena, ctx.self, argv);
 
     var child = try std.process.spawn(ctx.io, .{
         .argv = full,

@@ -1042,8 +1042,8 @@ test "a call that asked is still owed, and is handed what was answered" {
         .{ .sigil = .ok, .value = "c1" },
         .{ .sigil = .call, .value = "run,c1" },
         .{ .sigil = .call, .value = "run,c2" },
-        .{ .sigil = .question, .value = "shield_ask_1,c1", .content = "sure?" },
-        .{ .sigil = .exclaim, .value = "shield_ask_1,c1", .content = "yes" },
+        .{ .sigil = .question, .value = "shield_ask,c1", .content = "sure?" },
+        .{ .sigil = .exclaim, .value = "shield_ask,c1", .content = "yes" },
         .{ .sigil = .question, .value = "tool,c1", .content = "really?" },
     };
 
@@ -1055,7 +1055,7 @@ test "a call that asked is still owed, and is handed what was answered" {
 
     const said = try exclamations(arena, &records, "c1");
     try testing.expectEqual(@as(usize, 1), said.len);
-    try testing.expectEqualStrings("shield_ask_1", said[0].who);
+    try testing.expectEqualStrings("shield_ask", said[0].who);
     try testing.expectEqualStrings("yes", said[0].text);
     try testing.expectEqual(@as(usize, 0), (try exclamations(arena, &records, "c2")).len);
 

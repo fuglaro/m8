@@ -135,6 +135,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  --regex PATTERN     grep per-line on perl-style regex no backrefs no lookaround
         \\  --byte-cap N        maximum answer size
         \\
+        \\Use -- before a PATH that starts with --.
+        \\
         \\Answers are addressed in pages; page sizes are shared so a read,
         \\scan and write refer to the same coordinates.
         \\

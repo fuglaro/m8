@@ -992,7 +992,7 @@ test "what the person answered is named for a call, and for what it stands insid
     const arena = a.allocator();
 
     const env = try exclaimed(arena, &.{
-        .{ .who = "shield_ask_1", .text = "yes" },
+        .{ .who = "shield_ask", .text = "yes" },
         .{ .who = "tool", .text = "John" },
         .{ .who = "tool", .text = "Leeds" },
         // Nobody a question can come from, so nothing to call it.
@@ -1002,14 +1002,14 @@ test "what the person answered is named for a call, and for what it stands insid
     });
     // Each is counted from one, whoever else was answered in between.
     try std.testing.expectEqual(@as(usize, 3), env.len);
-    try std.testing.expectEqualStrings("M8_EXCLAMATION_1_ask_1", env[0].key);
+    try std.testing.expectEqualStrings("M8_EXCLAMATION_1_ask", env[0].key);
     try std.testing.expectEqualStrings("yes", env[0].value);
     try std.testing.expectEqualStrings("M8_EXCLAMATION_1", env[1].key);
     try std.testing.expectEqualStrings("John", env[1].value);
     try std.testing.expectEqualStrings("M8_EXCLAMATION_2", env[2].key);
     try std.testing.expectEqualStrings("Leeds", env[2].value);
     try std.testing.expect(!asks("shield_"));
-    try std.testing.expect(!asks("ask_1"));
+    try std.testing.expect(!asks("ask"));
 }
 
 test "a run starts with nothing answered, whatever it was handed" {
@@ -1019,7 +1019,7 @@ test "a run starts with nothing answered, whatever it was handed" {
 
     var env: std.process.Environ.Map = .init(arena);
     try env.put("M8_EXCLAMATION_1", "John");
-    try env.put("M8_EXCLAMATION_1_ask_1", "yes");
+    try env.put("M8_EXCLAMATION_1_ask", "yes");
     try env.put("PATH", "/bin");
     const own = try unanswered(arena, &env);
     try std.testing.expectEqual(@as(usize, 1), own.count());

@@ -26,7 +26,7 @@
 > :shield:workbench
 > :shield:contain-reads
 > :shield:no-writes
-> `m8` `call` `m8` `munge` `{{pages}}` `read` `{{path|}}`
+> `m8` `call` `m8` `munge` `{{pages}}` `read` `--` `{{path|}}`
 > * path string
 >   Path of the file to read (relative, absolute, or ~).
 > * pages? string
@@ -39,7 +39,7 @@
 > :shield:workbench
 > :shield:contain-reads
 > :shield:no-writes
-> `m8` `call` `m8` `munge` `read` `{{path|}}`
+> `m8` `call` `m8` `munge` `read` `--` `{{path|}}`
 > * path string
 >   Path of the directory to inspect (relative, absolute, or ~).
 >   Use "." for the project root.
@@ -52,7 +52,7 @@
 > > Pages may be used to scope matches.
 > :shield:workbench
 > :shield:contain-reads
-> `m8` `call` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `{{path|}}` `{{new_string|}}`
+> `m8` `call` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
 > * path string
 >   Path of the file to edit or create (relative, absolute, or ~).
 > * old_string? string

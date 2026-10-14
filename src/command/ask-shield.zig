@@ -23,12 +23,11 @@ fn run(ctx: Ctx) !u8 {
     // Who it stands as, which is who it asks as and what its answer is
     // called. Run by hand there is no answer, which is a question nobody has
     // answered yet like any other.
-    const name = if (w.head.len > 0) w.head[0] else "ask_1";
-    const said = ctx.env.get(try std.fmt.allocPrint(ctx.arena, "{s}1_{s}", .{ api.exclamation, name }));
+    const said = ctx.env.get(try std.fmt.allocPrint(ctx.arena, "{s}1_{s}", .{ api.exclamation, w.name }));
 
     const answer = std.mem.trim(u8, said orelse {
         try ctx.err.print("{s}{s}{s}: run this? [yes/no]\n{s}\n", .{
-            api.ask_lead, api.asks_shield, name, try std.mem.join(ctx.arena, " ", w.argv),
+            api.ask_lead, api.asks_shield, w.name, try std.mem.join(ctx.arena, " ", w.argv),
         });
         return api.ask_exit;
     }, " \t\r\n");
@@ -46,10 +45,10 @@ fn run(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     _ = ctx;
     try out.writeAll(
-        \\  m8 ask-shield [NAME] -- CMD [ARGS]
+        \\  m8 ask-shield NAME CMD [ARGS]
         \\
-        \\NAME is who it asks as, which a shield definition says with
-        \\{{SHIELD}}. Without one it is ask_1.
+        \\NAME is who it asks as, which is the shield's own name: every
+        \\shield is handed its name before the command it wraps.
         \\
         \\It stops with the command as a question, which the run that made
         \\the call puts to the person as a ❓. What they say next is the
