@@ -410,7 +410,7 @@ pub fn outstanding(arena: Allocator, records: []const doc.Record) ![]const doc.R
     var out: std.ArrayList(doc.Record) = .empty;
     for (records) |r| switch (r.sigil) {
         .call => try out.append(arena, r),
-        .result, .ok, .failed => {
+        .result, .link, .ok, .failed => {
             const id = std.mem.trim(u8, r.value, " \t");
             var i: usize = 0;
             while (i < out.items.len) {

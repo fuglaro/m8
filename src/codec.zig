@@ -28,6 +28,7 @@ const Sigil = @import("m8/sigil.zig").Sigil;
 const modelform = @import("m8/model.zig");
 const ledger = @import("ledger.zig");
 const toolbox = @import("toolbox.zig");
+const link = @import("link.zig");
 
 pub const Error = error{UnknownCodec};
 
@@ -57,6 +58,19 @@ pub const Target = struct {
     /// The spelling to write, for a codec whose wire format is m8 itself.
     mode: doc.Mode = .md,
 };
+
+/// What a line of a 🔗 says of a file `encode` handed over: its type, where
+/// the api finds it, and its name. The uri is a `data:` url carrying the file
+/// whole, `ref:` and the id the api knows it by, or a url the api fetches
+/// itself. Null for any other line; a file never handed over, for want of an
+/// `upload`, cannot be sent.
+pub fn handed(line: []const u8) !?[3][]const u8 {
+    if (std.mem.startsWith(u8, line, link.file_lead)) return error.NoUpload;
+    const said = std.mem.cutPrefix(u8, line, link.hand_lead) orelse return null;
+    const mime, const rest = std.mem.cutScalar(u8, said, ' ') orelse .{ said, "" };
+    const uri, const name = std.mem.cutScalar(u8, rest, ' ') orelse .{ rest, "" };
+    return .{ mime, uri, name };
+}
 
 /// Where a reply goes as it arrives.
 ///

@@ -141,7 +141,7 @@ fn run(
     var end = start;
     while (end < records.len) : (end += 1) {
         switch (records[end].sigil) {
-            .call, .result, .ok, .failed => {},
+            .call, .result, .link, .ok, .failed => {},
             else => break,
         }
     }
@@ -172,11 +172,17 @@ fn run(
     try s.endArray();
     try s.endObject();
 
+    // A tool message holds text alone, so the files handed over are shown
+    // in a message of the person's after every answer, which is as near to
+    // the answer as this api lets them stand.
+    var shown: std.ArrayList([]const u8) = .empty;
     for (records[start..end]) |r| {
         if (r.sigil != .call) continue;
-        if (try answerTo(arena, records, claimed, start, callId(r.value))) |back|
-            try simple(s, "tool", back, callId(r.value));
+        const back = (try answerTo(arena, records, claimed, start, callId(r.value))) orelse continue;
+        try shown.appendSlice(arena, back.links);
+        try simple(s, "tool", back.said, callId(r.value));
     }
+    if (shown.items.len > 0) try showFiles(s, shown.items);
 
     // Anything in the run that answered no call of this run belongs here all
     // the same; the ledger is what says so.
@@ -209,13 +215,14 @@ fn answerTo(
     claimed: []bool,
     from: usize,
     id: []const u8,
-) !?[]const u8 {
+) !?Answer {
     var said: std.ArrayList(u8) = .empty;
+    var links: std.ArrayList([]const u8) = .empty;
     var found = false;
 
     for (records[from..], from..) |r, idx| {
         switch (r.sigil) {
-            .result, .ok, .failed => {},
+            .result, .link, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
@@ -223,6 +230,10 @@ fn answerTo(
 
         claimed[idx] = true;
         found = true;
+        if (r.sigil == .link) {
+            try links.append(arena, r.content orelse "");
+            continue;
+        }
         const content = r.content orelse continue;
         if (content.len == 0) continue;
         if (said.items.len > 0) try said.append(arena, '\n');
@@ -232,7 +243,55 @@ fn answerTo(
         // call made again rather than this one.
         if (r.sigil != .result) break;
     }
-    return if (found) said.items else null;
+    return if (found) .{ .said = said.items, .links = links.items } else null;
+}
+
+/// What answered a call: what was said, and the 🔗 blocks beside it.
+const Answer = struct { said: []const u8, links: []const []const u8 };
+
+/// Files a tool handed over, as one message of the person's.
+fn showFiles(s: *std.json.Stringify, links: []const []const u8) !void {
+    try s.beginObject();
+    try s.objectField("role");
+    try s.write("user");
+    try s.objectField("content");
+    try s.beginArray();
+    for (links) |content| {
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        while (lines.next()) |line| {
+            const mime, const uri, const name = (try api.handed(line)) orelse continue;
+            const ref = std.mem.cutPrefix(u8, uri, "ref:");
+            try s.beginObject();
+            try s.objectField("type");
+            if (std.mem.startsWith(u8, mime, "image/")) {
+                // An image part here takes a url and nothing else.
+                if (ref != null) return error.UnsupportedLink;
+                try s.write("image_url");
+                try s.objectField("image_url");
+                try s.beginObject();
+                try s.objectField("url");
+                try s.write(uri);
+                try s.endObject();
+            } else {
+                try s.write("file");
+                try s.objectField("file");
+                try s.beginObject();
+                if (ref) |id| {
+                    try s.objectField("file_id");
+                    try s.write(id);
+                } else {
+                    try s.objectField("filename");
+                    try s.write(name);
+                    try s.objectField("file_data");
+                    try s.write(uri);
+                }
+                try s.endObject();
+            }
+            try s.endObject();
+        }
+    }
+    try s.endArray();
+    try s.endObject();
 }
 
 fn simple(s: *std.json.Stringify, role: []const u8, content: []const u8, call_id: []const u8) !void {
@@ -843,4 +902,28 @@ test "a response that says nothing is nothing, not a failure" {
     const reply = try parse(arena, &empty, collect.sink());
     try testing.expectEqualStrings("", try collect.got.said(arena));
     try testing.expectEqual(@as(usize, 0), reply.calls.len);
+}
+
+test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var records = [_]doc.Record{
+        .{ .sigil = .call, .value = "see,c1", .content = "* file `a.jpeg`" },
+        .{ .sigil = .result, .value = "c1", .content = "here" },
+        .{ .sigil = .link, .value = "c1", .content = ">image/jpeg data:image/jpeg;base64,YWJj a.jpeg\n>application/pdf data:application/pdf;base64,YWJj b.pdf" },
+        .{ .sigil = .ok, .value = "c1" },
+    };
+    const body = try encode(arena, &records, .{ .model = "m" });
+    try testing.expect(std.mem.indexOf(u8, body, \\{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,YWJj"}},{"type":"file","file":{"filename":"b.pdf","file_data":"data:application/pdf;base64,YWJj"}}]}
+    ) != null);
+
+    // An image part takes a url alone, so an uploaded image cannot be shown.
+    records[2].content = ">image/jpeg ref:file-a a.jpeg";
+    try testing.expectError(error.UnsupportedLink, encode(arena, &records, .{ .model = "m" }));
+
+    // A file never handed over, for want of an upload, cannot be sent.
+    records[2].content = "<a.jpeg";
+    try testing.expectError(error.NoUpload, encode(arena, &records, .{ .model = "m" }));
 }

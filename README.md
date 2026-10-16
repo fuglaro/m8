@@ -974,7 +974,8 @@ arrived is the one that is read.
 ### Calling
 
 ```bash
-m8 call PROG [ARGS]     a program from the environment
+m8 call PROG [ARGS]             a program from the environment
+m8 call --no-wrap PROG [ARGS]   one that writes its own records
 ```
 
 `call` runs a program and writes its answer as m8.
@@ -997,6 +998,10 @@ Output is m8: what the program writes becomes a 🧾
 receipt, written as it arrives rather than gathered
 up, and then 🟢 or 🚫 for how it ended. Both name the
 call in `M8_CALL_ID`, when there is one.
+
+`--no-wrap` passes what the program wrote through as
+records, such as a 🔗 for files it hands over, and adds
+the verdict. See Handing Over Files.
 
 Because the receipt streams, a tool may write more
 than there is memory to hold and m8 will not hold it.
@@ -1132,6 +1137,9 @@ Query:
 
 ▐ 🧾Call ID
 │ Response
+
+▐ 🔗Call ID
+│ <path/to/file.jpeg
 
 ▐ 🟢Call ID
 ```
@@ -1293,6 +1301,7 @@ renders markdown renders them. A tty gets `m8`.
   * 🔏 signature -> `:lock_with_ink_pen:`
 * 📲 call -> `:calling:`
 * 🧾 result -> `:receipt:`
+* 🔗 link -> `:link:`
 * 🟢 ok -> `:green_circle:`
 * 🚫 failed -> `:no_entry_sign:`
 * 📚 skill -> `:books:`
@@ -1316,7 +1325,7 @@ variable configuration.
 
 * Value only: 🧠 📚 🔏 🟢 💭
 * Content only: 🙋 🧭
-* Both: 🤖 🧰 📲 🧾 🚫 🛡️ 🏃 ❓ ❗
+* Both: 🤖 🧰 📲 🧾 🔗 🚫 🛡️ 🏃 ❓ ❗
 * Neither: 🔝
 
 ### Stopping Short
@@ -1393,6 +1402,148 @@ possible, and must interpret a value-only 💭 as thought text when reading it.
   * The 🧠 shown is the file written.
 * `m8 send` keeps nothing, so what it writes carries the `💭snip` whole.
   * `tag` writes the snip with the turn.
+
+### Handing Over Files
+
+A 🔗 hands files to the model beside what a tool said.
+
+```m8
+▐ 📲see,c1
+│ * file `shot.png`
+
+▐ 🔗c1
+│ <+/crew/^/shot_9f86d081b8.jpeg (9f86d081b8…)
+
+▐ 🟢c1
+```
+
+* Its value is the call it answers, as a 🧾's is.
+* Each line opening with `<` names a file.
+  * m8 reads no further: the rest is between the tool that
+    wrote it and the entry's `upload`.
+  * In what `encode` hands a codec, each is written over as
+    `>MIME URI NAME`, as `upload` said it. See Uploading.
+* Cody's `see` and the scripts below agree on
+  `<path (SHA-256)`.
+  * The path is absolute, or relative to a config
+    directory, found nearest first as a name is.
+  * The hash is what the file held when it was linked. The
+    scripts refuse a file that holds anything else, so a
+    tool hands over only what it could read.
+  * An `upload` that skips the check trusts every tool's
+    links, whatever they name.
+* Where a file lives, and whether it stays, is the tool's.
+  * `see` writes into its mob's `^/`, as the file's name
+    with `_` and the first 10 characters of its SHA-256
+    before the extension.
+* A tool writes its 🔗 itself, through `m8 call --no-wrap`.
+  See Calling.
+* How a file reaches a model is the provider entry's
+  `upload`. See Uploading.
+  * Chat completions shows them in a message of the
+    person's after the answers, since a tool message holds
+    text alone.
+
+#### Uploading
+
+An entry's `upload` says how each file a 🔗 names reaches the
+api: carried whole in every request, or uploaded once and
+named by the id the api gave back.
+
+```json
+"openai": {
+  "cmd": ["m8", "url-provider"],
+  "encode": ["m8", "encode", "openai-responses"],
+  "parse": ["m8", "parse", "openai-responses"],
+  "url": "https://api.openai.com/v1/responses",
+  "files-url": "https://api.openai.com/v1/files",
+  "upload": "…one of the scripts below, as one string…",
+  "header-authorization": "echo Bearer $(cat ~/.openai/key)"
+}
+```
+
+* `upload` is a command that says one line of a file:
+  `MIME URI NAME`.
+  * `$1` is the 🔗's line after its `<`, as written.
+  * `$2` is the config directory m8 keeps things in, the
+    nearest, for whatever the command keeps.
+  * It arrives as `M8_PROVIDER_UPLOAD`, as any string does,
+    and `encode` runs it.
+  * One that fails, or says no such line, fails the encode,
+    which is how an entry turns down a file its models do
+    not take.
+* `encode` runs `upload` for every file before the codec
+  sees the ledger.
+* With no `upload`, a 🔗 fails the encode.
+* m8 holds no view of the line. The codecs it ships read it:
+  * a `data:` url carries the file whole;
+  * `ref:` and an id names a file the api has;
+  * any other url is for the api to fetch.
+  * NAME is the file's, for an api that wants one.
+  * A type opening with `image/` goes as an image, anything
+    else as a file.
+  * Chat completions names no image by id, so a `ref:`
+    image fails there.
+
+Both of these read `<path (SHA-256)`. They find the path
+through `M8_ST8_DIRS`, copy the file once, and refuse it
+when its hash is not the one linked.
+
+This one carries a file whole, and suits every codec:
+
+```bash
+p=${1% (*} h=${1##* (} h=${h%)}; n=${p##*/}
+case $n in
+  *.jpeg|*.jpg) m=image/jpeg ;; *.png) m=image/png ;; *.gif) m=image/gif ;;
+  *.webp) m=image/webp ;; *.pdf) m=application/pdf ;;
+  *) echo "upload: no type for $n" >&2; exit 1 ;;
+esac
+case $p in /*) f=$p ;; *) f= IFS=:; for d in $M8_ST8_DIRS; do [ -e "$d/$p" ] && { f=$d/$p; break; }; done; unset IFS ;; esac
+[ -n "$f" ] || { echo "upload: no $p" >&2; exit 1; }
+t=$(mktemp -d) && trap 'rm -rf "$t"' EXIT && c=$t/$n && cat -- "$f" >"$c" || exit
+[ "$(shasum -a 256 <"$c" | cut -c1-64)" = "$h" ] || { echo "upload: $p is not the file linked" >&2; exit 1; }
+printf '%s data:%s;base64,' $m $m; base64 <"$c" | tr -d '\n'; printf ' %s' "$n"
+```
+
+This one uploads to OpenAI, once per file:
+
+```bash
+p=${1% (*} h=${1##* (} h=${h%)}; n=${p##*/}
+case $n in
+  *.jpeg|*.jpg) m=image/jpeg ;; *.png) m=image/png ;; *.gif) m=image/gif ;;
+  *.webp) m=image/webp ;; *.pdf) m=application/pdf ;;
+  *) echo "upload: no type for $n" >&2; exit 1 ;;
+esac
+case $p in /*) f=$p ;; *) f= IFS=:; for d in $M8_ST8_DIRS; do [ -e "$d/$p" ] && { f=$d/$p; break; }; done; unset IFS ;; esac
+[ -n "$f" ] || { echo "upload: no $p" >&2; exit 1; }
+t=$(mktemp -d) && trap 'rm -rf "$t"' EXIT && c=$t/$n && cat -- "$f" >"$c" || exit
+[ "$(shasum -a 256 <"$c" | cut -c1-64)" = "$h" ] || { echo "upload: $p is not the file linked" >&2; exit 1; }
+[ -n "$2" ] || { echo "upload: no config directory to cache in" >&2; exit 1; }
+u=$M8_PROVIDER_FILES_URL k=$2/cache/openai/${M8_PROVIDER_ACCOUNT:-_}/uploads/$h.txt
+id() { grep -o '"id": *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; }
+i=$(cat "$k" 2>/dev/null)
+[ -n "$i" ] && [ "$("$M8" url-provider --get "$u/$i" | id)" = "$i" ] && { echo "$m ref:$i $n"; exit; }
+case $m in image/*) q=vision ;; *) q=user_data ;; esac
+i=$("$M8" url-provider --upload "$u" "$c" purpose=$q | id)
+[ -n "$i" ] || { echo "upload: no id for $n" >&2; exit 1; }
+mkdir -p "${k%/*}" && printf %s "$i" >"$k" && echo "$m ref:$i $n"
+```
+
+* `m8 url-provider --upload URL FILE [NAME=VALUE]...` posts a
+  file as a form, with the entry's headers.
+  * The file goes up under its own name, so the script
+    copies it to one named the same.
+* Remembering what was uploaded is the command's business.
+  * This one keeps each id in that directory's `cache/`,
+    under the SHA-256 the 🔗 gave, once it has checked it.
+  * `account` in the entry names whose ids they are, `_`
+    when unsaid, so two keys never share one.
+  * An image goes up as `vision` and a pdf as `user_data`,
+    the purposes OpenAI names for each.
+  * Before using an id again it asks whether the api still
+    has the file, and uploads it again when it does not.
+  * Anthropic's files api takes no `purpose`; a script for
+    it leaves that field off.
 
 ### Tops
 
@@ -2049,6 +2200,9 @@ working directory and searching outwards:
     nothing is read from or written there, and an agent it
     defines keeps its chats and scratch in the nearest
     config.
+* An m8 a provider or a call starts is told the list as
+  `M8_ST8_DIRS`, and searches no further.
+  * Unset it to search afresh, as from another project.
 
 `core/` holds what a restriction *means* and what a provider
 *is*, and is searched the same way.
@@ -2079,6 +2233,7 @@ config directory is nothing a name can reach.
     mathy/+/tduyxbutjb.md     @mathy/+/tduyxbutjb
     mathy/aside/+.md          @mathy/aside
     team/.tmpdir/             the team mob's scratch
+    team/^/a_9f86d081b8.jpeg  a file the team mob handed over
     +/psbarddrym.md           a turn a model answered
 ```
 
@@ -2334,7 +2489,8 @@ Every string in the entry is handed to all three as
 `M8_PROVIDER_*` on top of the inherited environment, and
 means whatever a command makes of it. `url` arrives as
 `M8_PROVIDER_URL`, `api-version` as
-`M8_PROVIDER_API_VERSION`. Only string values with
+`M8_PROVIDER_API_VERSION`. A number or a truth goes as its
+JSON text, so `true` arrives as `true`. Only those with
 lowercase-and-hyphen keys go, because only those have a name
 to take. The commands stay behind — each already knows what
 it is.
@@ -2382,7 +2538,8 @@ m8 models local codex      the ones named
     the command's business, beside the url that needs them.
   * A list that cannot be fetched is a `printf` of names.
 * `m8 url-provider --get URL` asks a url with the entry's
-  headers, so a key is not spelled out twice.
+  headers, so a key is not spelled out twice. `--upload`
+  posts a file the same way; see Uploading.
   * `models-url` is no key of m8's: it arrives as
     `M8_PROVIDER_MODELS_URL` like any other string.
 * A provider with no `models` is left out.
@@ -2553,6 +2710,8 @@ M8               absolute path of the m8 launcher running it;
 M8_VERBOSITY      1 under -v, 2 under -vv; a tool is handed
                   it too, and an m8 started with it set says
                   as much without being asked
+M8_ST8_DIRS       the config directories found, nearest
+                  first, : between
 ```
 
 And what a provider's commands are handed as well:

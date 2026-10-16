@@ -38,6 +38,10 @@ pub const Sigil = enum {
     // went. 🧾 is what the tool said; 🟢 and 🚫 are the verdict, which is only
     // known once it has stopped saying it.
     result,
+    // 🔗 hands over files beside what a tool said, one `<path` line each. It
+    // names its call as 🧾 does, and is kept by copying what it names into
+    // the turn's `+/`, so what the ledger says was seen cannot change after.
+    link,
     ok,
     failed,
     skill,
@@ -77,6 +81,7 @@ pub const Sigil = enum {
             .signature => "\u{1F50F}", // 🔏
             .call => "\u{1F4F2}", // 📲
             .result => "\u{1F9FE}", // 🧾
+            .link => "\u{1F517}", // 🔗
             .ok => "\u{1F7E2}", // 🟢
             .failed => "\u{1F6AB}", // 🚫
             .skill => "\u{1F4DA}", // 📚
@@ -105,6 +110,7 @@ pub const Sigil = enum {
             .signature => ":lock_with_ink_pen:",
             .call => ":calling:",
             .result => ":receipt:",
+            .link => ":link:",
             .ok => ":green_circle:",
             .failed => ":no_entry_sign:",
             .skill => ":books:",
@@ -269,6 +275,7 @@ test "every plain spelling is the gemoji shortcode for its own emoji" {
         .{ .sigil = .signature, .cp = 0x1F50F, .word = ":lock_with_ink_pen:" },
         .{ .sigil = .call, .cp = 0x1F4F2, .word = ":calling:" },
         .{ .sigil = .result, .cp = 0x1F9FE, .word = ":receipt:" },
+        .{ .sigil = .link, .cp = 0x1F517, .word = ":link:" },
         .{ .sigil = .ok, .cp = 0x1F7E2, .word = ":green_circle:" },
         .{ .sigil = .failed, .cp = 0x1F6AB, .word = ":no_entry_sign:" },
         .{ .sigil = .skill, .cp = 0x1F4DA, .word = ":books:" },

@@ -180,17 +180,17 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                 try s.write(try toolbox.parseArgs(arena, .md, r.content orelse ""));
                 try s.endObject();
             },
-            .result, .ok, .failed => {
+            .result, .link, .ok, .failed => {
                 if (claimed[i]) continue;
                 const id = std.mem.trim(u8, r.value, " \t");
-                const said = try answerTo(arena, records, claimed, i, id);
+                const a = try answerTo(arena, records, claimed, i, id);
                 try s.beginObject();
                 try s.objectField("type");
                 try s.write("function_call_output");
                 try s.objectField("call_id");
                 try s.write(id);
                 try s.objectField("output");
-                try s.write(said);
+                try writeOutput(s, a.said, a.links);
                 try s.endObject();
             },
             else => {},
@@ -211,24 +211,76 @@ fn answerTo(
     claimed: []bool,
     from: usize,
     id: []const u8,
-) ![]const u8 {
+) !Answer {
     var said: std.ArrayList(u8) = .empty;
+    var links: std.ArrayList([]const u8) = .empty;
     for (records[from..], from..) |r, idx| {
         switch (r.sigil) {
-            .result, .ok, .failed => {},
+            .result, .link, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
         if (!std.mem.eql(u8, std.mem.trim(u8, r.value, " \t"), id)) continue;
 
         claimed[idx] = true;
+        if (r.sigil == .link) {
+            try links.append(arena, r.content orelse "");
+            continue;
+        }
         if (r.content) |content| if (content.len > 0) {
             if (said.items.len > 0) try said.append(arena, '\n');
             try said.appendSlice(arena, content);
         };
         if (r.sigil != .result) break;
     }
-    return said.items;
+    return .{ .said = said.items, .links = links.items };
+}
+
+/// What answered a call: what was said, and the 🔗 blocks beside it.
+const Answer = struct { said: []const u8, links: []const []const u8 };
+
+/// An output is a string, unless files were handed over beside it, when it
+/// is a list of parts.
+fn writeOutput(s: *std.json.Stringify, said: []const u8, links: []const []const u8) !void {
+    if (links.len == 0) return s.write(said);
+    try s.beginArray();
+    if (said.len > 0) try inputText(s, said);
+    for (links) |content| {
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        while (lines.next()) |line| {
+            const mime, const uri, const name = (try api.handed(line)) orelse continue;
+            const image = std.mem.startsWith(u8, mime, "image/");
+            try s.beginObject();
+            try s.objectField("type");
+            try s.write(if (image) "input_image" else "input_file");
+            if (std.mem.cutPrefix(u8, uri, "ref:")) |id| {
+                try s.objectField("file_id");
+                try s.write(id);
+            } else if (image) {
+                try s.objectField("image_url");
+                try s.write(uri);
+            } else if (std.mem.startsWith(u8, uri, "data:")) {
+                try s.objectField("filename");
+                try s.write(name);
+                try s.objectField("file_data");
+                try s.write(uri);
+            } else {
+                try s.objectField("file_url");
+                try s.write(uri);
+            }
+            try s.endObject();
+        }
+    }
+    try s.endArray();
+}
+
+fn inputText(s: *std.json.Stringify, text: []const u8) !void {
+    try s.beginObject();
+    try s.objectField("type");
+    try s.write("input_text");
+    try s.objectField("text");
+    try s.write(text);
+    try s.endObject();
 }
 
 fn message(s: *std.json.Stringify, role: []const u8, content: []const u8) !void {
@@ -1367,4 +1419,34 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[2].value);
     try testing.expect(collect.got.records.items[2].content == null);
+}
+
+test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var records = [_]doc.Record{
+        .{ .sigil = .call, .value = "see,c1", .content = "* file `a.jpeg`" },
+        .{ .sigil = .result, .value = "c1", .content = "here" },
+        .{ .sigil = .link, .value = "c1", .content = ">image/jpeg data:image/jpeg;base64,YWJj a.jpeg\n>application/pdf data:application/pdf;base64,YWJj b.pdf" },
+        .{ .sigil = .ok, .value = "c1" },
+    };
+    const body = try encode(arena, &records, .{ .model = "m" });
+    try testing.expect(std.mem.indexOf(u8, body, \\"output":[{"type":"input_text","text":"here"},{"type":"input_image","image_url":"data:image/jpeg;base64,YWJj"},{"type":"input_file","filename":"b.pdf","file_data":"data:application/pdf;base64,YWJj"}]
+    ) != null);
+
+    records[2].content = ">image/jpeg ref:file-a\n>application/pdf ref:file-b b.pdf";
+    const ids = try encode(arena, &records, .{ .model = "m" });
+    try testing.expect(std.mem.indexOf(u8, ids, \\{"type":"input_image","file_id":"file-a"},{"type":"input_file","file_id":"file-b"}
+    ) != null);
+
+    records[2].content = ">application/pdf https://example.com/b.pdf b.pdf";
+    const url = try encode(arena, &records, .{ .model = "m" });
+    try testing.expect(std.mem.indexOf(u8, url, \\{"type":"input_file","file_url":"https://example.com/b.pdf"}
+    ) != null);
+
+    // A file never handed over, for want of an upload, cannot be sent.
+    records[2].content = "<a.jpeg";
+    try testing.expectError(error.NoUpload, encode(arena, &records, .{ .model = "m" }));
 }

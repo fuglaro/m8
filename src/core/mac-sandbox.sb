@@ -119,8 +119,10 @@
   (subpath "/opt/homebrew/bin")       ;;!! !private
   (subpath "/opt/homebrew/lib")       ;;!! !private
   (subpath "/opt/homebrew/Cellar")    ;;!! !private
+  (subpath "/opt/homebrew/opt")       ;;!! !private
   (subpath "/usr/local/bin")          ;;!! !private
   (subpath "/usr/local/lib")          ;;!! !private
+  (subpath "/usr/local/opt")          ;;!! !private
   (subpath "/Library/Frameworks"))    ;;!! !private
 
 (allow file-read* (subpath "/"))      ;;!! !private !contain-reads !contain-reads-home

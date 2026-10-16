@@ -50,8 +50,8 @@ pub const Provider = struct {
     /// What lists the models it serves, one name a line. `m8 models` runs
     /// it; nothing else does.
     models: ?[]const []const u8 = null,
-    /// Everything else the entry said, for the environment. Only string
-    /// values with lowercase-and-hyphen keys make it this far.
+    /// Everything else the entry said, for the environment. Only strings,
+    /// numbers and truths with lowercase-and-hyphen keys make it this far.
     args: []const Arg,
 
     pub fn get(p: Provider, key: []const u8) ?[]const u8 {
@@ -70,9 +70,9 @@ pub const env_prefix = "M8_PROVIDER_";
 
 /// Read an entry, keeping what the command will be given.
 ///
-/// Only string values with lowercase-and-hyphen keys are passed on, because
-/// only those have an environment variable to be: `api-version` arrives as
-/// `M8_PROVIDER_API_VERSION`. Anything else in the entry is m8's business or
+/// Only strings, numbers and truths with lowercase-and-hyphen keys are passed
+/// on, because only those have an environment variable to be: `api-version`
+/// arrives as `M8_PROVIDER_API_VERSION`, and `true` as `true`. Anything else in the entry is m8's business or
 /// nobody's. The commands are left behind — each already knows what it is.
 pub fn read(arena: Allocator, providers: std.json.ObjectMap, name: []const u8) !Provider {
     const v = providers.get(name) orelse return Error.UnknownProvider;
@@ -86,10 +86,17 @@ pub fn read(arena: Allocator, providers: std.json.ObjectMap, name: []const u8) !
     while (it.next()) |e| {
         const key = e.key_ptr.*;
         // The commands are lists, so they stay behind with everything else
-        // that is not a string: a command already knows what it is.
-        if (e.value_ptr.* != .string) continue;
+        // that has no one spelling: a command already knows what it is. A
+        // number or a truth goes as its JSON text.
+        const value = switch (e.value_ptr.*) {
+            .string, .number_string => |t| t,
+            .bool => |b| if (b) "true" else "false",
+            .integer => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
+            .float => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
+            else => continue,
+        };
         if (!nameable(key)) continue;
-        try args.append(arena, .{ .key = key, .value = e.value_ptr.*.string });
+        try args.append(arena, .{ .key = key, .value = value });
     }
 
     return .{
@@ -374,6 +381,8 @@ test "an entry is its commands, and whatever else it wants to say" {
         \\  "key": "cat ~/.key",
         \\  "api-version": "2024-02-01",
         \\  "timeout": 30,
+        \\  "use-cache": true,
+        \\  "headers": {"x": "y"},
         \\  "Weird_Key": "ignored"
         \\}}
     );
@@ -385,13 +394,16 @@ test "an entry is its commands, and whatever else it wants to say" {
     try testing.expectEqual(@as(usize, 2), p.cmd.len);
     try testing.expectEqualStrings("m8", p.cmd[0]);
 
-    // Strings with nameable keys go through; `cmd` never does, and neither
-    // does a number or a key with no environment name to take.
+    // Strings, numbers and truths with nameable keys go through; `cmd`
+    // never does, and neither does an object or a key with no environment
+    // name to take.
     try testing.expectEqualStrings("http://x/v1/chat/completions", p.get("url").?);
     try testing.expectEqualStrings("cat ~/.key", p.get("key").?);
     try testing.expectEqualStrings("2024-02-01", p.get("api-version").?);
     try testing.expect(p.get("cmd") == null);
-    try testing.expect(p.get("timeout") == null);
+    try testing.expectEqualStrings("30", p.get("timeout").?);
+    try testing.expectEqualStrings("true", p.get("use-cache").?);
+    try testing.expect(p.get("headers") == null);
     try testing.expect(p.get("Weird_Key") == null);
 
     try testing.expectEqualStrings("M8_PROVIDER_API_VERSION", try envName(arena, "api-version"));

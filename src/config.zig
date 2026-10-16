@@ -2,7 +2,8 @@
 //!
 //! Config directories are searched nearest first: every `.m8-st8/` from the
 //! working directory upward, the way git finds `.git`, then the user's own,
-//! then the system's.
+//! then the system's. A child m8 runs is told them as `M8_ST8_DIRS`, and
+//! takes them from there rather than finding its own.
 //!
 //! `core/` is searched the same way. A file is taken from the nearest
 //! directory that has one, and `providers.json` is merged through all of them,
@@ -13,9 +14,18 @@ const Allocator = std.mem.Allocator;
 
 pub const max_file = 4 * 1024 * 1024;
 
+/// The config directories m8 found, nearest first and `:` between, as a
+/// child is told them.
+pub const dirs_var = "M8_ST8_DIRS";
+
 /// Config directories, nearest first.
 pub fn discover(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const []const u8 {
     var dirs: std.ArrayList([]const u8) = .empty;
+    if (env.get(dirs_var)) |told| {
+        var it = std.mem.tokenizeScalar(u8, told, ':');
+        while (it.next()) |d| try dirs.append(arena, d);
+        return dirs.toOwnedSlice(arena);
+    }
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const len = std.process.currentPath(io, &buf) catch 0;
@@ -364,6 +374,19 @@ test "core is read from the user's directory and nowhere else" {
     // A project directory arrives with a clone, so it never supplies core.
     var none: std.process.Environ.Map = .init(arena);
     try testing.expect((try core(arena, t.io, &none, "mac-sandbox.sb")) == null);
+}
+
+test "directories a parent told are taken as told" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put(dirs_var, "/p/.m8-st8:/u/m8-st8");
+    const dirs = try discover(arena, undefined, &env);
+    try testing.expectEqual(@as(usize, 2), dirs.len);
+    try testing.expectEqualStrings("/p/.m8-st8", dirs[0]);
+    try testing.expectEqualStrings("/u/m8-st8", dirs[1]);
 }
 
 test "the user directory follows XDG, then HOME" {

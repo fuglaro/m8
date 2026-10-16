@@ -1,6 +1,7 @@
 //! `call` — run a command.
 //!
-//!     m8 call PROG [ARGS]   run a program from the environment
+//!     m8 call PROG [ARGS]             run a program from the environment
+//!     m8 call --no-wrap PROG [ARGS]   one that answers in records itself
 //!
 //! What a command may not do is not asked about here. A 🛡 is the process a
 //! command runs inside, so refusing, asking and confining are all arranged
@@ -36,8 +37,10 @@ pub const command: api.Command = .{
 pub const Error = error{NothingToRun};
 
 fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len == 0) return help(ctx);
-    const expanded = try argline.line(ctx.arena, ctx.env, ctx.err, ctx.args);
+    const unwrapped = ctx.args.len > 0 and std.mem.eql(u8, ctx.args[0], "--no-wrap");
+    const args = if (unwrapped) ctx.args[1..] else ctx.args;
+    if (args.len == 0) return help(ctx);
+    const expanded = try argline.line(ctx.arena, ctx.env, ctx.err, args);
     if (expanded.len == 0) {
         try ctx.err.writeAll("m8 call: everything expanded away\n");
         return Error.NothingToRun;
@@ -48,7 +51,7 @@ fn run(ctx: Ctx) !u8 {
     // nothing.
     var inner = ctx;
     if (ctx.env.get("M8_CALL_ID")) |id| inner.call_id = id;
-    return execute(inner, expanded, .framed);
+    return execute(inner, expanded, if (unwrapped) .unwrapped else .framed);
 }
 
 /// Run an already-built command line.
@@ -70,6 +73,9 @@ pub fn execute(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
 pub const Answer = enum {
     /// Quoted into a 🧾, with a verdict under it. What `m8 call` does.
     framed,
+    /// Records the program wrote itself, such as a 🔗, with the verdict under
+    /// them. What `m8 call --no-wrap` does.
+    unwrapped,
     /// Passed through exactly as it stands. The caller reads the records; it
     /// neither needs nor receives framing from here.
     document,
@@ -155,7 +161,7 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
 
     // The verdict, which is only knowable now. Everything the tool said is
     // already written and already gone.
-    if (wrote) try ctx.out.writeByte('\n');
+    if (wrote and !said.ended) try ctx.out.writeByte('\n');
     if (code == 0) {
         try doc.write(ctx.out, ctx.mode, .{ .sigil = .ok, .value = ctx.call_id });
         return 0;
@@ -192,11 +198,15 @@ const Body = struct {
     w: ?doc.ContentWriter = null,
     held: usize = 0,
     wrote: bool = false,
+    /// Whether what was passed through ended its last line, so a verdict
+    /// after it starts on a line of its own either way.
+    ended: bool = false,
 
     fn write(b: *Body, bytes: []const u8) !void {
         if (!b.frame) {
             if (bytes.len == 0) return;
             b.wrote = true;
+            b.ended = bytes[bytes.len - 1] == '\n';
             return b.out.writeAll(bytes);
         }
         var end = bytes.len;
@@ -305,10 +315,13 @@ fn help(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 call PROG [ARGS]
+        \\  m8 call [--no-wrap] PROG [ARGS]
         \\
         \\The program's stdout becomes a 🧾 receipt, followed by 🟢 or 🚫 for
         \\how it ended. Stdin remains the descriptor call itself was given.
+        \\
+        \\--no-wrap passes stdout through as the records the program wrote,
+        \\such as a 🔗 for files it hands over, and still adds the verdict.
         \\A PROG named `m8` is the current launcher, whose absolute path every
         \\program is also handed as M8.
         \\
@@ -422,4 +435,20 @@ test "a body opens on the first byte and holds the last newline" {
         \\> b
         \\
     , split.written());
+}
+
+test "unwrapped records pass through, and a verdict always starts its own line" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var body: Body = .{ .out = &out.writer, .mode = .md, .call_id = "c1", .frame = false };
+    try body.write("#### :link:c1\n> <a.jpeg");
+    try testing.expect(try body.finish());
+    try testing.expect(!body.ended);
+    try testing.expectEqualStrings("#### :link:c1\n> <a.jpeg", out.written());
+
+    try body.write("\n");
+    try testing.expect(body.ended);
 }

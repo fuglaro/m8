@@ -11,6 +11,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const doc = @import("m8/doc.zig");
+const config = @import("config.zig");
 
 pub const Ctx = struct {
     arena: Allocator,
@@ -74,6 +75,7 @@ pub fn childEnvironment(arena: Allocator, ctx: Ctx, overlays: []const EnvVar) !*
     var verbosity_buf: [3]u8 = undefined;
     const verbosity = try std.fmt.bufPrint(&verbosity_buf, "{}", .{ctx.verbosity});
     try m.put("M8_VERBOSITY", verbosity);
+    try m.put(config.dirs_var, try std.mem.join(arena, ":", try config.discover(arena, ctx.io, ctx.env)));
     const out = try arena.create(std.process.Environ.Map);
     out.* = m;
     return out;
@@ -175,6 +177,7 @@ test "a child environment adds process state without changing its base" {
     var base: std.process.Environ.Map = .init(arena);
     try base.put("KEPT", "yes");
     try base.put("M8", "/wrong");
+    try base.put(config.dirs_var, "/p/.m8-st8:/u/m8-st8");
     var out: std.Io.Writer.Allocating = .init(arena);
     const ctx: Ctx = .{
         .arena = arena,
@@ -195,6 +198,7 @@ test "a child environment adds process state without changing its base" {
     try std.testing.expectEqualStrings("2", child.get("M8_VERBOSITY").?);
     try std.testing.expectEqualStrings("yes", child.get("KEPT").?);
     try std.testing.expectEqualStrings("one", child.get("EXTRA").?);
+    try std.testing.expectEqualStrings("/p/.m8-st8:/u/m8-st8", child.get(config.dirs_var).?);
 }
 
 test "only a leading long help option asks for help" {

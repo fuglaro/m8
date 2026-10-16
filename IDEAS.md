@@ -44,19 +44,13 @@
 * Tool response terminal rendering (esp. diffs)
 * Directive to snip some tool responses.
 
-### MAYBE: Attachments
+### Media Extras
 
-* Why maybe - a new sigil against a closed set; could a reference do it?
-* Media:
-  * Images and other binaries.
-  * Sent by reference.
-  * Needs a sigil or reference form.
-  * Must respect the sandbox.
-  * Media workflows -> gen image -> see image -> show image (colored ascii rendering).
-    Maybe with a text-image format we find/make??? Custom markdown? ```palettemap...
-    Leveraging unicode colors as a LUT??? Needs to be reasonably
-    cross-common-font compatible so constraining to some common standardised ones
-    is crucial - if even possible. 2 char wide grid?
+* Media workflows -> gen image -> see image -> show image (colored ascii rendering).
+  Maybe with a text-image format we find/make??? Custom markdown? ```palettemap...
+  Leveraging unicode colors as a LUT??? Needs to be reasonably
+  cross-common-font compatible so constraining to some common standardised ones
+  is crucial - if even possible. 2 char wide grid?
 
 ### Tool loop de-opinion
 

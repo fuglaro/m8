@@ -15,6 +15,7 @@ const agent = @import("../agent.zig");
 const ledger = @import("../ledger.zig");
 const doc = @import("../m8/doc.zig");
 const api = @import("../api.zig");
+const link = @import("../link.zig");
 const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
@@ -65,7 +66,9 @@ fn run(ctx: Ctx) !u8 {
         .{ .names = breaks.items },
     );
 
-    try ctx.out.writeAll(try c.encode(arena, expanded.records, try target(ctx, expanded.records)));
+    const env = try api.childEnvironment(arena, ctx, &.{});
+    const records = try link.handOver(arena, ctx.io, dirs, env, expanded.records);
+    try ctx.out.writeAll(try c.encode(arena, records, try target(ctx, expanded.records)));
     return 0;
 }
 
@@ -100,7 +103,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\Encoding is total and loses whatever the target cannot say, which is
         \\what makes it a projection: the ledger it came from still holds all
         \\of it. `m8` is the one format whose view is the whole ledger, which
-        \\is why `encode m8` is how a chat becomes one flat document.
+        \\is why `encode m8` is how a chat becomes one flat document. A file a
+        \\🔗 names goes as its provider entry's `upload` says, and with no
+        \\`upload`, or one that fails, is an error.
         \\
         \\`--break NAME` leaves a 🧠 naming NAME as it was written rather than
         \\expanding it, so what comes out is the ledger from there on. NAME is

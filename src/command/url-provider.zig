@@ -37,10 +37,13 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  ... | m8 url-provider
         \\  m8 url-provider --get URL
+        \\  m8 url-provider --upload URL FILE [NAME=VALUE]...
         \\
         \\Posts stdin to $M8_PROVIDER_URL as JSON and writes the response to
         \\stdout as it arrives. `--get URL` sends a GET to URL instead, with
-        \\the same headers, and reads no stdin.
+        \\the same headers, and reads no stdin. `--upload` posts FILE to URL
+        \\as a form, its field `file`, with each NAME=VALUE as a field beside
+        \\it.
         \\
         \\A response is passed on whatever its status. Only a url that cannot
         \\be reached is a failure.
@@ -78,8 +81,31 @@ fn run(ctx: Ctx) !u8 {
             try ctx.err.writeAll("m8 url-provider: --get takes one url\n");
             return 1;
         }
-        if (comptime no_curl_dep) return runStdlib(ctx, ctx.args[1], .GET);
-        return runCurl(ctx, ctx.args[1], true);
+        if (comptime no_curl_dep) return runStdlib(ctx, ctx.args[1], null, "");
+        return runCurl(ctx, &.{ get_script, "m8 url-provider", ctx.args[1] }, .ignore);
+    }
+    // Handing over a file, as a form.
+    if (ctx.args.len > 0 and std.mem.eql(u8, ctx.args[0], "--upload")) {
+        if (ctx.args.len < 3) {
+            try ctx.err.writeAll("m8 url-provider: --upload takes a url and a file\n");
+            return 1;
+        }
+        if (comptime no_curl_dep) {
+            var random: [12]u8 = undefined;
+            ctx.io.random(&random);
+            const boundary = try std.fmt.allocPrint(ctx.arena, "m8-{x}", .{&random});
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io, ctx.args[2], ctx.arena, .unlimited);
+            return runStdlib(
+                ctx,
+                ctx.args[1],
+                try form(ctx.arena, boundary, std.fs.path.basename(ctx.args[2]), bytes, ctx.args[3..]),
+                try std.fmt.allocPrint(ctx.arena, "multipart/form-data; boundary={s}", .{boundary}),
+            );
+        }
+        var argv: std.ArrayList([]const u8) = .empty;
+        try argv.appendSlice(ctx.arena, &.{ upload_script, "m8 url-provider" });
+        try argv.appendSlice(ctx.arena, ctx.args[1..]);
+        return runCurl(ctx, argv.items, .ignore);
     }
 
     // m8 runs a provider with a pipe on stdin. A terminal is nobody piping a
@@ -100,22 +126,22 @@ fn run(ctx: Ctx) !u8 {
     // This is a comptime choice, not a runtime mode. In particular, the
     // curl build never references std.http.Client and the stdlib build never
     // carries the curl command line or its curl-spawn path.
-    if (comptime no_curl_dep) return runStdlib(ctx, endpoint, .POST);
-    return runCurl(ctx, endpoint, false);
+    if (comptime no_curl_dep) {
+        var in_buf: [64 * 1024]u8 = undefined;
+        var input = std.Io.File.stdin().readerStreaming(ctx.io, &in_buf);
+        return runStdlib(ctx, endpoint, try input.interface.allocRemaining(ctx.arena, .unlimited), "application/json");
+    }
+    return runCurl(ctx, &.{ script, "m8 url-provider", endpoint }, .inherit);
 }
 
 /// The no-curl transport. The stdlib client owns TLS and certificate lookup,
 /// which is the useful tradeoff for a self-contained binary. Keep this
 /// deliberately behind the comptime branch above: std.http is a substantial
 /// dependency and should not affect the default curl build.
-fn runStdlib(ctx: Ctx, endpoint: []const u8, method: std.http.Method) !u8 {
-    var in_buf: [64 * 1024]u8 = undefined;
-    var input = std.Io.File.stdin().readerStreaming(ctx.io, &in_buf);
-    const request_body: []const u8 = if (method == .POST)
-        try input.interface.allocRemaining(ctx.arena, .unlimited)
-    else
-        "";
-
+///
+/// `body` is posted as `content_type`; with none, it is a GET.
+fn runStdlib(ctx: Ctx, endpoint: []const u8, body: ?[]const u8, content_type: []const u8) !u8 {
+    const method: std.http.Method = if (body == null) .GET else .POST;
     var extra: std.ArrayList(std.http.Header) = .empty;
     try headersStdlib(ctx, &extra);
 
@@ -131,7 +157,7 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8, method: std.http.Method) !u8 {
     // passed on as it is, and nothing here would undo a compressed body.
     var req = client.request(method, uri, .{
         .headers = .{
-            .content_type = if (method == .POST) .{ .override = "application/json" } else .default,
+            .content_type = if (body != null) .{ .override = content_type } else .default,
             .accept_encoding = .omit,
         },
         .extra_headers = extra.items,
@@ -141,7 +167,7 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8, method: std.http.Method) !u8 {
     };
     defer req.deinit();
 
-    (if (method == .POST) req.sendBodyComplete(@constCast(request_body)) else req.sendBodiless()) catch |e| {
+    (if (body) |b| req.sendBodyComplete(@constCast(b)) else req.sendBodiless()) catch |e| {
         try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
         return 1;
     };
@@ -169,9 +195,32 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8, method: std.http.Method) !u8 {
     return 0;
 }
 
+/// A file as a form, as curl's `-F file=@FILE` sends it, with each
+/// NAME=VALUE as a field beside it. The file goes as bytes, its name saying
+/// what it is: knowing a type from an extension would take a table.
+fn form(
+    arena: std.mem.Allocator,
+    boundary: []const u8,
+    name: []const u8,
+    bytes: []const u8,
+    fields: []const []const u8,
+) ![]const u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const w = &out.writer;
+    try w.print("--{s}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{s}\"\r\n" ++
+        "Content-Type: application/octet-stream\r\n\r\n", .{ boundary, name });
+    try w.writeAll(bytes);
+    for (fields) |field| {
+        const key, const value = std.mem.cutScalar(u8, field, '=') orelse .{ field, "" };
+        try w.print("\r\n--{s}\r\nContent-Disposition: form-data; name=\"{s}\"\r\n\r\n{s}", .{ boundary, key, value });
+    }
+    try w.print("\r\n--{s}--\r\n", .{boundary});
+    return out.written();
+}
+
 /// The default transport. curl keeps TLS, certificates, proxies and HTTP out
 /// of the executable, which is why it is the small build.
-fn runCurl(ctx: Ctx, endpoint: []const u8, get: bool) !u8 {
+fn runCurl(ctx: Ctx, args: []const []const u8, stdin: std.process.SpawnOptions.StdIo) !u8 {
     var lines: std.ArrayList(u8) = .empty;
     try headers(ctx, &lines);
 
@@ -185,10 +234,13 @@ fn runCurl(ctx: Ctx, endpoint: []const u8, get: bool) !u8 {
     // No `--fail`. A status that is not 200 still has a body, and the body is
     // what the api said — the codec reads it as it reads any other answer.
     // What is left to fail is the reaching itself, which curl says on stderr.
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(ctx.arena, &.{ "sh", "-c" });
+    try argv.appendSlice(ctx.arena, args);
     var child = std.process.spawn(ctx.io, .{
-        .argv = &.{ "sh", "-c", if (get) get_script else script, "m8 url-provider", endpoint },
+        .argv = argv.items,
         .environ_map = environ,
-        .stdin = if (get) .ignore else .inherit,
+        .stdin = stdin,
         .stdout = .inherit,
         .stderr = .inherit,
     }) catch |e| {
@@ -216,6 +268,15 @@ const script =
 /// The same, asking rather than posting: no body, so nothing says what one is.
 const get_script =
     \\exec curl -sS -N -H @/dev/fd/3 "$1"
+++ heredoc;
+
+/// The same, handing over a file: `$2` as the field `file`, and every other
+/// argument as a field of its own, sent as written rather than read as curl
+/// would read an `@` or a `<`.
+const upload_script =
+    \\u=$1 f=$2; shift 2
+    \\for a; do set -- "$@" --form-string "$a"; shift; done
+    \\exec curl -sS -H @/dev/fd/3 -F "file=@$f" "$@" "$u"
 ++ heredoc;
 
 const heredoc =
@@ -329,4 +390,17 @@ test "the page names what it reads" {
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_URL") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_HEADER_") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), if (no_curl_dep) "own HTTP client" else "`curl`") != null);
+}
+
+test "a file goes up as a form, with its fields beside it" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    try std.testing.expectEqualStrings(
+        "--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.jpeg\"\r\n" ++
+            "Content-Type: application/octet-stream\r\n\r\nabc" ++
+            "\r\n--B\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nvision" ++
+            "\r\n--B\r\nContent-Disposition: form-data; name=\"odd\"\r\n\r\n@notafile" ++
+            "\r\n--B--\r\n",
+        try form(a.allocator(), "B", "a.jpeg", "abc", &.{ "purpose=vision", "odd=@notafile" }),
+    );
 }

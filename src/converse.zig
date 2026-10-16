@@ -632,7 +632,7 @@ const Shown = struct {
         return switch (s) {
             .thought, .bot => l == s,
             .agent => l == .thought,
-            .result, .ok, .failed => l == .call or l == .result,
+            .result, .link, .ok, .failed => l == .call or l == .result or l == .link,
             else => false,
         };
     }

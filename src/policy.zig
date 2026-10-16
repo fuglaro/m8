@@ -24,8 +24,9 @@ pub fn fromModel(s: Sigil) bool {
 
 /// Honoured from a tool's response.
 ///
-/// A tool answers with 🧾 as it speaks and 🟢 or 🚫 when it stops. It may also
-/// hand back definitions — that is how a toolmaker works.
+/// A tool answers with 🧾 as it speaks, 🔗 for files it hands over, and 🟢 or
+/// 🚫 when it stops. It may also hand back definitions — that is how a
+/// toolmaker works.
 ///
 /// Closing that door is a 🛡 rather than a rule here. `freeze-toolbox` names
 /// every sigil that opens it, so what is closed is written down in the
@@ -34,7 +35,7 @@ pub fn fromModel(s: Sigil) bool {
 /// 📚 alongside 🧰 rather than resolving them to see what they carry.
 pub fn fromTool(s: Sigil) bool {
     return switch (s) {
-        .result, .ok, .failed => true,
+        .result, .link, .ok, .failed => true,
         .tool, .agent, .skill => true,
         else => false,
     };
@@ -58,7 +59,7 @@ test "a model may not produce a definition, whatever the shields" {
 }
 
 test "a tool answers, and may hand back definitions for a shield to take away" {
-    for ([_]Sigil{ .result, .ok, .failed, .tool, .agent, .skill }) |s|
+    for ([_]Sigil{ .result, .link, .ok, .failed, .tool, .agent, .skill }) |s|
         try testing.expect(fromTool(s));
     // Never: a tool does not speak as the model or as the person, and no
     // shield opens that — it is not a door.

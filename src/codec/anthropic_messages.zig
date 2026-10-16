@@ -202,7 +202,7 @@ fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
             .call => i = try run(arena, &turn, records, i, claimed),
             // An answer whose call was never written still names what it
             // answers, and is left where the ledger put it.
-            .result, .ok, .failed => {
+            .result, .link, .ok, .failed => {
                 if (!claimed[i]) {
                     const id = std.mem.trim(u8, r.value, " \t");
                     if (try answerTo(arena, records, claimed, i, id)) |a| {
@@ -231,7 +231,7 @@ fn run(
     var end = start;
     while (end < records.len) : (end += 1) {
         switch (records[end].sigil) {
-            .call, .result, .ok, .failed => {},
+            .call, .result, .link, .ok, .failed => {},
             else => break,
         }
     }
@@ -266,7 +266,7 @@ fn run(
     // the same; the ledger is what says so.
     for (records[start..end], start..) |r, idx| {
         switch (r.sigil) {
-            .result, .ok, .failed => {},
+            .result, .link, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
@@ -279,9 +279,12 @@ fn run(
     return end;
 }
 
-/// What a call was answered with: the output, and whether it ended badly.
+/// What a call was answered with: the output, the files handed over beside
+/// it, and whether it ended badly.
 const Answer = struct {
     said: []const u8,
+    /// The 🔗 blocks beside it.
+    links: []const []const u8 = &.{},
     failed: bool,
 };
 
@@ -300,12 +303,13 @@ fn answerTo(
     id: []const u8,
 ) !?Answer {
     var said: std.ArrayList(u8) = .empty;
+    var links: std.ArrayList([]const u8) = .empty;
     var found = false;
     var failed = false;
 
     for (records[from..], from..) |r, idx| {
         switch (r.sigil) {
-            .result, .ok, .failed => {},
+            .result, .link, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
@@ -313,6 +317,10 @@ fn answerTo(
 
         claimed[idx] = true;
         found = true;
+        if (r.sigil == .link) {
+            try links.append(arena, r.content orelse "");
+            continue;
+        }
         if (r.sigil == .failed) failed = true;
         if (r.content) |content| if (content.len > 0) {
             if (said.items.len > 0) try said.append(arena, '\n');
@@ -323,7 +331,11 @@ fn answerTo(
         // call made again rather than this one.
         if (r.sigil != .result) break;
     }
-    return if (found) .{ .said = said.items, .failed = failed } else null;
+    return if (found) .{
+        .said = said.items,
+        .links = links.items,
+        .failed = failed,
+    } else null;
 }
 
 fn writeText(s: *std.json.Stringify, content: []const u8) !void {
@@ -353,7 +365,42 @@ fn writeResult(s: *std.json.Stringify, id: []const u8, a: Answer) !void {
     try s.objectField("tool_use_id");
     try s.write(id);
     try s.objectField("content");
-    try s.write(a.said);
+    if (a.links.len == 0) try s.write(a.said) else {
+        // Files go beside what was said, as blocks of their own.
+        try s.beginArray();
+        if (a.said.len > 0) try writeText(s, a.said);
+        for (a.links) |content| {
+            var lines = std.mem.splitScalar(u8, content, '\n');
+            while (lines.next()) |line| {
+                const mime, const uri, _ = (try api.handed(line)) orelse continue;
+                try s.beginObject();
+                try s.objectField("type");
+                try s.write(if (std.mem.startsWith(u8, mime, "image/")) "image" else "document");
+                try s.objectField("source");
+                try s.beginObject();
+                try s.objectField("type");
+                if (std.mem.cutPrefix(u8, uri, "ref:")) |ref| {
+                    try s.write("file");
+                    try s.objectField("file_id");
+                    try s.write(ref);
+                } else if (std.mem.startsWith(u8, uri, "data:")) {
+                    _, const data = std.mem.cutScalar(u8, uri, ',') orelse .{ "", "" };
+                    try s.write("base64");
+                    try s.objectField("media_type");
+                    try s.write(mime);
+                    try s.objectField("data");
+                    try s.write(data);
+                } else {
+                    try s.write("url");
+                    try s.objectField("url");
+                    try s.write(uri);
+                }
+                try s.endObject();
+                try s.endObject();
+            }
+        }
+        try s.endArray();
+    }
     if (a.failed) {
         try s.objectField("is_error");
         try s.write(true);
@@ -1163,4 +1210,34 @@ test "a finished message says what it cost, the cache counted back in" {
             (try parse(arena, &r, collect.sink())).aside,
         );
     }
+}
+
+test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    var records = [_]doc.Record{
+        .{ .sigil = .call, .value = "see,c1", .content = "* file `a.jpeg`" },
+        .{ .sigil = .result, .value = "c1", .content = "here" },
+        .{ .sigil = .link, .value = "c1", .content = ">image/jpeg data:image/jpeg;base64,YWJj a.jpeg\n>application/pdf data:application/pdf;base64,YWJj b.pdf" },
+        .{ .sigil = .ok, .value = "c1" },
+    };
+    const body = try encode(arena, &records, .{ .model = "m" });
+    try testing.expect(std.mem.indexOf(u8, body, \\{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"YWJj"}},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"YWJj"}}
+    ) != null);
+
+    records[2].content = ">image/jpeg ref:file-a\n>application/pdf ref:file-b b.pdf";
+    const ids = try encode(arena, &records, .{ .model = "m" });
+    try testing.expect(std.mem.indexOf(u8, ids, \\{"type":"image","source":{"type":"file","file_id":"file-a"}},{"type":"document","source":{"type":"file","file_id":"file-b"}}
+    ) != null);
+
+    records[2].content = ">image/png https://example.com/a.png a.png";
+    const url = try encode(arena, &records, .{ .model = "m" });
+    try testing.expect(std.mem.indexOf(u8, url, \\{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}
+    ) != null);
+
+    // A file never handed over, for want of an upload, cannot be sent.
+    records[2].content = "<a.jpeg";
+    try testing.expectError(error.NoUpload, encode(arena, &records, .{ .model = "m" }));
 }
