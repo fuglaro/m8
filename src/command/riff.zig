@@ -41,8 +41,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\A stderr line that leads with `::stats::` carries a panel, which
         \\stays at the right of the top status line until the next one. The
-        \\panel runs to a `::` or the end of the line, and anything after
-        \\is a status line as usual:
+        \\panel runs to a `::` or the end of the line. Anything after the
+        \\closing `::` is ignored:
         \\
         \\  ::stats::✥19▇16K::16000 in, 14000 cached
         \\
@@ -231,6 +231,8 @@ const Riff = struct {
     status: [512]u8 = undefined,
     status_len: usize = 0,
     status_ended: bool = false,
+    /// The panel has ended; ignore the rest of this stderr line.
+    stats_tail: bool = false,
     /// How many status lines were asked for, and the lines before the last,
     /// newest first, for the ones above the bottom.
     s: usize = 1,
@@ -492,7 +494,7 @@ const Riff = struct {
     fn note(r: *Riff, bytes: []const u8) void {
         for (bytes) |b| {
             if (b == '\n' or b == '\r') {
-                if (!r.status_ended and r.lift(r.status_len)) {
+                if (!r.status_ended and (r.stats_tail or r.lift(r.status_len))) {
                     // The line was the panel and nothing else, so it was not
                     // a status line and the one before it comes back down.
                     r.status = r.older[0];
@@ -503,9 +505,11 @@ const Riff = struct {
                     }
                     r.older_len[most_bars - 1] = 0;
                 }
+                r.stats_tail = false;
                 r.status_ended = true;
                 continue;
             }
+            if (r.stats_tail) continue;
             if (r.status_ended) {
                 // A new line, so the one before it moves up.
                 var i: usize = most_bars - 1;
@@ -522,10 +526,10 @@ const Riff = struct {
                 r.status[r.status_len] = b;
                 r.status_len += 1;
             }
-            // The panel ends at the next pair of colons, and what follows on
-            // the line is a status line like any other.
+            // The panel ends at the next pair of colons. The rest of this
+            // line is detail for other consumers, not another status line.
             if (b == ':' and std.mem.endsWith(u8, r.status[0..r.status_len], "::") and
-                r.lift(r.status_len - 2)) r.status_len = 0;
+                r.lift(r.status_len - 2)) r.stats_tail = true;
         }
     }
 
@@ -621,17 +625,13 @@ const Riff = struct {
             const b = r.bars();
             if (k < b) {
                 // Grey in reverse is a grey bar with the terminal's own
-                // background for its text. An upper half block is then a
-                // notch, which gives the bar a bezel at each end where there
-                // is room. Each line above the bottom one is a cell shorter
-                // at each end, so they stand as a stack, and only the bottom
-                // one has the foot that runs out past the notch.
+                // background for its text. The top row has notched bezels;
+                // rows beneath it have solid blocks at both ends. All rows
+                // keep the same width.
                 const up = b - 1 - k;
-                const wide = inner -| 2 * up;
-                const bezel = wide >= 8;
-                try w.splatByteAll(' ', up);
-                try w.writeAll(if (!bezel) grey ++ "\x1b[7m" else if (up > 0) grey ++ " ▟\x1b[7m" else grey ++ "▂▟\x1b[7m");
-                const room = if (bezel) wide - 4 else wide;
+                const bezel = inner >= 8;
+                try w.writeAll(if (!bezel) grey ++ "\x1b[7m" else if (k == 0) grey ++ "▂▟\x1b[7m" else grey ++ "██\x1b[7m");
+                const room = if (bezel) inner - 4 else inner;
                 // The top line gives its right end to the panel, hard up
                 // against it, while that leaves it room to say something.
                 const panel = r.panel[0..r.panel_len];
@@ -647,8 +647,7 @@ const Riff = struct {
                 const used = try put(w, said, room - aside);
                 try w.splatByteAll(' ', room - aside -| used);
                 if (aside > 0) _ = try put(w, panel, aside);
-                try w.writeAll(if (!bezel) grey ++ "\x1b[27m" else if (up > 0) grey ++ "\x1b[27m▙" else grey ++ "\x1b[27m▙▂");
-                if (up > 0) try w.writeAll("\x1b[K");
+                try w.writeAll(if (!bezel) grey ++ "\x1b[27m" else if (k == 0) grey ++ "\x1b[27m▙▂" else grey ++ "\x1b[27m██");
             } else {
                 // The edge runs the height of the editor, written or not.
                 try w.writeAll(grey ++ "▏\x1b[0m");
@@ -1230,22 +1229,28 @@ test "a stopped child changes the waiting line as the editor changes" {
     try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, waiting_written) != null);
 }
 
-test "a line that leads with stats is the panel, and the rest is the line" {
+test "a line that leads with stats updates only the panel" {
     var r: Riff = .{ .ctx = undefined, .out = undefined, .cmd = &.{} };
     r.note("one\n::stats::\u{2725}16K\u{2587}19::16000 in\n");
     try testing.expectEqualStrings("\u{2725}16K\u{2587}19", r.panel[0..r.panel_len]);
-    try testing.expectEqualStrings("16000 in", r.status[0..r.status_len]);
-    try testing.expectEqualStrings("one", r.older[0][0..r.older_len[0]]);
+    try testing.expectEqualStrings("one", r.status[0..r.status_len]);
+    try testing.expectEqual(@as(usize, 0), r.older_len[0]);
     try testing.expectEqual(@as(usize, 7), span(r.panel[0..r.panel_len]));
 
     // A panel alone is no status line, and it stays when lines follow.
     r.note("::stats::2K_3\n");
     try testing.expectEqualStrings("2K_3", r.panel[0..r.panel_len]);
-    try testing.expectEqualStrings("16000 in", r.status[0..r.status_len]);
-    try testing.expectEqualStrings("one", r.older[0][0..r.older_len[0]]);
+    try testing.expectEqualStrings("one", r.status[0..r.status_len]);
+    try testing.expectEqual(@as(usize, 0), r.older_len[0]);
+    r.note("::stats::short:");
+    r.note(":noisy detail");
+    r.note(" and more\r\n");
+    try testing.expectEqualStrings("short", r.panel[0..r.panel_len]);
+    try testing.expectEqualStrings("one", r.status[0..r.status_len]);
+    try testing.expectEqual(@as(usize, 0), r.older_len[0]);
     r.note("a::b\n");
     try testing.expectEqualStrings("a::b", r.status[0..r.status_len]);
-    try testing.expectEqualStrings("2K_3", r.panel[0..r.panel_len]);
+    try testing.expectEqualStrings("short", r.panel[0..r.panel_len]);
 }
 
 test "a message wraps into rows, and the cursor is found on one" {

@@ -55,10 +55,10 @@
 > `m8` `call` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
 > * path string
 >   Path of the file to edit or create (relative, absolute, or ~).
-> * old_string? string
->   The text to replace. Omit to write or append.
 > * new_string string
 >   The text to insert.
+> * old_string? string
+>   The text to replace. Omit to write or append.
 > * pages? string
 >   Page range to scope the matches during replace e.g.
 >   "10-10" or "11-20" or "21-100", or "2@string_match" to

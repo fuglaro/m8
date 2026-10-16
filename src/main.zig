@@ -148,7 +148,7 @@ pub fn main(init: std.process.Init) !u8 {
             // A build without riff still answers, one message at a time.
             if (command.find("riff") == null and
                 try launch.beside(arena, io, self, command.prefix ++ "riff") == null) break :tui;
-            return launch.become(io, &.{ self, "riff", self, "at", "-p", "-v", word });
+            return launch.become(io, &.{ self, "riff", "-s", "2", self, "at", "-p", "-v", word });
         }
         var at: std.ArrayList([]const u8) = .empty;
         try at.append(arena, "at");
