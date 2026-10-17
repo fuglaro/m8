@@ -10,9 +10,11 @@
 > Work directly when delegation would add more overhead than value.
 
 #### :toolbox:cody
-> > Give Cody one fresh, bounded task.
-> `m8` `call` `m8` `query` `--new` `@crew/cody/delegated` `{{task|}}`
+> > Give Cody a bounded task, or continue=true to give feedback on the previous task.
+> `m8` `call` `m8` `query` `{{continue!--new}}` `@crew/cody/delegated` `{{task|}}`
 > * task string
 >   The task to complete and any relevant scope or constraints.
+> * continue boolean
+>   Set true to continue the conversation; otherwise start fresh.
 
 #### :toolbox:cody

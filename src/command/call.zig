@@ -338,6 +338,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  {{command|-c}}    -c VALUE
         \\  {{command|}}      VALUE
         \\  {{deep?--deep}}   --deep, only when exactly true
+        \\  {{deep!--deep}}   --deep, omit only when exactly true
         \\  {{}}              -- followed by the whole call as JSON
         \\  {{|}}             the whole call as JSON, without a flag
         \\

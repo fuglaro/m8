@@ -12,6 +12,8 @@ pub const Error = error{
     UnclosedPlaceholder,
     /// `?` with no flag after it, which could never emit anything.
     FlaglessQuestion,
+    /// `!` with no flag after it, which could never emit anything.
+    FlaglessNegation,
     /// `?` on a value that is neither `true` nor `false`.
     NotABoolean,
 };
@@ -26,6 +28,8 @@ const Form = enum {
     given,
     /// `{{name?-f}}` — the flag alone, and only when true.
     boolean,
+    /// `{{name!--f}}` — the flag alone, unless the value is exactly true.
+    unless_true,
 };
 
 /// Expand one word into however many argv elements it becomes.
@@ -52,10 +56,14 @@ fn expand(
     var name = inner;
     var flag: []const u8 = "";
     var form: Form = .own;
-    if (std.mem.indexOfAny(u8, inner, "|?")) |cut| {
+    if (std.mem.indexOfAny(u8, inner, "|?!")) |cut| {
         name = inner[0..cut];
         flag = inner[cut + 1 ..];
-        form = if (inner[cut] == '?') .boolean else .given;
+        form = switch (inner[cut]) {
+            '?' => .boolean,
+            '!' => .unless_true,
+            else => .given,
+        };
     }
 
     // The flag a bare placeholder carries is the argument's own name. An
@@ -68,9 +76,20 @@ fn expand(
         try err.print("m8 call: '{s}' asks for a flag and names none\n", .{word});
         return Error.FlaglessQuestion;
     }
+    if (form == .unless_true and flag.len == 0) {
+        try err.print("m8 call: '{s}' asks for a flag and names none\n", .{word});
+        return Error.FlaglessNegation;
+    }
 
     const key = (try argname.envName(arena, name)) orelse return out.append(arena, word);
-    const value = env.get(key) orelse return;
+    const value = env.get(key) orelse {
+        if (form == .unless_true) return out.append(arena, flag);
+        return;
+    };
+    if (form == .unless_true) {
+        if (std.mem.eql(u8, value, "true")) return;
+        return out.append(arena, flag);
+    }
     if (form == .boolean) {
         if (std.mem.eql(u8, value, "false")) return;
         if (!std.mem.eql(u8, value, "true")) {
@@ -182,6 +201,23 @@ test "true emits the flag alone, false and unset emit nothing" {
         Error.NotABoolean,
         built(arena, other, &.{"{{deep?--deep}}"}),
     );
+}
+
+test "inverse conditional emits unless the value is exactly true" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const placeholder = &.{"{{deep!--deep}}"};
+
+    const yes = &[_][2][]const u8{.{ "__deep__", "true" }};
+    const no = &[_][2][]const u8{.{ "__deep__", "false" }};
+    const other = &[_][2][]const u8{.{ "__deep__", "1" }};
+    const empty = &[_][2][]const u8{.{ "__deep__", "" }};
+    try expectArgv(try built(arena, yes, placeholder), &.{});
+    try expectArgv(try built(arena, no, placeholder), &.{"--deep"});
+    try expectArgv(try built(arena, &.{}, placeholder), &.{"--deep"});
+    try expectArgv(try built(arena, other, placeholder), &.{"--deep"});
+    try expectArgv(try built(arena, empty, placeholder), &.{"--deep"});
 }
 
 test "only whole placeholders are looked at" {
