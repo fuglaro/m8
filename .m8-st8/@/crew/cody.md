@@ -38,7 +38,7 @@
   > :shield:workbench
   > :shield:contain-reads
   > :shield:no-writes
-  > `m8` `call` `m8` `munge` `` `{{pages}}` `read` `--` `{{path|}}`
+  > `m8` `call` `m8` `munge` `{{pages}}` `read` `--` `{{path|}}`
   > * path string
   >   Path of the file to read (relative, absolute, or ~).
   > * pages? string
