@@ -334,7 +334,7 @@ fn signed(arena: Allocator, content: []const u8) !?Thought {
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        if (signatureOn(line)) |value| {
+        if (try api.signatureOn(arena, line)) |value| {
             mark = value;
             continue;
         }
@@ -371,17 +371,6 @@ fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Tho
     return .{ .parts = parts.items, .id = thought.id, .encrypted = thought.encrypted };
 }
 
-/// The 🔏 a line carries, in either spelling. A nested sigil is read the way
-/// it is written, and both spellings mean the same thing everywhere.
-fn signatureOn(line: []const u8) ?[]const u8 {
-    for ([_]doc.Mode{ .md, .m8 }) |mode| {
-        const hit = sigil.match(mode, line) orelse continue;
-        if (hit.sigil != .signature) continue;
-        return std.mem.trim(u8, line[hit.len..], " \t");
-    }
-    return null;
-}
-
 /// A reasoning item's 🔏, as a 💭 of its own asking to be kept aside. The
 /// summary is for reading and the encrypted content only for giving the
 /// thought back, so only the summary stays in sight.
@@ -395,10 +384,9 @@ fn signature(
     try out.append(arena, .{ .sigil = .thought, .value = api.snip, .content = try sealed(arena, id, enc) });
 }
 
-/// A 🔏 as content, in the spelling every file is written in; a reader is
-/// handed whichever one they are being written.
+/// A 🔏 as content: the item's id and its encrypted content, as one span.
 fn sealed(arena: Allocator, id: []const u8, enc: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(arena, "{s}{s},{s}", .{ sigil.Sigil.signature.text(.md), id, enc });
+    return api.sealed(arena, try std.fmt.allocPrint(arena, "{s},{s}", .{ id, enc }));
 }
 
 fn callId(value: []const u8) []const u8 {
@@ -920,7 +908,7 @@ test "a thought goes out only when it is signed, with the id this api needs" {
 
     const records = [_]doc.Record{
         .{ .sigil = .thought, .value = "hmm" },
-        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen:rs_1,ENCRYPTED" },
+        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen:`rs_1,ENCRYPTED`" },
         .{ .sigil = .thought, .content = "came off another wire" },
         .{ .sigil = .bot, .content = "Hello." },
     };
@@ -1042,14 +1030,14 @@ test "a streamed reply reads as the items it was made of" {
     // asking to be kept aside: this api wants both back before it will
     // believe it, and nobody needs to read them.
     try testing.expectEqualStrings(api.snip, collect.got.records.items[1].value);
-    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:`rs_1,ENCRYPTED`", collect.got.records.items[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
 
     // The compact summary and then the 🔏 when the item that carried it
     // ended. The 📲 did not: a call cannot be shown until it is whole.
     try testing.expectEqualStrings(
-        "thought:\nthought::lock_with_ink_pen:rs_1,ENCRYPTED\nbot:Let me look.",
+        "thought:\nthought::lock_with_ink_pen:`rs_1,ENCRYPTED`\nbot:Let me look.",
         collect.seen.items,
     );
 
@@ -1188,7 +1176,7 @@ test "a whole reply reads the same as a streamed one" {
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("weighing it", collect.got.records.items[0].value);
     try testing.expect(collect.got.records.items[0].content == null);
-    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENCRYPTED", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:`rs_1,ENCRYPTED`", collect.got.records.items[1].content.?);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
     try testing.expectEqualStrings(
         \\{"text":"hi"}
@@ -1415,7 +1403,7 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("working it through", collect.got.records.items[0].value);
     try testing.expect(collect.got.records.items[0].content == null);
-    try testing.expectEqualStrings(":lock_with_ink_pen:rs_1,ENC", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:`rs_1,ENC`", collect.got.records.items[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[2].value);
     try testing.expect(collect.got.records.items[2].content == null);

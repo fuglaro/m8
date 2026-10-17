@@ -179,6 +179,7 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
         ),
         error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
         error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),
+        error.BadSignature => try err.writeAll("m8: a 🔏 is followed by its signature as one code span\n"),
         error.NoProvider => try err.writeAll(
             "m8: that ledger names a model but not whose; write it /PROVIDER/MODEL\n",
         ),

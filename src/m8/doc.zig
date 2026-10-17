@@ -137,16 +137,6 @@ pub fn detect(src: []const u8) ?Mode {
     return null;
 }
 
-/// The framing spelling, without deciding whether its first header is valid.
-/// Parsing uses this after a caller has explicitly handed us a document, so a
-/// malformed header can still receive the useful `UnknownSigil` diagnostic.
-fn framing(src: []const u8) ?Mode {
-    const line = firstLine(src) orelse return null;
-    for ([_]Mode{ .m8, .md }) |m|
-        if (std.mem.startsWith(u8, line, header(m))) return m;
-    return null;
-}
-
 fn firstLine(src: []const u8) ?[]const u8 {
     var it = std.mem.splitScalar(u8, src, '\n');
     while (it.next()) |raw| {
@@ -161,140 +151,230 @@ fn trimCr(raw: []const u8) []const u8 {
     return if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
 }
 
-/// Parse a whole document. Values are slices into `src`; content is
-/// materialised into `arena`, since stripping quotes and \r both remove bytes
-/// from the middle of a span.
+/// Parse a whole document. Values and content are materialised into `arena`,
+/// since stripping quotes and \r both remove bytes from the middle of a span.
 pub fn parse(arena: Allocator, src: []const u8, diag: *Diagnostic) ParseError![]Record {
-    const mode = framing(src) orelse {
-        if (std.mem.trim(u8, src, " \t\r\n").len == 0) return &.{};
-        diag.* = .{ .line = 1, .detail = "first line is not a record header" };
-        return error.NotADocument;
-    };
-    return parseMode(arena, src, mode, diag);
+    return gather(arena, src, null, diag);
 }
 
 pub fn parseMode(arena: Allocator, src: []const u8, mode: Mode, diag: *Diagnostic) ParseError![]Record {
-    const other: Mode = switch (mode) {
-        .md => .m8,
-        .m8 => .md,
-    };
+    return gather(arena, src, mode, diag);
+}
 
-    var records: std.ArrayList(Record) = .empty;
-    var content: std.ArrayList(u8) = .empty;
+fn gather(arena: Allocator, src: []const u8, mode: ?Mode, diag: *Diagnostic) ParseError![]Record {
+    var p: Parser = .{ .arena = arena, .mode = mode, .diag = diag };
+    var c: Collect = .{ .arena = arena };
+    try p.feed(src, &c);
+    try p.finish(&c);
+    return c.records.toOwnedSlice(arena);
+}
 
-    var cur: ?Sigil = null;
-    var value: []const u8 = "";
-    var lines: usize = 0; // content lines gathered for `cur`
-    var open = false; // still accepting content for `cur`
-    var blank = true; // the line before this one was blank, or there was none
+/// Records, gathered from what a parser hands on.
+const Collect = struct {
+    arena: Allocator,
+    records: std.ArrayList(Record) = .empty,
+    content: std.ArrayList(u8) = .empty,
+    lines: usize = 0,
 
-    var line_no: usize = 0;
-    // A trailing newline terminates the last line rather than starting an
-    // empty one, so drop it before splitting.
-    const body = if (std.mem.endsWith(u8, src, "\n")) src[0 .. src.len - 1] else src;
-    var it = std.mem.splitScalar(u8, body, '\n');
-    while (it.next()) |raw| {
-        line_no += 1;
-        const line = trimCr(raw);
+    pub fn begin(c: *Collect, s: Sigil, value: []const u8) Allocator.Error!void {
+        try c.records.append(c.arena, .{ .sigil = s, .value = try c.arena.dupe(u8, value) });
+        c.lines = 0;
+    }
 
-        if (line.len == 0) {
-            open = false;
-            blank = true;
-            continue;
+    pub fn line(c: *Collect) Allocator.Error!void {
+        if (c.lines > 0) try c.content.append(c.arena, '\n');
+        c.lines += 1;
+    }
+
+    pub fn text(c: *Collect, bytes: []const u8) Allocator.Error!void {
+        try c.content.appendSlice(c.arena, bytes);
+    }
+
+    pub fn end(c: *Collect) Allocator.Error!void {
+        if (c.lines > 0) c.records.items[c.records.items.len - 1].content = try c.arena.dupe(u8, c.content.items);
+        c.content.clearRetainingCapacity();
+    }
+};
+
+/// Reads a document as its bytes arrive, and hands each record on as soon as
+/// it is known: a header once its line is whole, and a content line once its
+/// quote, and any indent its sigil asks for, have been seen. What follows that
+/// on the line is handed on as it comes, so a reader that writes it out again
+/// is as live as whatever is writing to it.
+///
+/// Every rule a line breaks is decided by its opening, so holding no more than
+/// that loses no error. One \r is held too, until it is known whether a \n
+/// follows it.
+///
+/// `h` is told `begin(sigil, value)`, `line()` as each content line opens,
+/// `text(bytes)` for what is on it, and `end()` once a record is over. What it
+/// is handed is only borrowed.
+pub const Parser = struct {
+    arena: Allocator,
+    /// The spelling, once the first header has said, unless a caller already
+    /// knew.
+    mode: ?Mode = null,
+    diag: *Diagnostic,
+    held: std.ArrayList(u8) = .empty,
+    /// Past a content line's opening, and handing its bytes straight on.
+    passing: bool = false,
+    cr: bool = false,
+    cur: ?Sigil = null,
+    /// Still accepting content for `cur`: no blank line has closed it.
+    open: bool = false,
+    line_no: usize = 0,
+
+    pub fn feed(p: *Parser, bytes: []const u8, h: anytype) !void {
+        for (bytes) |b| {
+            if (p.passing) {
+                if (p.cr) {
+                    p.cr = false;
+                    if (b != '\n') try h.text("\r");
+                }
+                switch (b) {
+                    '\n' => p.passing = false,
+                    '\r' => p.cr = true,
+                    else => try h.text(&.{b}),
+                }
+                continue;
+            }
+            if (b == '\n') {
+                p.line_no += 1;
+                try p.whole(trimCr(p.held.items), h);
+                p.held.clearRetainingCapacity();
+                continue;
+            }
+            try p.held.append(p.arena, b);
+            try p.early(h);
         }
+    }
+
+    /// The end of the document: a last line with no newline is still a line,
+    /// and its \r is still dropped.
+    pub fn finish(p: *Parser, h: anytype) !void {
+        p.cr = false;
+        if (!p.passing and p.held.items.len > 0) {
+            p.line_no += 1;
+            try p.whole(trimCr(p.held.items), h);
+            p.held.clearRetainingCapacity();
+        }
+        p.passing = false;
+        if (p.cur != null) try h.end();
+        p.cur = null;
+    }
+
+    /// A content line whose opening has been seen in full is handed on now,
+    /// rather than when it ends. Anything still in question waits for its
+    /// newline, where `whole` says what is wrong with it.
+    fn early(p: *Parser, h: anytype) !void {
+        const mode = p.mode orelse return;
+        const s = p.cur orelse return;
+        if (!p.open or !s.takesContent()) return;
+        const opening = lead(mode).len + s.indent().len;
+        if (p.held.items.len < opening) return;
+        const line = p.held.items;
+        if (!std.mem.startsWith(u8, line, lead(mode)) or
+            !std.mem.startsWith(u8, line[lead(mode).len..], s.indent())) return;
+        p.line_no += 1;
+        try h.line();
+        const rest = line[opening..];
+        // A \r last is held, in case it is the one before a \n.
+        if (rest.len > 0 and rest[rest.len - 1] == '\r') {
+            try h.text(rest[0 .. rest.len - 1]);
+            p.cr = true;
+        } else try h.text(rest);
+        p.held.clearRetainingCapacity();
+        p.passing = true;
+    }
+
+    fn whole(p: *Parser, line: []const u8, h: anytype) !void {
+        const line_no = p.line_no;
+        if (line.len == 0) {
+            p.open = false;
+            return;
+        }
+        const mode = p.mode orelse blk: {
+            for ([_]Mode{ .m8, .md }) |m| if (std.mem.startsWith(u8, line, header(m))) {
+                p.mode = m;
+                break :blk m;
+            };
+            p.diag.* = .{ .line = line_no, .detail = "first line is not a record header" };
+            return error.NotADocument;
+        };
+        const other: Mode = switch (mode) {
+            .md => .m8,
+            .m8 => .md,
+        };
 
         if (std.mem.startsWith(u8, line, header(mode))) {
-            if (cur) |s| try flush(arena, &records, s, value, lines, &content);
-
             const rest = line[header(mode).len..];
             const m = sigil.match(mode, rest) orelse {
-                diag.* = .{ .line = line_no, .detail = "not a known sigil" };
+                p.diag.* = .{ .line = line_no, .detail = "not a known sigil" };
                 return error.UnknownSigil;
             };
             if (!std.mem.startsWith(u8, rest[m.len..], sigil_end)) {
-                diag.* = .{ .line = line_no, .detail = "a sigil is ended by `:` before its value" };
+                p.diag.* = .{ .line = line_no, .detail = "a sigil is ended by `:` before its value" };
                 return error.MissingColon;
             }
-            value = rest[m.len + sigil_end.len ..];
+            const value = rest[m.len + sigil_end.len ..];
             if (value.len > 0 and !m.sigil.takesValue()) {
-                diag.* = .{ .line = line_no, .detail = "this sigil takes no value" };
+                p.diag.* = .{ .line = line_no, .detail = "this sigil takes no value" };
                 return error.UnexpectedValue;
             }
-            cur = m.sigil;
-            lines = 0;
-            open = true;
-            blank = false;
-            continue;
+            if (p.cur != null) try h.end();
+            try h.begin(m.sigil, value);
+            p.cur = m.sigil;
+            p.open = true;
+            return;
         }
 
         if (std.mem.startsWith(u8, line, lead(mode)) or std.mem.eql(u8, line, bareLead(mode))) {
-            if (cur == null) {
-                diag.* = .{ .line = line_no, .detail = "content before the first record" };
+            const s = p.cur orelse {
+                p.diag.* = .{ .line = line_no, .detail = "content before the first record" };
+                return error.OrphanContent;
+            };
+            if (!p.open) {
+                p.diag.* = .{ .line = line_no, .detail = "a blank line closed this block" };
                 return error.OrphanContent;
             }
-            if (!open) {
-                diag.* = .{ .line = line_no, .detail = "a blank line closed this block" };
-                return error.OrphanContent;
-            }
-            if (!cur.?.takesContent()) {
-                diag.* = .{ .line = line_no, .detail = "this sigil takes no content" };
+            if (!s.takesContent()) {
+                p.diag.* = .{ .line = line_no, .detail = "this sigil takes no content" };
                 return error.UnexpectedContent;
             }
-            if (lines > 0) try content.append(arena, '\n');
+            try h.line();
             if (line.len > bareLead(mode).len) {
-                const indent = cur.?.indent();
                 const text = line[lead(mode).len..];
-                if (!std.mem.startsWith(u8, text, indent)) {
-                    diag.* = .{ .line = line_no, .detail = "this sigil's content is indented four spaces" };
+                if (!std.mem.startsWith(u8, text, s.indent())) {
+                    p.diag.* = .{ .line = line_no, .detail = "this sigil's content is indented four spaces" };
                     return error.MissingIndent;
                 }
-                try content.appendSlice(arena, text[indent.len..]);
+                try h.text(text[s.indent().len..]);
             }
-            lines += 1;
-            blank = false;
-            continue;
+            return;
         }
 
         if (std.mem.startsWith(u8, line, header(other)) or
             std.mem.startsWith(u8, line, bareLead(other)))
         {
-            diag.* = .{ .line = line_no, .detail = "the other spelling; a document is one or the other" };
+            p.diag.* = .{ .line = line_no, .detail = "the other spelling; a document is one or the other" };
             return error.ModeMixed;
         }
         if (std.mem.startsWith(u8, line, bareLead(mode))) {
-            diag.* = .{ .line = line_no, .detail = "a content line needs one space after the quote" };
+            p.diag.* = .{ .line = line_no, .detail = "a content line needs one space after the quote" };
             return error.MissingSpace;
         }
         if (std.mem.startsWith(u8, line, bareQuote(mode))) {
-            diag.* = .{ .line = line_no, .detail = "a content line is indented two spaces before its quote" };
+            p.diag.* = .{ .line = line_no, .detail = "a content line is indented two spaces before its quote" };
             return error.UnexpectedLine;
         }
         if (sigil.inReservedRange(line)) {
-            diag.* = .{ .line = line_no, .detail = "a sigil needs a header before it" };
+            p.diag.* = .{ .line = line_no, .detail = "a sigil needs a header before it" };
             return error.UnknownSigil;
         }
-        diag.* = .{ .line = line_no, .detail = "neither a header nor a content line" };
+        p.diag.* = .{ .line = line_no, .detail = "neither a header nor a content line" };
         return error.UnexpectedLine;
     }
-    if (cur) |s| try flush(arena, &records, s, value, lines, &content);
-    return records.toOwnedSlice(arena);
-}
-
-fn flush(
-    arena: Allocator,
-    records: *std.ArrayList(Record),
-    s: Sigil,
-    value: []const u8,
-    lines: usize,
-    content: *std.ArrayList(u8),
-) Allocator.Error!void {
-    try records.append(arena, .{
-        .sigil = s,
-        .value = value,
-        .content = if (lines == 0) null else try arena.dupe(u8, content.items),
-    });
-    content.clearRetainingCapacity();
-}
+};
 
 /// Write one record. Always emits \n; \r is never introduced.
 pub fn write(w: *std.Io.Writer, mode: Mode, r: Record) std.Io.Writer.Error!void {
@@ -327,12 +407,15 @@ pub fn writeLooking(w: *std.Io.Writer, mode: Mode, look: ?Look, r: Record) std.I
     try b.finish();
 }
 
-/// What a record is highlighted with, if anything: a 📜 or a 🤖, and only
+/// What a record is highlighted with, if anything: a 📜, 🤖 or 💭, and only
 /// ever in the rendered spelling.
 fn looked(mode: Mode, look: ?Look, s: Sigil) ?Look {
     const l = look orelse return null;
     if (mode != .m8 or !(l.color or l.reflow)) return null;
-    return if (s == .scroll or s == .bot) l else null;
+    return switch (s) {
+        .scroll, .bot, .thought => l,
+        else => null,
+    };
 }
 
 /// Write a document, one blank line between records.
@@ -480,6 +563,29 @@ test "a quote with no space is an error, and alone is an empty line" {
     var d2: Diagnostic = .{};
     const recs = try parse(b.allocator(), "* :compass::\n  > one\n  >\n  > three\n", &d2);
     try testing.expectEqualStrings("one\n\nthree", recs[0].content.?);
+}
+
+test "a document fed a byte at a time reads as it does whole" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const src = "\n* :brain::x\r\n* :receipt::c1\n  >     one\r\n  >\n  >       two\r\r\n\n" ++
+        "* :scroll::c1\n  > # three\r\n* :robot::\n  > last\r";
+    var diag: Diagnostic = .{};
+    const whole = try parse(arena, src, &diag);
+
+    var p: Parser = .{ .arena = arena, .diag = &diag };
+    var c: Collect = .{ .arena = arena };
+    for (src) |b| try p.feed(&.{b}, &c);
+    try p.finish(&c);
+    try testing.expectEqual(whole.len, c.records.items.len);
+    for (whole, c.records.items) |w, got| {
+        try testing.expectEqual(w.sigil, got.sigil);
+        try testing.expectEqualStrings(w.value, got.value);
+        try testing.expectEqualStrings(w.content orelse "-", got.content orelse "-");
+    }
+    try testing.expectEqualStrings("one\n\n  two\r", whole[1].content.?);
+    try testing.expectEqualStrings("last", whole[3].content.?);
 }
 
 test "a receipt is indented four spaces, and an empty line carries none" {

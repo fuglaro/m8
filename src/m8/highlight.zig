@@ -416,7 +416,7 @@ pub const Highlighter = struct {
         try h.emit(c, h.current());
         if (b == ')') h.link = false;
         h.last = b;
-        h.prev = if (b == ' ' or b == '\t') .space else if (b == 0 or std.ascii.isAlphanumeric(b)) .word else .punct;
+        h.prev = if (b == ' ' or b == '\t') .space else if (std.ascii.isAlphanumeric(b) or (b == 0 and !pictograph(c))) .word else .punct;
     }
 
     /// A run of delimiters, now that what follows it is known. `next` is 0 at
@@ -558,6 +558,14 @@ pub const Highlighter = struct {
     }
 };
 
+/// Whether a character is a pictograph rather than a letter of some script, so
+/// that what follows an emoji, such as the span after a 🔏, opens as it would
+/// after punctuation.
+fn pictograph(c: []const u8) bool {
+    const cp = std.unicode.utf8Decode(c) catch return false;
+    return (cp >= 0x1F300 and cp <= 0x1FAFF) or (cp >= 0x2600 and cp <= 0x27BF);
+}
+
 /// Three or more of one of `-`, `*` or `_`, and spaces.
 fn isRule(s: []const u8) bool {
     var c: u8 = 0;
@@ -624,6 +632,11 @@ test "emphasis opens with no word before and no space after, and ends with its l
     try expectShown("snake_case_name a * b", "snake_case_name a * b", .{});
     // Never closed, so the line's end closes it.
     try expectShown("{1;38;5;231}**a{}\nb", "**a\nb", .{});
+}
+
+test "a code span opens after an emoji as after punctuation, but not after a letter" {
+    try expectShown("\u{1F50F}{38;5;180}`a-_b_`{}", "\u{1F50F}`a-_b_`", .{});
+    try expectShown("\u{00E9}`a`", "\u{00E9}`a`", .{});
 }
 
 test "a code span holds everything inside it" {

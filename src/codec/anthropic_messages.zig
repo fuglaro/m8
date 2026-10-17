@@ -436,7 +436,7 @@ fn signed(arena: Allocator, content: []const u8) !?Thought {
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        if (signatureOn(line)) |value| {
+        if (try api.signatureOn(arena, line)) |value| {
             signature = value;
             continue;
         }
@@ -469,17 +469,6 @@ fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Tho
     return .{ .text = text.items, .signature = thought.signature };
 }
 
-/// The 🔏 a line carries, in either spelling. A nested sigil is read the way
-/// it is written, and both spellings mean the same thing everywhere.
-fn signatureOn(line: []const u8) ?[]const u8 {
-    for ([_]doc.Mode{ .md, .m8 }) |mode| {
-        const hit = sigil.match(mode, line) orelse continue;
-        if (hit.sigil != .signature) continue;
-        return std.mem.trim(u8, line[hit.len..], " \t");
-    }
-    return null;
-}
-
 /// A thinking block as records: what was thought, then its 🔏 in a 💭 of its
 /// own asking to be kept aside. The text is for reading and the signature
 /// only for giving the thought back, so only the text stays in sight.
@@ -494,11 +483,7 @@ fn thinking(
     try out.append(arena, .{ .sigil = .thought, .value = api.snip, .content = try sealed(arena, signature) });
 }
 
-/// A 🔏 as content, in the spelling every file is written in; a reader is
-/// handed whichever one they are being written.
-fn sealed(arena: Allocator, signature: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(arena, "{s}{s}", .{ sigil.Sigil.signature.text(.md), signature });
-}
+const sealed = api.sealed;
 
 fn callId(value: []const u8) []const u8 {
     const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
@@ -916,7 +901,7 @@ test "a thought goes out only when it is signed" {
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Hi." },
         .{ .sigil = .thought, .value = "hmm" },
-        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen:abc123" },
+        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen:`abc123`" },
         .{ .sigil = .thought, .content = "came off another wire" },
         .{ .sigil = .bot, .content = "Hello." },
     };
@@ -1016,7 +1001,7 @@ test "a streamed reply reads as the blocks it was made of" {
     // aside, so the reply can be sent back and believed without being read.
     try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[1].sigil);
     try testing.expectEqualStrings(api.snip, collect.got.records.items[1].value);
-    try testing.expectEqualStrings(":lock_with_ink_pen:abc123", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:`abc123`", collect.got.records.items[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
 
@@ -1024,7 +1009,7 @@ test "a streamed reply reads as the blocks it was made of" {
     // that carried it ended. The 📲 did not: a call cannot be shown until it
     // is whole.
     try testing.expectEqualStrings(
-        "thought:weighing it\nthought::lock_with_ink_pen:abc123\nbot:Let me look.",
+        "thought:weighing it\nthought::lock_with_ink_pen:`abc123`\nbot:Let me look.",
         collect.seen.items,
     );
 
@@ -1054,7 +1039,7 @@ test "a whole reply reads the same as a streamed one" {
 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
-    try testing.expectEqualStrings(":lock_with_ink_pen:abc123", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:`abc123`", collect.got.records.items[1].content.?);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
     try testing.expectEqualStrings(
         \\{"text":"hi"}

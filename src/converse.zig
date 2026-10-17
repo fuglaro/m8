@@ -162,13 +162,10 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     var progress: Progress = .{ .keeper = opts.keep, .lead = settled };
     // Records normally get a blank line, so writing one has to know what came
     // before it. Some records belong together and are shown touching. A
-    // terminal is shown every 📜 and 🤖 highlighted as markdown.
+    // terminal is shown every 📜, 🤖 and 💭 highlighted as markdown.
     var shown: Shown = .{ .look = if (mode == .m8) .{ .width = highlight.terminalWidth(ctx.env) } else null };
     var status: Status = .{ .err = if (level > 0 and !opts.echo_given) ctx.err else null };
     if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);
-    // The rendered spelling is only ever written for a terminal, and a
-    // terminal is the only reader that can watch a reply arrive.
-    const live = mode == .m8;
 
     for ([_]posix.SIG{ .INT, .TERM }) |sig|
         posix.sigaction(sig, &.{ .handler = .{ .handler = onInterrupt }, .mask = posix.sigemptyset(), .flags = posix.SA.RESTART }, null);
@@ -240,7 +237,6 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 .said = .{ .arena = arena },
                 .out = out,
                 .mode = mode,
-                .live = live,
                 .shown = &shown,
                 .status = &status,
             };
@@ -759,7 +755,6 @@ const LiveReply = struct {
     snips: ?[]const u8 = null,
     out: *std.Io.Writer,
     mode: doc.Mode,
-    live: bool,
     shown: *Shown,
     status: *Status,
     /// Opened on the first byte. A model that only calls a tool says nothing,
@@ -821,7 +816,7 @@ const LiveReply = struct {
             );
         }
         try self.body.?.write(bytes);
-        if (self.live) try self.out.flush();
+        try self.out.flush();
     }
 
     fn closeFn(ctx: *anyopaque) anyerror!void {
@@ -840,7 +835,7 @@ const LiveReply = struct {
                 // where a snip went.
                 try self.shown.begin(self.out, k.sigil);
                 try doc.write(self.out, self.mode, .{ .sigil = k.sigil, .value = k.value });
-                if (self.live) try self.out.flush();
+                try self.out.flush();
             }
         }
         self.body = null;
@@ -937,7 +932,6 @@ test "live reply separates changes of sigil" {
         .said = .{ .arena = arena },
         .out = &out.writer,
         .mode = .md,
-        .live = false,
         .shown = &shown,
         .status = &status,
     };
@@ -972,7 +966,6 @@ test "a run says what it is doing, a line at a time" {
         .said = .{ .arena = arena },
         .out = &out.writer,
         .mode = .md,
-        .live = false,
         .shown = &shown,
         .status = &status,
     };

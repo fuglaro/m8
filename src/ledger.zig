@@ -577,7 +577,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try session.write(arena, f.io, &dirs, turn, &.{
         .{ .sigil = .agent, .value = "mathy" },
         .{ .sigil = .thought, .content = "weighing it" },
-        .{ .sigil = .thought, .value = "snip", .content = ":lock_with_ink_pen:SIG" },
+        .{ .sigil = .thought, .value = "snip", .content = ":lock_with_ink_pen:`SIG`" },
         .{ .sigil = .bot, .content = "Hi." },
     });
 
@@ -595,7 +595,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     const l = try expand(arena, f.io, &dirs, turn);
     try testing.expectEqual(@as(usize, 4), l.records.len);
     try testing.expectEqualStrings("weighing it", l.records[1].content.?);
-    try testing.expectEqualStrings(":lock_with_ink_pen:SIG", l.records[2].content.?);
+    try testing.expectEqualStrings(":lock_with_ink_pen:`SIG`", l.records[2].content.?);
     try testing.expect(session.isSnip(l.records[2]));
     try testing.expectEqualStrings("mathy", l.origin);
 
@@ -1080,7 +1080,7 @@ test "a break leaves its 🧠 standing, and what follows it is all that is read"
     defer f.deinit(arena);
     try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be mathy.\n");
     try f.agent(arena, "mathy/+/aaaaaaaaaa.md", "* :brain::mathy\n\n* :raising_hand::\n  > one\n");
-    try f.agent(arena, "mathy/+/snip-bbbbbbbbbb.md", "* :thought_balloon::snip\n  > :lock_with_ink_pen:c2ln\n");
+    try f.agent(arena, "mathy/+/snip-bbbbbbbbbb.md", "* :thought_balloon::snip\n  > :lock_with_ink_pen:`c2ln`\n");
     try f.agent(arena, "mathy/+/cccccccccc.md",
         \\* :brain::mathy/+/aaaaaaaaaa
         \\

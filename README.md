@@ -573,8 +573,10 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
   line that is `m8 @/local/Bonsai-8B`. See Models.
 * Saving is to the nearest existing m8 config folder.
 * If a tty is connected, interactive mode is activated,
-  which streams tokens without buffering and renders
-  the reply. Everything else is written as markdown.
+  which renders the reply. Everything else is written as
+  markdown.
+  * Either way the reply is written as it arrives, so
+    `m8 @x | m8 render` is as live as a terminal.
 * `-p` after the address is pretty: the reply is rendered and
   streamed whatever stdout is, under the 🙋 it answers.
   * It is for whatever stands between m8 and a terminal.
@@ -584,7 +586,7 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
     alike, so it is one command and not two.
   * `m8 render` is the rendered spelling for any document:
     `m8 ref @mathy | m8 encode | m8 render | less -R`.
-* A rendered 📜 or 🤖 is highlighted as markdown.
+* A rendered 📜, 🤖 or 💭 is highlighted as markdown.
   * A provider handing over text that is not markdown indents
     it four spaces, and it is shown as it is.
   * A line wider than the terminal is broken, carrying its
@@ -734,6 +736,8 @@ m8 watch @crew/cody/delegated                   a chat, as it moves
   * `--parsable` breaks no line and pads no table, so a copy
     off the terminal parses again.
   * `--no-highlight` writes no colour.
+  * It writes as it reads, so it can sit at the end of
+    anything still talking.
 * `query @X MESSAGE` is the pipeline written once more,
   for whatever has parameters rather than a command line.
   * It says the message, runs, keeps the run, and writes
@@ -933,7 +937,8 @@ records and not one.
 Thinking divides them the same way. Chat completions has no
 field a 💭 could go out in at all. The other two do, and both
 want it signed: a thought carries a 🔏 — a signature under
-messages, an id and its encrypted content under responses —
+messages, an id and its encrypted content under responses,
+written as a code span because it is data and never prose —
 and a 💭 with no 🔏 is dropped rather than sent, because the
 api refuses an unsigned one and a thought that arrived off
 some other wire has no signature to give. So a reply that
@@ -1179,7 +1184,7 @@ Query:
 
 ▐ 💭:
 │ Assistant Thoughts
-│ 🔏Optional Signature
+│ 🔏`Optional Signature`
 
 ▐ 🤖:
 │ Assistant Content Text
@@ -1214,7 +1219,7 @@ Query:
 >
 > * :thought_balloon::
 >   > Assistant Thoughts
->   > :lock_with_ink_pen:Optional Signature
+>   > :lock_with_ink_pen:`Optional Signature`
 >
 > * :robot::
 >   > Assistant Content Text
@@ -1507,13 +1512,13 @@ compact one-line thought "snip".
 
 ```m8
 ▐ 💭:snip
-│ 🔏c2lnbmF0dXJl
+│ 🔏`c2lnbmF0dXJl`
 
 ▐ 🧠:mathy/+/snip-oniwhbxumk
 ```
 
 > * :thought_balloon::snip
->   > :lock_with_ink_pen:c2lnbmF0dXJl
+>   > :lock_with_ink_pen:`c2lnbmF0dXJl`
 >
 > * :brain::mathy/+/snip-oniwhbxumk
 

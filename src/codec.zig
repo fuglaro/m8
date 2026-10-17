@@ -24,7 +24,9 @@ const std = @import("std");
 const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const doc = @import("m8/doc.zig");
-const Sigil = @import("m8/sigil.zig").Sigil;
+const sigils = @import("m8/sigil.zig");
+const Sigil = sigils.Sigil;
+const markdown = @import("m8/markdown.zig");
 const modelform = @import("m8/model.zig");
 const ledger = @import("ledger.zig");
 const toolbox = @import("toolbox.zig");
@@ -40,6 +42,34 @@ pub const snip = @import("session.zig").snip;
 /// so a blockless `💭snip` is ordinary thought text too.
 pub fn thoughtText(r: doc.Record) []const u8 {
     return r.content orelse r.value;
+}
+
+/// A 🔏 as content, in the spelling every file is written in: the sigil, then
+/// what the api signed as a code span, so it is read and shown as exactly
+/// what it is and never as markdown.
+pub fn sealed(arena: Allocator, signature: []const u8) ![]const u8 {
+    var w: std.Io.Writer.Allocating = .init(arena);
+    try w.writer.writeAll(Sigil.signature.text(.md));
+    try markdown.writeSpan(&w.writer, signature);
+    return w.written();
+}
+
+/// The signature a line carries, in either spelling, or null when the line is
+/// not a 🔏. One whose rest is not a code span is an error rather than text,
+/// or a thought would lose its signature without a word.
+pub fn signatureOn(arena: Allocator, line: []const u8) !?[]const u8 {
+    for ([_]doc.Mode{ .md, .m8 }) |mode| {
+        const hit = sigils.match(mode, line) orelse continue;
+        if (hit.sigil != .signature) continue;
+        const rest = line[hit.len..];
+        const got = try markdown.spans(arena, rest);
+        if (got.len != 1) return error.BadSignature;
+        var w: std.Io.Writer.Allocating = .init(arena);
+        try markdown.writeSpan(&w.writer, got[0]);
+        if (!std.mem.eql(u8, w.written(), rest)) return error.BadSignature;
+        return got[0];
+    }
+    return null;
 }
 
 /// What the ledger says the request is, plus the one thing it cannot: whether
