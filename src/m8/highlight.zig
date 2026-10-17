@@ -22,7 +22,7 @@
 //! * A link is the part from `](` to `)`, which is the first point at which it
 //!   is known to be one.
 //! * Nothing inline outlives its line, so every line starts plain. A line
-//!   broken to fit is a new line too.
+//!   broken to fit is the same line, and only its quote and indent are plain.
 //! * A fence opens only at the very start of a line and holds until it closes
 //!   or the block ends. `diff` is coloured a line at a time.
 //! * A quote or list marker is coloured, and nothing after it.
@@ -531,8 +531,8 @@ pub const Highlighter = struct {
         }
     }
 
-    /// One character, breaking the line first when it would not fit. A break
-    /// ends the line's styles, as a newline does.
+    /// One character, breaking the line first when it would not fit. What
+    /// opens the broken line is plain, and the style carries on after it.
     fn emit(h: *Highlighter, c: []const u8, s: Style) Error!void {
         const cp = std.unicode.utf8Decode(c) catch 0xfffd;
         const cells: usize = if (cp == '\t') 8 - h.col % 8 else width(cp);
@@ -541,16 +541,12 @@ pub const Highlighter = struct {
             h.col + cells > h.opts.width and h.col > floor)
         {
             try h.set(.{});
-            h.strong = false;
-            h.emphasis = false;
-            h.struck = false;
-            h.link = false;
             try h.out.writeByte('\n');
             try h.out.writeAll(h.lead);
             try h.out.writeAll(h.cont[0..h.cont_n]);
             h.col = floor;
-            try h.set(h.current());
-        } else try h.set(s);
+        }
+        try h.set(s);
         try h.out.writeAll(c);
         h.col += cells;
     }
@@ -685,8 +681,10 @@ test "a long line is broken at the width, carrying its quote and indent" {
     try testing.expectEqualStrings("> - ab\n| >   cd\n| >   ef", got);
 }
 
-test "a broken line starts plain, as any line does" {
-    try expectShown("{1;38;5;231}**ab{}\ncdef\n**", "**abcdef**", .{ .width = 4 });
+test "a broken line carries its style past its quote and indent" {
+    const got = try shown("> **abcdef**", .{ .width = 6 }, "| ");
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("{38;5;245}>{} {1;38;5;231}**{}\n| > {1;38;5;231}ab{}\n| > {1;38;5;231}cd{}\n| > {1;38;5;231}ef{}\n| > {1;38;5;231}**{}", got);
 }
 
 test "a line indented four past its list item is literal, unless it continues a paragraph" {
