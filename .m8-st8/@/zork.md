@@ -1,1 +1,1 @@
-#### :brain:/toy/Z-Machine/zork1
+* :brain::/toy/Z-Machine/zork1

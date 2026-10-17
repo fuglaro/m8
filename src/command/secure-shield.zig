@@ -65,9 +65,9 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
         \\Restrictions come space separated in __secures__, which is how a
         \\🛡 hands over what was appended to its variable:
         \\
-        \\  ▐ 🛡️secure
+        \\  ▐ 🛡️:secure
         \\  │ `m8` `secure-shield`
-        \\  ▐ 🛡️secure secures airgap
+        \\  ▐ 🛡️:secure secures airgap
         \\
     );
     // Read from the same table validation uses, so help cannot drift from

@@ -1,7 +1,7 @@
-#### :top:
-#### :compass:
-> Test top
-#### :top:
+* :top::
+* :compass::
+  > Test top
+* :top::
 
-#### :compass:
-> Test main
+* :compass::
+  > Test main

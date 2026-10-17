@@ -506,19 +506,19 @@ test "an inclusion lands where it was written, not at the front" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-order");
     defer f.deinit(arena);
     try f.agent(arena, "helper.md",
-        \\#### :compass:
-        \\> Helper.
+        \\* :compass::
+        \\  > Helper.
     );
     try f.agent(arena, "outer.md",
-        \\#### :brain:/local/tiny
+        \\* :brain::/local/tiny
         \\
-        \\#### :compass:
-        \\> First.
+        \\* :compass::
+        \\  > First.
         \\
-        \\#### :brain:helper
+        \\* :brain::helper
         \\
-        \\#### :compass:
-        \\> Last.
+        \\* :compass::
+        \\  > Last.
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -544,10 +544,10 @@ test "a chat expands through its turns to the agent it began with" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-chat");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :compass:\n> Be brief.\n");
-    try f.agent(arena, "+/one.md", "#### :brain:mathy\n\n#### :raising_hand:\n> Hi.\n\n#### :robot:\n> Hello.\n");
-    try f.agent(arena, "+/two.md", "#### :brain:+/one\n\n#### :raising_hand:\n> More.\n\n#### :robot:\n> Sure.\n");
-    try f.agent(arena, "mathy/+.md", "#### :brain:+/two\n");
+    try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be brief.\n");
+    try f.agent(arena, "+/one.md", "* :brain::mathy\n\n* :raising_hand::\n  > Hi.\n\n* :robot::\n  > Hello.\n");
+    try f.agent(arena, "+/two.md", "* :brain::+/one\n\n* :raising_hand::\n  > More.\n\n* :robot::\n  > Sure.\n");
+    try f.agent(arena, "mathy/+.md", "* :brain::+/two\n");
 
     const dirs = [_][]const u8{f.dir};
     const l = try expand(arena, f.io, &dirs, "mathy/+");
@@ -568,7 +568,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-snip");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n");
+    try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n");
 
     const dirs = [_][]const u8{f.dir};
     const turn = "mathy/+/abcdefghij";
@@ -598,7 +598,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try testing.expectEqualStrings("mathy", l.origin);
 
     // A snip that is gone is said, not quietly left out.
-    try f.agent(arena, "mathy/+/lost.md", "#### :brain:mathy\n\n#### :brain:mathy/+/snip-nowherenea\n");
+    try f.agent(arena, "mathy/+/lost.md", "* :brain::mathy\n\n* :brain::mathy/+/snip-nowherenea\n");
     try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "mathy/+/lost"));
 }
 
@@ -612,16 +612,16 @@ test "tool calls stay, and only an unanswered one is still owed" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-calls");
     defer f.deinit(arena);
     try f.agent(arena, "+/t.md",
-        \\#### :brain:/local/tiny
+        \\* :brain::/local/tiny
         \\
-        \\#### :calling:say,c1
-        \\> * text `hi`
+        \\* :calling::say,c1
+        \\  > * text `hi`
         \\
-        \\#### :receipt:c1
-        \\>     hi
+        \\* :receipt::c1
+        \\  >     hi
         \\
-        \\#### :calling:say,c2
-        \\> * text `bye`
+        \\* :calling::say,c2
+        \\  > * text `bye`
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -647,7 +647,7 @@ test "a conversation is as long as it is, whatever the include cap says" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-long");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :compass:\n> Be brief.\n");
+    try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be brief.\n");
 
     // Every run writes one link, so a chat this long is a chain this deep.
     // Far past the cap on how far one agent may include another, and far
@@ -662,13 +662,13 @@ test "a conversation is as long as it is, whatever the include cap says" {
             try std.fmt.allocPrint(arena, "{s}.md", .{name}),
             try std.fmt.allocPrint(
                 arena,
-                "#### :brain:{s}\n\n#### :raising_hand:\n> {d}\n\n#### :robot:\n> ok\n",
+                "* :brain::{s}\n\n* :raising_hand::\n  > {d}\n\n* :robot::\n  > ok\n",
                 .{ parent, i },
             ),
         );
         parent = name;
     }
-    try f.agent(arena, "mathy/+.md", try std.fmt.allocPrint(arena, "#### :brain:{s}\n", .{parent}));
+    try f.agent(arena, "mathy/+.md", try std.fmt.allocPrint(arena, "* :brain::{s}\n", .{parent}));
 
     const dirs = [_][]const u8{f.dir};
     const l = try expand(arena, f.io, &dirs, "mathy/+");
@@ -695,14 +695,14 @@ test "lineage that closes on itself says so, rather than running out of depth" {
     defer f.deinit(arena);
     // m8 never writes this: a turn names one that existed before it did. Only
     // an edited file is shaped like this, and it is still worth naming.
-    try f.agent(arena, "+/a.md", "#### :brain:+/b\n\n#### :raising_hand:\n> one\n");
-    try f.agent(arena, "+/b.md", "#### :brain:+/a\n\n#### :raising_hand:\n> two\n");
+    try f.agent(arena, "+/a.md", "* :brain::+/b\n\n* :raising_hand::\n  > one\n");
+    try f.agent(arena, "+/b.md", "* :brain::+/a\n\n* :raising_hand::\n  > two\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "+/a"));
 
     // A turn naming itself is the same fault, one link shorter.
-    try f.agent(arena, "+/self.md", "#### :brain:+/self\n");
+    try f.agent(arena, "+/self.md", "* :brain::+/self\n");
     try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "+/self"));
 }
 
@@ -715,8 +715,8 @@ test "an agent met twice is not a cycle" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-twice");
     defer f.deinit(arena);
-    try f.agent(arena, "helper.md", "#### :compass:\n> Helper.\n");
-    try f.agent(arena, "outer.md", "#### :brain:/local/tiny\n\n#### :brain:helper\n\n#### :brain:helper\n");
+    try f.agent(arena, "helper.md", "* :compass::\n  > Helper.\n");
+    try f.agent(arena, "outer.md", "* :brain::/local/tiny\n\n* :brain::helper\n\n* :brain::helper\n");
 
     // Twice along one path is a cycle; twice side by side is a mob used
     // twice, and both copies stand where they were named.
@@ -736,9 +736,9 @@ test "an agent that includes one leading back to it says so" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-cycle");
     defer f.deinit(arena);
-    try f.agent(arena, "ping.md", "#### :brain:pong\n");
-    try f.agent(arena, "pong.md", "#### :brain:ping\n");
-    try f.agent(arena, "selfy.md", "#### :brain:selfy\n");
+    try f.agent(arena, "ping.md", "* :brain::pong\n");
+    try f.agent(arena, "pong.md", "* :brain::ping\n");
+    try f.agent(arena, "selfy.md", "* :brain::selfy\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(Error.IncludeLoops, expand(arena, f.io, &dirs, "ping"));
@@ -759,7 +759,7 @@ test "a mob may be as deep as it is, since depth is not the fault" {
     // Well past the eight this used to stop at. Nine mobs is nine mobs, and
     // the only thing wrong with a chain is the one that closes.
     const links = 100;
-    try f.agent(arena, "tail.md", "#### :brain:/local/tiny\n");
+    try f.agent(arena, "tail.md", "* :brain::/local/tiny\n");
     var below: []const u8 = "tail";
     for (0..links) |i| {
         const name = try std.fmt.allocPrint(arena, "mob{d}", .{i});
@@ -768,7 +768,7 @@ test "a mob may be as deep as it is, since depth is not the fault" {
             try std.fmt.allocPrint(arena, "{s}.md", .{name}),
             try std.fmt.allocPrint(
                 arena,
-                "#### :compass:\n> {d}\n\n#### :brain:{s}\n",
+                "* :compass::\n  > {d}\n\n* :brain::{s}\n",
                 .{ i, below },
             ),
         );
@@ -831,11 +831,11 @@ test "a name with no mark is an agent, and a missing one is missing" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-naming");
     defer f.deinit(arena);
     // Two links deep, so the failure has somewhere to be swallowed.
-    try f.agent(arena, "outer.md", "#### :brain:middle\n");
-    try f.agent(arena, "middle.md", "#### :brain:gone\n");
+    try f.agent(arena, "outer.md", "* :brain::middle\n");
+    try f.agent(arena, "middle.md", "* :brain::gone\n");
     // A slash no longer makes something a model; only the mark does.
-    try f.agent(arena, "slashed.md", "#### :brain:team/gone\n");
-    try f.agent(arena, "marked.md", "#### :brain:/team/gone,max_tokens:16\n");
+    try f.agent(arena, "slashed.md", "* :brain::team/gone\n");
+    try f.agent(arena, "marked.md", "* :brain::/team/gone,max_tokens:16\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "outer"));
@@ -858,15 +858,15 @@ test "the fence splits a file, and the mark decides which half comes back" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-top");
     defer f.deinit(arena);
     try f.agent(arena, "skills/tight-docs.md",
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :compass:
-        \\> Load tight-docs when working on documentation.
+        \\* :compass::
+        \\  > Load tight-docs when working on documentation.
         \\
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :raising_hand:
-        \\> The skill itself.
+        \\* :raising_hand::
+        \\  > The skill itself.
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -899,7 +899,7 @@ test "a file with no fence is all body, so naming its top yields nothing" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-notop");
     defer f.deinit(arena);
-    try f.agent(arena, "plain.md", "#### :compass:\n> All of it.\n");
+    try f.agent(arena, "plain.md", "* :compass::\n  > All of it.\n");
 
     const dirs = [_][]const u8{f.dir};
     const body = try expand(arena, f.io, &dirs, "plain");
@@ -922,17 +922,17 @@ test "there is one fence at the head of a file, or there is none" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-badtop");
     defer f.deinit(arena);
-    try f.agent(arena, "late.md", "#### :compass:\n> First.\n\n#### :top:\n");
-    try f.agent(arena, "unclosed.md", "#### :top:\n\n#### :compass:\n> Forever.\n");
+    try f.agent(arena, "late.md", "* :compass::\n  > First.\n\n* :top::\n");
+    try f.agent(arena, "unclosed.md", "* :top::\n\n* :compass::\n  > Forever.\n");
     try f.agent(arena, "thrice.md",
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :compass:
-        \\> Body.
+        \\* :compass::
+        \\  > Body.
         \\
-        \\#### :top:
+        \\* :top::
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -953,25 +953,25 @@ test "the mark decides at every reference rather than being inherited" {
     // Its top advertises another skill's top; its body includes an agent's
     // body. Reaching one never drags in the other.
     try f.agent(arena, "inner.md",
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :compass:
-        \\> Inner advert.
+        \\* :compass::
+        \\  > Inner advert.
         \\
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :compass:
-        \\> Inner body.
+        \\* :compass::
+        \\  > Inner body.
     );
-    try f.agent(arena, "helper.md", "#### :compass:\n> Helper body.\n");
+    try f.agent(arena, "helper.md", "* :compass::\n  > Helper body.\n");
     try f.agent(arena, "outer.md",
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :books:inner
+        \\* :books::inner
         \\
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :brain:helper
+        \\* :brain::helper
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -996,26 +996,26 @@ test "a top that names its own top is a loop; a body naming it is not" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-toploop");
     defer f.deinit(arena);
     try f.agent(arena, "selfish.md",
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :books:selfish
+        \\* :books::selfish
         \\
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :compass:
-        \\> Body.
+        \\* :compass::
+        \\  > Body.
     );
     // Disjoint halves, so this one terminates: the body reaches the top and
     // the top has no way back down.
     try f.agent(arena, "advertises-itself.md",
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :compass:
-        \\> What I am for.
+        \\* :compass::
+        \\  > What I am for.
         \\
-        \\#### :top:
+        \\* :top::
         \\
-        \\#### :books:advertises-itself
+        \\* :books::advertises-itself
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -1076,16 +1076,16 @@ test "a break leaves its 🧠 standing, and what follows it is all that is read"
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-break");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "#### :brain:/local/tiny\n\n#### :compass:\n> Be mathy.\n");
-    try f.agent(arena, "mathy/+/aaaaaaaaaa.md", "#### :brain:mathy\n\n#### :raising_hand:\n> one\n");
-    try f.agent(arena, "mathy/+/snip-bbbbbbbbbb.md", "#### :thought_balloon:snip\n> :lock_with_ink_pen:c2ln\n");
+    try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be mathy.\n");
+    try f.agent(arena, "mathy/+/aaaaaaaaaa.md", "* :brain::mathy\n\n* :raising_hand::\n  > one\n");
+    try f.agent(arena, "mathy/+/snip-bbbbbbbbbb.md", "* :thought_balloon::snip\n  > :lock_with_ink_pen:c2ln\n");
     try f.agent(arena, "mathy/+/cccccccccc.md",
-        \\#### :brain:mathy/+/aaaaaaaaaa
+        \\* :brain::mathy/+/aaaaaaaaaa
         \\
-        \\#### :brain:mathy/+/snip-bbbbbbbbbb
+        \\* :brain::mathy/+/snip-bbbbbbbbbb
         \\
-        \\#### :robot:
-        \\> two
+        \\* :robot::
+        \\  > two
     );
 
     const dirs = [_][]const u8{f.dir};

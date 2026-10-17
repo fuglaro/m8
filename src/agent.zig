@@ -190,19 +190,19 @@ test "a definition yields its model, shields and tools" {
     const f = try Fixture.init(arena, &threaded, "m8-agent-basic");
     defer f.deinit(arena);
     try f.agent(arena, "mathy.md",
-        \\#### :brain:/local/tiny
+        \\* :brain::/local/tiny
         \\
-        \\#### :shield:jail
+        \\* :shield::jail
         \\
-        \\#### :toolbox:say
-        \\> `echo` `{{text|}}`
-        \\> * text string
-        \\> > Echoes.
+        \\* :toolbox::say
+        \\  > `echo` `{{text|}}`
+        \\  > * text string
+        \\  > > Echoes.
         \\
-        \\#### :toolbox:say
+        \\* :toolbox::say
         \\
-        \\#### :compass:
-        \\> Be brief.
+        \\* :compass::
+        \\  > Be brief.
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -226,18 +226,18 @@ test "tool variables use separate headers and accumulate" {
     const f = try Fixture.init(arena, &threaded, "m8-agent-tool-vars");
     defer f.deinit(arena);
     try f.agent(arena, "pagey.md",
-        \\#### :brain:/local/tiny
+        \\* :brain::/local/tiny
         \\
-        \\#### :toolbox:read
-        \\> `read`
+        \\* :toolbox::read
+        \\  > `read`
         \\
-        \\#### :toolbox:read PAGE_LINES 100
+        \\* :toolbox::read PAGE_LINES 100
         \\
-        \\#### :toolbox:read PAGE_BYTES 10000
+        \\* :toolbox::read PAGE_BYTES 10000
         \\
-        \\#### :toolbox:read BYTE_CAP 20000
+        \\* :toolbox::read BYTE_CAP 20000
         \\
-        \\#### :toolbox:read
+        \\* :toolbox::read
     );
 
     const d = try load(arena, f.io, &.{f.dir}, "pagey");
@@ -259,13 +259,13 @@ test "shields accumulate over the lineage, so including cannot widen" {
     defer f.deinit(arena);
     // The included agent activates one and is named last, which is where an
     // override would put it if activation replaced rather than accumulated.
-    try f.agent(arena, "helper.md", "#### :brain:/local/tiny\n\n#### :shield:airgap\n");
+    try f.agent(arena, "helper.md", "* :brain::/local/tiny\n\n* :shield::airgap\n");
     try f.agent(arena, "outer.md",
-        \\#### :brain:/local/tiny
+        \\* :brain::/local/tiny
         \\
-        \\#### :shield:no-edit-git
+        \\* :shield::no-edit-git
         \\
-        \\#### :brain:helper
+        \\* :brain::helper
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -287,18 +287,18 @@ test "a later definition of a tool name is the one offered" {
     const f = try Fixture.init(arena, &threaded, "m8-agent-override");
     defer f.deinit(arena);
     try f.agent(arena, "base.md",
-        \\#### :brain:/local/tiny
+        \\* :brain::/local/tiny
         \\
-        \\#### :toolbox:say
-        \\> `echo` `base`
+        \\* :toolbox::say
+        \\  > `echo` `base`
         \\
-        \\#### :toolbox:say
+        \\* :toolbox::say
     );
     try f.agent(arena, "outer.md",
-        \\#### :brain:base
+        \\* :brain::base
         \\
-        \\#### :toolbox:say
-        \\> `echo` `outer`
+        \\* :toolbox::say
+        \\  > `echo` `outer`
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -317,7 +317,7 @@ test "an unknown agent and a missing model are told apart" {
 
     const f = try Fixture.init(arena, &threaded, "m8-agent-errors");
     defer f.deinit(arena);
-    try f.agent(arena, "bare.md", "#### :compass:\n> No model here.\n");
+    try f.agent(arena, "bare.md", "* :compass::\n  > No model here.\n");
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(ledger.Error.UnknownAgent, load(arena, f.io, &dirs, "nosuch"));

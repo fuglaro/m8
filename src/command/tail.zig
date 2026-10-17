@@ -228,13 +228,13 @@ test "what m8 @ writes ends on the 🧠 it kept, whole or as a name" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const said = "#### :robot:\n> hi\n\n#### :brain:x/+/abcdefghij\n";
-    try testing.expectEqualStrings("#### :brain:x/+/abcdefghij\n", (try call(arena, &.{}, .record, said)).out);
+    const said = "* :robot::\n  > hi\n\n* :brain::x/+/abcdefghij\n";
+    try testing.expectEqualStrings("* :brain::x/+/abcdefghij\n", (try call(arena, &.{}, .record, said)).out);
     try testing.expectEqualStrings("x/+/abcdefghij\n", (try call(arena, &.{}, .value, said)).out);
     // A last line with no newline on it is still the last record.
     try testing.expectEqualStrings(
         "x/+/abcdefghij\n",
-        (try call(arena, &.{}, .value, "#### :robot:\n> hi\n\n#### :brain:x/+/abcdefghij")).out,
+        (try call(arena, &.{}, .value, "* :robot::\n  > hi\n\n* :brain::x/+/abcdefghij")).out,
     );
 }
 
@@ -245,7 +245,7 @@ test "a record with nothing to give is an error, not an empty line" {
 
     // A turn nobody kept ends on its reply, and a reply has no value: handed
     // on as a name it would read as the main chat.
-    const sent = "#### :brain:x/+/parent\n\n#### :raising_hand:\n> hi\n\n#### :robot:\n> hello\n";
+    const sent = "* :brain::x/+/parent\n\n* :raising_hand::\n  > hi\n\n* :robot::\n  > hello\n";
     const value = try call(arena, &.{}, .value, sent);
     try testing.expectEqual(@as(u8, 1), value.status);
     try testing.expectEqualStrings("", value.out);
@@ -259,7 +259,7 @@ test "a record with nothing to give is an error, not an empty line" {
     // before it: what was asked for is the last one, and it cannot be read.
     try testing.expectError(
         error.UnknownSigil,
-        call(arena, &.{}, .value, "#### :brain:x/+/abcdefghij\n\n#### :nonsense:\n"),
+        call(arena, &.{}, .value, "* :brain::x/+/abcdefghij\n\n* :nonsense::\n"),
     );
 }
 
@@ -268,12 +268,12 @@ test "the last of any kind named, as the text it holds" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const ledger = "#### :robot:\n> first\n\n#### :raising_hand:\n> more\n\n" ++
-        "#### :robot:\n> second\n>\n> line\n\n#### :brain:x/+/abcdefghij\n";
+    const ledger = "* :robot::\n  > first\n\n* :raising_hand::\n  > more\n\n" ++
+        "* :robot::\n  > second\n  >\n  > line\n\n* :brain::x/+/abcdefghij\n";
     const picks = [_]sigil.Sigil{ .bot, .question };
     try testing.expectEqualStrings("second\n\nline\n", (try call(arena, &picks, .block, ledger)).out);
 
-    const asked = ledger ++ "\n#### :question:tool,c1\n> deploy to prod?\n";
+    const asked = ledger ++ "\n* :question::tool,c1\n  > deploy to prod?\n";
     try testing.expectEqualStrings("deploy to prod?\n", (try call(arena, &picks, .block, asked)).out);
     try testing.expectEqualStrings("tool,c1\n", (try call(arena, &.{}, .value, asked)).out);
 }

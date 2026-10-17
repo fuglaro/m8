@@ -529,10 +529,10 @@ test "a provider is a command: what it writes is the answer" {
         arena,
         io,
         .{
-            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> said it\n'" },
+            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '* :robot::\n  > said it\n'" },
         },
         null,
-        "#### :raising_hand:\n> ask\n",
+        "* :raising_hand::\n  > ask\n",
         collect.sink(),
         &thrown.writer,
     );
@@ -585,7 +585,7 @@ test "the stages are one pipeline, and what each says aside is kept for the end"
         .{
             .encode = &.{ "/bin/sh", "-c", "tr a-z A-Z" },
             .cmd = &.{ "/bin/sh", "-c", "sed 's/$/!/'" },
-            .parse = &.{ "/bin/sh", "-c", "echo '::stats::x' >&2; printf '#### :robot:\n> '; cat" },
+            .parse = &.{ "/bin/sh", "-c", "echo '::stats::x' >&2; printf '* :robot::\n  > '; cat" },
         },
         null,
         "ask",
@@ -643,7 +643,7 @@ test "everything the entry said reaches the command, and nothing else does" {
         arena,
         io,
         .{
-            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '#### :robot:\n> %s\n' \"$M8_PROVIDER_URL\"" },
+            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '* :robot::\n  > %s\n' \"$M8_PROVIDER_URL\"" },
         },
         &environ,
         "",

@@ -438,7 +438,7 @@ test "a chat with no pointer reads as its parent's head" {
 
     const f = try Fixture.init(arena, &threaded, "m8-session-head");
     defer f.deinit();
-    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "mob/agent.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{f.dir};
 
     // Nothing said yet: the agent's chat is the agent, and so is a sub chat.
@@ -447,13 +447,13 @@ test "a chat with no pointer reads as its parent's head" {
 
     // The agent's chat moves, and a chat forked from it follows until it
     // has a pointer of its own.
-    try f.write(arena, "mob/agent/+.md", "#### :brain:mob/agent/+/one\n");
+    try f.write(arena, "mob/agent/+.md", "* :brain::mob/agent/+/one\n");
     try testing.expectEqualStrings("mob/agent/+/one", try head(arena, f.io, &dirs, "mob/agent/c1"));
-    try f.write(arena, "mob/agent/c1/+.md", "#### :brain:mob/agent/c1/+/two\n");
+    try f.write(arena, "mob/agent/c1/+.md", "* :brain::mob/agent/c1/+/two\n");
     try testing.expectEqualStrings("mob/agent/c1/+/two", try head(arena, f.io, &dirs, "mob/agent/c1/sub"));
 
     // The main chat attached to a chat reads as that chat.
-    try f.write(arena, "+.md", "#### :brain:mob/agent/c1/+\n");
+    try f.write(arena, "+.md", "* :brain::mob/agent/c1/+\n");
     try testing.expectEqualStrings("mob/agent/c1/+/two", try settle(arena, f.io, &dirs, main));
 
     // Unpointing goes back to the parent, and never removes a turn.

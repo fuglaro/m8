@@ -39,7 +39,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\`brain`, `books`. It is the other half of `m8 tail --sigil`, which
         \\keeps one record where this drops every one of a kind.
         \\
-        \\  ▐ 🛡️freeze-toolbox
+        \\  ▐ 🛡️:freeze-toolbox
         \\  │ `bash` `-euo` `pipefail` `-c` `"$0" "$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
         \\
         \\Read a line at a time and never holding more than one, so a tool may
@@ -187,12 +187,12 @@ test "text goes through whole, and a record still goes" {
 
     try testing.expectEqualStrings("one\ntwo\n", try filtered(arena, "one\ntwo\n", .tool));
     try testing.expectEqualStrings(
-        "#### :robot:\n> kept",
-        try filtered(arena, "#### :toolbox:x\n> gone\n\n#### :robot:\n> kept", .tool),
+        "* :robot::\n  > kept",
+        try filtered(arena, "* :toolbox::x\n  > gone\n\n* :robot::\n  > kept", .tool),
     );
     try testing.expectEqualStrings(
-        "#### :robot:\n> kept\n",
-        try filtered(arena, "#### :toolbox:x\n> gone\n\n#### :robot:\n> kept\n", .tool),
+        "* :robot::\n  > kept\n",
+        try filtered(arena, "* :toolbox::x\n  > gone\n\n* :robot::\n  > kept\n", .tool),
     );
 }
 
@@ -201,10 +201,10 @@ test "every kind named goes, and nothing else" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const said = "#### :toolbox:x\n> gone\n\n#### :receipt:c1\n>     kept\n\n" ++
-        "#### :brain:somebody\n\n#### :books:skill\n\n#### :green_circle:c1\n";
+    const said = "* :toolbox::x\n  > gone\n\n* :receipt::c1\n  >     kept\n\n" ++
+        "* :brain::somebody\n\n* :books::skill\n\n* :green_circle::c1\n";
     try testing.expectEqualStrings(
-        "#### :receipt:c1\n>     kept\n\n#### :green_circle:c1\n",
+        "* :receipt::c1\n  >     kept\n\n* :green_circle::c1\n",
         try without(arena, said, &.{ .tool, .agent, .skill }),
     );
 }

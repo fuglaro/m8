@@ -2,11 +2,13 @@
 //!
 //! A record is a header line and at most one content block:
 //!
-//!     ▐ 🧰shell          #### :toolbox:shell
-//!     │ run a command    > run a command
+//!     ▐ 🧰:shell         * :toolbox::shell
+//!     │ run a command      > run a command
 //!
-//! The header is a sigil and its value. The content is the block quoted
-//! beneath it. That is the whole of the harness — content never nests further
+//! The header is a sigil, a `:`, and its value. The content is the block
+//! quoted beneath it. In markdown the header is a list item and the quote is
+//! indented under it, so that anything rendering the file shows each record
+//! as one item holding its block, rather than a list and a quote apart. That is the whole of the harness — content never nests further
 //! and records never interleave, so this file stays the same size no matter
 //! how many kinds of content the language grows.
 //!
@@ -49,12 +51,15 @@ pub const Record = struct {
 /// What opens a record, per spelling.
 pub fn header(mode: Mode) []const u8 {
     return switch (mode) {
-        .md => "#### ",
+        .md => "* ",
         .m8 => "\u{2590} ", // ▐
     };
 }
 
-/// What carries a content line, per spelling.
+/// What ends a sigil on a header line, before its value.
+pub const sigil_end = ":";
+
+/// The quote mark, per spelling, as a block nests one inside its content.
 pub fn quote(mode: Mode) []const u8 {
     return switch (mode) {
         .md => "> ",
@@ -62,9 +67,35 @@ pub fn quote(mode: Mode) []const u8 {
     };
 }
 
-/// A content line with nothing on it: the quote and no space.
+/// A quote with nothing after it: the mark and no space.
 pub fn bareQuote(mode: Mode) []const u8 {
     return quote(mode)[0 .. quote(mode).len - 1];
+}
+
+/// What carries a record's content line: the quote, indented under the
+/// header's list item in markdown.
+pub fn lead(mode: Mode) []const u8 {
+    return switch (mode) {
+        .md => "  > ",
+        .m8 => quote(.m8),
+    };
+}
+
+/// A content line with nothing on it: the lead and no space.
+pub fn bareLead(mode: Mode) []const u8 {
+    return lead(mode)[0 .. lead(mode).len - 1];
+}
+
+/// A header line read: its sigil and its value. Null when the line is not
+/// one, which includes a sigil without the `:` that ends it.
+pub const Header = struct { sigil: Sigil, value: []const u8 };
+
+pub fn headed(mode: Mode, line: []const u8) ?Header {
+    if (!std.mem.startsWith(u8, line, header(mode))) return null;
+    const rest = line[header(mode).len..];
+    const m = sigil.match(mode, rest) orelse return null;
+    if (!std.mem.startsWith(u8, rest[m.len..], sigil_end)) return null;
+    return .{ .sigil = m.sigil, .value = rest[m.len + sigil_end.len ..] };
 }
 
 pub const ParseError = error{
@@ -77,6 +108,8 @@ pub const ParseError = error{
     OrphanContent,
     /// A quote was not followed by a space. Missing it is never content.
     MissingSpace,
+    /// A sigil on a header line was not ended by its `:`.
+    MissingColon,
     /// A line of a block its sigil indents was not indented.
     MissingIndent,
     /// A line that is neither blank, a header, nor a content line.
@@ -100,12 +133,7 @@ pub const Diagnostic = struct {
 /// framing header; a line that merely looks like a header is still prose.
 pub fn detect(src: []const u8) ?Mode {
     const line = firstLine(src) orelse return null;
-    for ([_]Mode{ .m8, .md }) |m| {
-        const h = header(m);
-        if (std.mem.startsWith(u8, line, h) and
-            sigil.match(m, line[h.len..]) != null)
-            return m;
-    }
+    for ([_]Mode{ .m8, .md }) |m| if (headed(m, line) != null) return m;
     return null;
 }
 
@@ -183,7 +211,11 @@ pub fn parseMode(arena: Allocator, src: []const u8, mode: Mode, diag: *Diagnosti
                 diag.* = .{ .line = line_no, .detail = "not a known sigil" };
                 return error.UnknownSigil;
             };
-            value = rest[m.len..];
+            if (!std.mem.startsWith(u8, rest[m.len..], sigil_end)) {
+                diag.* = .{ .line = line_no, .detail = "a sigil is ended by `:` before its value" };
+                return error.MissingColon;
+            }
+            value = rest[m.len + sigil_end.len ..];
             if (value.len > 0 and !m.sigil.takesValue()) {
                 diag.* = .{ .line = line_no, .detail = "this sigil takes no value" };
                 return error.UnexpectedValue;
@@ -195,7 +227,7 @@ pub fn parseMode(arena: Allocator, src: []const u8, mode: Mode, diag: *Diagnosti
             continue;
         }
 
-        if (std.mem.startsWith(u8, line, quote(mode)) or std.mem.eql(u8, line, bareQuote(mode))) {
+        if (std.mem.startsWith(u8, line, lead(mode)) or std.mem.eql(u8, line, bareLead(mode))) {
             if (cur == null) {
                 diag.* = .{ .line = line_no, .detail = "content before the first record" };
                 return error.OrphanContent;
@@ -209,9 +241,9 @@ pub fn parseMode(arena: Allocator, src: []const u8, mode: Mode, diag: *Diagnosti
                 return error.UnexpectedContent;
             }
             if (lines > 0) try content.append(arena, '\n');
-            if (line.len > bareQuote(mode).len) {
+            if (line.len > bareLead(mode).len) {
                 const indent = cur.?.indent();
-                const text = line[quote(mode).len..];
+                const text = line[lead(mode).len..];
                 if (!std.mem.startsWith(u8, text, indent)) {
                     diag.* = .{ .line = line_no, .detail = "this sigil's content is indented four spaces" };
                     return error.MissingIndent;
@@ -224,14 +256,18 @@ pub fn parseMode(arena: Allocator, src: []const u8, mode: Mode, diag: *Diagnosti
         }
 
         if (std.mem.startsWith(u8, line, header(other)) or
-            std.mem.startsWith(u8, line, bareQuote(other)))
+            std.mem.startsWith(u8, line, bareLead(other)))
         {
             diag.* = .{ .line = line_no, .detail = "the other spelling; a document is one or the other" };
             return error.ModeMixed;
         }
-        if (std.mem.startsWith(u8, line, bareQuote(mode))) {
+        if (std.mem.startsWith(u8, line, bareLead(mode))) {
             diag.* = .{ .line = line_no, .detail = "a content line needs one space after the quote" };
             return error.MissingSpace;
+        }
+        if (std.mem.startsWith(u8, line, bareQuote(mode))) {
+            diag.* = .{ .line = line_no, .detail = "a content line is indented two spaces before its quote" };
+            return error.UnexpectedLine;
         }
         if (sigil.inReservedRange(line)) {
             diag.* = .{ .line = line_no, .detail = "a sigil needs a header before it" };
@@ -264,6 +300,7 @@ fn flush(
 pub fn write(w: *std.Io.Writer, mode: Mode, r: Record) std.Io.Writer.Error!void {
     try w.writeAll(header(mode));
     try w.writeAll(r.sigil.text(mode));
+    try w.writeAll(sigil_end);
     try w.writeAll(r.value);
     try w.writeByte('\n');
 
@@ -271,9 +308,9 @@ pub fn write(w: *std.Io.Writer, mode: Mode, r: Record) std.Io.Writer.Error!void 
     var it = std.mem.splitScalar(u8, c, '\n');
     while (it.next()) |line| {
         if (line.len == 0) {
-            try w.writeAll(bareQuote(mode));
+            try w.writeAll(bareLead(mode));
         } else {
-            try w.writeAll(quote(mode));
+            try w.writeAll(lead(mode));
             try w.writeAll(r.sigil.indent());
             try w.writeAll(line);
         }
@@ -324,6 +361,7 @@ pub const ContentWriter = struct {
     pub fn begin(w: *std.Io.Writer, mode: Mode, s: Sigil, value: []const u8) std.Io.Writer.Error!ContentWriter {
         try w.writeAll(header(mode));
         try w.writeAll(s.text(mode));
+        try w.writeAll(sigil_end);
         try w.writeAll(value);
         try w.writeByte('\n');
         return .{ .w = w, .mode = mode, .indent = s.indent() };
@@ -332,7 +370,7 @@ pub const ContentWriter = struct {
     /// Open a record whose content is highlighted when `look` says it is.
     pub fn beginLooking(w: *std.Io.Writer, mode: Mode, look: ?Look, s: Sigil, value: []const u8) std.Io.Writer.Error!ContentWriter {
         var b = try begin(w, mode, s, value);
-        if (looked(mode, look, s)) |l| b.hl = .init(w, l, quote(mode));
+        if (looked(mode, look, s)) |l| b.hl = .init(w, l, lead(mode));
         return b;
     }
 
@@ -341,11 +379,11 @@ pub const ContentWriter = struct {
         for (bytes) |c| {
             if (b.at_line_start) {
                 if (c == '\n') {
-                    try b.w.writeAll(bareQuote(b.mode));
+                    try b.w.writeAll(bareLead(b.mode));
                     if (b.hl) |*h| try h.write("\n") else try b.w.writeByte('\n');
                     continue;
                 }
-                try b.w.writeAll(quote(b.mode));
+                try b.w.writeAll(lead(b.mode));
                 try b.w.writeAll(b.indent);
                 b.at_line_start = false;
             } else if (c == '\n') {
@@ -360,7 +398,7 @@ pub const ContentWriter = struct {
     /// Closes the pending line, which is the empty one when nothing arrived.
     pub fn finish(b: *ContentWriter) std.Io.Writer.Error!void {
         if (b.hl) |*h| try h.finish();
-        if (b.at_line_start) try b.w.writeAll(bareQuote(b.mode));
+        if (b.at_line_start) try b.w.writeAll(bareLead(b.mode));
         try b.w.writeByte('\n');
     }
 };
@@ -374,11 +412,11 @@ test "a record is a header and its content" {
     defer a.deinit();
     var diag: Diagnostic = .{};
     const recs = try parse(a.allocator(),
-        \\#### :brain:mathy
+        \\* :brain::mathy
         \\
-        \\#### :compass:
-        \\> line one
-        \\> line two
+        \\* :compass::
+        \\  > line one
+        \\  > line two
         \\
     , &diag);
 
@@ -396,16 +434,16 @@ test "both spellings parse the same document" {
     defer b.deinit();
     var d1: Diagnostic = .{};
     var d2: Diagnostic = .{};
-    const md = try parse(a.allocator(), "#### :compass:\n> hi\n", &d1);
-    const m8 = try parse(b.allocator(), "\u{2590} \u{1F9ED}\n\u{2502} hi\n", &d2);
+    const md = try parse(a.allocator(), "* :compass::\n  > hi\n", &d1);
+    const m8 = try parse(b.allocator(), "\u{2590} \u{1F9ED}:\n\u{2502} hi\n", &d2);
     try testing.expectEqual(md[0].sigil, m8[0].sigil);
     try testing.expectEqualStrings(md[0].content.?, m8[0].content.?);
 }
 
 test "detect finds the spelling, or says it is not a document" {
-    try testing.expectEqual(Mode.md, detect("#### :brain:x\n").?);
-    try testing.expectEqual(Mode.m8, detect("\u{2590} \u{1F9E0}x\n").?);
-    try testing.expect(detect("#### not a sigil\n") == null);
+    try testing.expectEqual(Mode.md, detect("* :brain::x\n").?);
+    try testing.expectEqual(Mode.m8, detect("\u{2590} \u{1F9E0}:x\n").?);
+    try testing.expect(detect("* not a sigil\n") == null);
     try testing.expect(detect("\u{2590} not a sigil\n") == null);
     try testing.expect(detect("just some words\n") == null);
     try testing.expect(detect("") == null);
@@ -415,20 +453,32 @@ test "the spellings never mix" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    try testing.expectError(error.ModeMixed, parse(a.allocator(), "#### :compass:\n\u{2502} hi\n", &diag));
+    try testing.expectError(error.ModeMixed, parse(a.allocator(), "* :compass::\n\u{2502} hi\n", &diag));
     try testing.expectEqual(@as(usize, 2), diag.line);
+}
+
+test "a sigil is ended by its colon, and content is indented under it" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.MissingColon, parse(a.allocator(), "* :brain:mathy\n", &diag));
+    try testing.expectError(error.MissingColon, parse(a.allocator(), "\u{2590} \u{1F9E0}mathy\n", &diag));
+    try testing.expectError(error.UnexpectedLine, parse(a.allocator(), "* :compass::\n> hi\n", &diag));
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    // Without the colon it is a bullet, not a document.
+    try testing.expect(detect("* :brain:mathy\n") == null);
 }
 
 test "a quote with no space is an error, and alone is an empty line" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    try testing.expectError(error.MissingSpace, parse(a.allocator(), "#### :compass:\n>hi\n", &diag));
+    try testing.expectError(error.MissingSpace, parse(a.allocator(), "* :compass::\n  >hi\n", &diag));
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    const recs = try parse(b.allocator(), "#### :compass:\n> one\n>\n> three\n", &d2);
+    const recs = try parse(b.allocator(), "* :compass::\n  > one\n  >\n  > three\n", &d2);
     try testing.expectEqualStrings("one\n\nthree", recs[0].content.?);
 }
 
@@ -436,7 +486,7 @@ test "a receipt is indented four spaces, and an empty line carries none" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    const src = "#### :receipt:c1\n>     one\n>\n>       two\n\n#### :scroll:c1\n> # three\n";
+    const src = "* :receipt::c1\n  >     one\n  >\n  >       two\n\n* :scroll::c1\n  > # three\n";
     const recs = try parse(a.allocator(), src, &diag);
     try testing.expectEqualStrings("one\n\n  two", recs[0].content.?);
     try testing.expectEqualStrings("# three", recs[1].content.?);
@@ -445,7 +495,7 @@ test "a receipt is indented four spaces, and an empty line carries none" {
     try writeAll(&out.writer, .md, recs);
     try testing.expectEqualStrings(src, out.written());
 
-    try testing.expectError(error.MissingIndent, parse(a.allocator(), "#### :receipt:c1\n>   one\n", &diag));
+    try testing.expectError(error.MissingIndent, parse(a.allocator(), "* :receipt::c1\n  >   one\n", &diag));
     try testing.expectEqual(@as(usize, 2), diag.line);
 }
 
@@ -453,16 +503,16 @@ test "content is verbatim, so it needs no escape" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    const recs = try parse(a.allocator(), "#### :compass:\n> #### :brain:not a record\n>   indented\n", &diag);
+    const recs = try parse(a.allocator(), "* :compass::\n  > * :brain::not a record\n  >   indented\n", &diag);
     try testing.expectEqual(@as(usize, 1), recs.len);
-    try testing.expectEqualStrings("#### :brain:not a record\n  indented", recs[0].content.?);
+    try testing.expectEqualStrings("* :brain::not a record\n  indented", recs[0].content.?);
 }
 
 test "a blank line closes the block, and records need none between them" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    const packed_up = try parse(a.allocator(), "#### :compass:\n> hi\n#### :brain:x\n", &d1);
+    const packed_up = try parse(a.allocator(), "* :compass::\n  > hi\n* :brain::x\n", &d1);
     try testing.expectEqual(@as(usize, 2), packed_up.len);
     try testing.expectEqualStrings("hi", packed_up[0].content.?);
 
@@ -470,13 +520,13 @@ test "a blank line closes the block, and records need none between them" {
     var c: std.heap.ArenaAllocator = .init(testing.allocator);
     defer c.deinit();
     var d3: Diagnostic = .{};
-    const run = try parse(c.allocator(), "#### :compass:\n#### :compass:\n#### :compass:\n", &d3);
+    const run = try parse(c.allocator(), "* :compass::\n* :compass::\n* :compass::\n", &d3);
     try testing.expectEqual(@as(usize, 3), run.len);
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    try testing.expectError(error.OrphanContent, parse(b.allocator(), "#### :compass:\n> hi\n\n> more\n", &d2));
+    try testing.expectError(error.OrphanContent, parse(b.allocator(), "* :compass::\n  > hi\n\n  > more\n", &d2));
     try testing.expectEqual(@as(usize, 4), d2.line);
 }
 
@@ -485,7 +535,7 @@ test "a 🤖 may say how it stopped with nothing under it" {
     defer a.deinit();
     const arena = a.allocator();
     var d: Diagnostic = .{};
-    const src = "#### :robot:\n> Moon\n\n#### :robot:(cut off at max_tokens)\n";
+    const src = "* :robot::\n  > Moon\n\n* :robot::(cut off at max_tokens)\n";
     const got = try parse(arena, src, &d);
     try testing.expectEqual(@as(usize, 2), got.len);
     try testing.expectEqualStrings("(cut off at max_tokens)", got[1].value);
@@ -500,24 +550,24 @@ test "value and content are refused where the sigil takes none" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    try testing.expectError(error.UnexpectedValue, parse(a.allocator(), "#### :compass:words\n", &d1));
+    try testing.expectError(error.UnexpectedValue, parse(a.allocator(), "* :compass::words\n", &d1));
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    try testing.expectError(error.UnexpectedContent, parse(b.allocator(), "#### :brain:x\n> hi\n", &d2));
+    try testing.expectError(error.UnexpectedContent, parse(b.allocator(), "* :brain::x\n  > hi\n", &d2));
 }
 
 test "an unknown sigil is an error in either spelling" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var d1: Diagnostic = .{};
-    try testing.expectError(error.UnknownSigil, parse(a.allocator(), "#### :nope:x\n", &d1));
+    try testing.expectError(error.UnknownSigil, parse(a.allocator(), "* :nope::x\n", &d1));
 
     var b: std.heap.ArenaAllocator = .init(testing.allocator);
     defer b.deinit();
     var d2: Diagnostic = .{};
-    try testing.expectError(error.UnknownSigil, parse(b.allocator(), "\u{2590} \u{1F600}x\n", &d2));
+    try testing.expectError(error.UnknownSigil, parse(b.allocator(), "\u{2590} \u{1F600}:x\n", &d2));
 }
 
 test "CRLF parses identically, and a doubled CR survives" {
@@ -527,14 +577,14 @@ test "CRLF parses identically, and a doubled CR survives" {
     defer b.deinit();
     var d1: Diagnostic = .{};
     var d2: Diagnostic = .{};
-    const lf = try parse(a.allocator(), "#### :compass:\n> one\n", &d1);
-    const crlf = try parse(b.allocator(), "#### :compass:\r\n> one\r\n", &d2);
+    const lf = try parse(a.allocator(), "* :compass::\n  > one\n", &d1);
+    const crlf = try parse(b.allocator(), "* :compass::\r\n  > one\r\n", &d2);
     try testing.expectEqualStrings(lf[0].content.?, crlf[0].content.?);
 
     var c: std.heap.ArenaAllocator = .init(testing.allocator);
     defer c.deinit();
     var d3: Diagnostic = .{};
-    const cr = try parse(c.allocator(), "#### :compass:\n> ends in CR\r\r\n> next\n", &d3);
+    const cr = try parse(c.allocator(), "* :compass::\n  > ends in CR\r\r\n  > next\n", &d3);
     try testing.expectEqualStrings("ends in CR\r\nnext", cr[0].content.?);
 }
 
@@ -562,7 +612,7 @@ test "round trip is byte for byte, in both spellings" {
 test "streamed writing matches whole writing" {
     const cases = [_][]const u8{
         "plain\ntext",
-        "content\n#### :brain:looks like a record",
+        "content\n* :brain::looks like a record",
         "para one\n\npara two",
         "trailing newline\n",
         "",
@@ -585,7 +635,7 @@ test "streamed writing matches whole writing" {
 test "a streamed body round trips back through the parser" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    const content = "one\n#### :brain:two\n\nthree";
+    const content = "one\n* :brain::two\n\nthree";
 
     var buf: [512]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);

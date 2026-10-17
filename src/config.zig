@@ -343,7 +343,7 @@ test "mob scratch is generated state beside definitions" {
 
     const t = try Tree.init(arena, &threaded, "m8-config-scratch");
     defer t.deinit(arena);
-    try t.write(arena, "@/team/reviewer.md", "#### :brain:/local/tiny\n");
+    try t.write(arena, "@/team/reviewer.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{t.root};
 
     const got = (try mobTmp(arena, t.io, &dirs, "team/reviewer")).?;

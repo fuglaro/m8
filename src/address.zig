@@ -72,8 +72,10 @@ const marks = [_][]const u8{ "@", ":brain:", "🧠" };
 pub fn body(word: []const u8) ?[]const u8 {
     for (marks) |m| if (std.mem.startsWith(u8, word, m)) {
         var rest = word[m.len..];
-        // A pasted 🧠 may carry the presentation selector a renderer added.
+        // A pasted 🧠 may carry the presentation selector a renderer added,
+        // and a header line ends its sigil with `:`.
         if (std.mem.startsWith(u8, rest, "\u{FE0F}")) rest = rest["\u{FE0F}".len..];
+        if (m[0] != '@' and std.mem.startsWith(u8, rest, doc.sigil_end)) rest = rest[doc.sigil_end.len..];
         return rest;
     };
     return null;
@@ -420,11 +422,11 @@ test "every mark reads as an address, and suffixes are read off the end" {
 
     const f = try Fixture.init(arena, &threaded, "m8-address-marks");
     defer f.deinit();
-    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "mob/agent.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{f.dir};
     var d: Diagnostic = .{};
 
-    for ([_][]const u8{ "@mob/agent", ":brain:mob/agent", "🧠mob/agent", "🧠\u{FE0F}mob/agent" }) |w| {
+    for ([_][]const u8{ "@mob/agent", ":brain:mob/agent", ":brain::mob/agent", "🧠mob/agent", "🧠:mob/agent", "🧠\u{FE0F}:mob/agent" }) |w| {
         const got = try resolve(arena, f.io, &dirs, w, &d);
         try testing.expectEqual(Kind.chat, got.kind);
         try testing.expectEqualStrings("mob/agent", got.name);
@@ -450,8 +452,8 @@ test "a chat named like an agent beside it is said, not chosen" {
 
     const f = try Fixture.init(arena, &threaded, "m8-address-shadow");
     defer f.deinit();
-    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
-    try f.write(arena, "mob/agent/other.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "mob/agent.md", "* :brain::/local/tiny\n");
+    try f.write(arena, "mob/agent/other.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{f.dir};
     var d: Diagnostic = .{};
 
@@ -460,7 +462,7 @@ test "a chat named like an agent beside it is said, not chosen" {
     try testing.expectEqualStrings("mob/agent/other", d.other);
 
     // A mob with no agent of its name is only a mob.
-    try f.write(arena, "team/lead.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "team/lead.md", "* :brain::/local/tiny\n");
     const lead = try resolve(arena, f.io, &dirs, "@team/lead/plan", &d);
     try testing.expectEqualStrings("team/lead/plan", lead.name);
 }
@@ -474,7 +476,7 @@ test "tagging keeps a turn in the chat it advances, and the prompt takes main wi
 
     const f = try Fixture.init(arena, &threaded, "m8-address-tag");
     defer f.deinit();
-    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "mob/agent.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{f.dir};
     var d: Diagnostic = .{};
     const prompt: Moving = .{ .mover = .prompt };
@@ -539,8 +541,8 @@ test "a command moves the chat it names and leaves the main chat alone" {
 
     const f = try Fixture.init(arena, &threaded, "m8-address-command");
     defer f.deinit();
-    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
-    try f.write(arena, "mob/critic.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "mob/agent.md", "* :brain::/local/tiny\n");
+    try f.write(arena, "mob/critic.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{f.dir};
     var d: Diagnostic = .{};
 
@@ -577,7 +579,7 @@ test "a chat starts from where it is, from its parent, or from its agent" {
 
     const f = try Fixture.init(arena, &threaded, "m8-address-start");
     defer f.deinit();
-    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "mob/agent.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{f.dir};
     var d: Diagnostic = .{};
 
@@ -634,7 +636,7 @@ test "following is unsettled, and never leads back to itself" {
 
     const f = try Fixture.init(arena, &threaded, "m8-address-follow");
     defer f.deinit();
-    try f.write(arena, "mob/agent.md", "#### :brain:/local/tiny\n");
+    try f.write(arena, "mob/agent.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{f.dir};
     var d: Diagnostic = .{};
 

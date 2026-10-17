@@ -115,7 +115,7 @@ test "an m8 document piped in follows the lead as it is" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const piped = "#### :brain:/local/tiny\n\n#### :raising_hand:\n> piped\n";
+    const piped = "* :brain::/local/tiny\n\n* :raising_hand::\n  > piped\n";
     const got = try assemble(arena, chat_lead, "more", piped, null);
     const r = try sigils(arena, got);
     try testing.expectEqual(@as(usize, 4), r.len);
@@ -171,7 +171,7 @@ test "a document that opens right and then goes wrong is an error, not a prompt"
         a.allocator(),
         chat_lead,
         "",
-        "#### :brain:/local/tiny\n\n#### :nosuchsigil:\n",
+        "* :brain::/local/tiny\n\n* :nosuchsigil::\n",
         null,
     ));
 }
@@ -189,7 +189,7 @@ test "said to a ledger that ends in a question, it is the answer" {
     try testing.expectEqualStrings("yes", told[1].content.?);
 
     // A document that ends in one says so itself.
-    const piped = "#### :calling:run,c2\n\n#### :question:c2\n> sure?\n";
+    const piped = "* :calling::run,c2\n\n* :question::c2\n  > sure?\n";
     const after = try sigils(arena, try assemble(arena, &.{}, "no", piped, null));
     try testing.expectEqual(doc.Sigil.exclaim, after[2].sigil);
     try testing.expectEqualStrings("c2", after[2].value);

@@ -1,4 +1,4 @@
-#### :brain:local/tiny
+* :brain::local/tiny
 
-#### :compass:
-> Answer in as few words as possible.
+* :compass::
+  > Answer in as few words as possible.

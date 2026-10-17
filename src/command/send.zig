@@ -28,7 +28,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\that answers, so one written after a chat is the one it runs on.
         \\
         \\  m8 ref @mathy "hi" | m8 send
-        \\  { m8 ref @mathy "hi"; echo "#### :brain:/local/tiny"; } | m8 send
+        \\  { m8 ref @mathy "hi"; echo "* :brain::/local/tiny"; } | m8 send
         \\
         \\Whatever the run says is appended — a reply, a 📲, and the answer to
         \\that 📲. What comes out is the whole turn, whatever stdout is: the

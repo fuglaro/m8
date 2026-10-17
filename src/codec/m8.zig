@@ -105,7 +105,7 @@ const Lines = struct {
         }
         // A content line under a record on show need not wait for its end.
         const m = self.mode orelse return;
-        const quote = doc.quote(m);
+        const quote = doc.lead(m);
         if (!self.open or !std.mem.startsWith(u8, self.head.items, quote)) return;
         if (self.said > 0) try self.sink.text("\n");
         self.said += 1;
@@ -135,10 +135,9 @@ const Lines = struct {
         if (std.mem.startsWith(u8, line, doc.header(m))) {
             if (self.open) try self.sink.end();
             self.open = false;
-            const rest = line[doc.header(m).len..];
-            if (sigil.match(m, rest)) |hit| if (shows(hit.sigil)) {
+            if (doc.headed(m, line)) |hit| if (shows(hit.sigil)) {
                 // The line is let go of, and what opens a record is kept.
-                try self.sink.begin(hit.sigil, try self.arena.dupe(u8, std.mem.trim(u8, rest[hit.len..], " \t")));
+                try self.sink.begin(hit.sigil, try self.arena.dupe(u8, std.mem.trim(u8, hit.value, " \t")));
                 self.open = true;
             };
             self.said = 0;
@@ -151,8 +150,8 @@ const Lines = struct {
         }
         if (!self.open) return;
 
-        const quote = doc.quote(m);
-        const bare = doc.bareQuote(m);
+        const quote = doc.lead(m);
+        const bare = doc.bareLead(m);
         if (!std.mem.startsWith(u8, line, quote) and !std.mem.eql(u8, line, bare)) return;
 
         // Lines are joined by \n, so the break belongs before the next one
@@ -213,13 +212,13 @@ test "a content line is said while it is still being written" {
 
     var collect: Collect = .{ .arena = arena };
     var lines: Lines = .{ .arena = arena, .sink = collect.sink() };
-    try lines.feed("#### :rob", false);
-    try lines.feed("ot:", true);
-    try lines.feed("> on", false);
+    try lines.feed("* :rob", false);
+    try lines.feed("ot::", true);
+    try lines.feed("  > on", false);
     try testing.expectEqualStrings("bot:on", collect.seen.items);
     try lines.feed("e\r", false);
     try lines.feed("", true);
-    try lines.feed(">", false);
+    try lines.feed("  >", false);
     try lines.feed(" two", true);
     try testing.expectEqualStrings("bot:one\ntwo", collect.seen.items);
 }
@@ -229,7 +228,7 @@ test "a blockless thought keeps its value, including snip" {
     defer a.deinit();
     const arena = a.allocator();
 
-    var r: std.Io.Reader = .fixed("#### :thought_balloon:snip\n");
+    var r: std.Io.Reader = .fixed("* :thought_balloon::snip\n");
     var collect: Collect = .{ .arena = arena };
     _ = try parse(arena, &r, collect.sink());
 
@@ -245,15 +244,15 @@ test "a reply in the language streams as it is written" {
     const arena = a.allocator();
 
     const body =
-        \\#### :thought_balloon:
-        \\> thinking
+        \\* :thought_balloon::
+        \\  > thinking
         \\
-        \\#### :robot:
-        \\> one
-        \\> two
+        \\* :robot::
+        \\  > one
+        \\  > two
         \\
-        \\#### :calling:say,c1
-        \\> * text `hi`
+        \\* :calling::say,c1
+        \\  > * text `hi`
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };

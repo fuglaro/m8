@@ -451,10 +451,10 @@ test "a body opens on the first byte and holds the last newline" {
     for ([_][]const u8{ "a\n", "\n", "b\n", "\n\n" }) |chunk| try body.write(chunk);
     try testing.expect(try body.finish());
     try testing.expectEqualStrings(
-        \\#### :receipt:c1
-        \\>     a
-        \\>
-        \\>     b
+        \\* :receipt::c1
+        \\  >     a
+        \\  >
+        \\  >     b
         \\
     , split.written());
 
@@ -463,7 +463,7 @@ test "a body opens on the first byte and holds the last newline" {
     var scroll: Body = .{ .out = &md.writer, .mode = .md, .call_id = "c1", .sigil = .scroll };
     try scroll.write("# a\n");
     try testing.expect(try scroll.finish());
-    try testing.expectEqualStrings("#### :scroll:c1\n> # a\n", md.written());
+    try testing.expectEqualStrings("* :scroll::c1\n  > # a\n", md.written());
 }
 
 test "unwrapped records pass through, and a verdict always starts its own line" {
@@ -473,10 +473,10 @@ test "unwrapped records pass through, and a verdict always starts its own line" 
 
     var out: std.Io.Writer.Allocating = .init(arena);
     var body: Body = .{ .out = &out.writer, .mode = .md, .call_id = "c1", .frame = false };
-    try body.write("#### :link:c1\n> <a.jpeg");
+    try body.write("* :link::c1\n  > <a.jpeg");
     try testing.expect(try body.finish());
     try testing.expect(!body.ended);
-    try testing.expectEqualStrings("#### :link:c1\n> <a.jpeg", out.written());
+    try testing.expectEqualStrings("* :link::c1\n  > <a.jpeg", out.written());
 
     try body.write("\n");
     try testing.expect(body.ended);

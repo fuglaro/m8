@@ -499,13 +499,13 @@ test "m8 encodes to itself" {
     const arena = a.allocator();
 
     const src =
-        \\#### :brain:local/tiny
+        \\* :brain::local/tiny
         \\
-        \\#### :compass:
-        \\> Be brief.
+        \\* :compass::
+        \\  > Be brief.
         \\
-        \\#### :raising_hand:
-        \\> Hi.
+        \\* :raising_hand::
+        \\  > Hi.
         \\
     ;
     const c = find("m8").?;

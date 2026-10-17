@@ -5,17 +5,17 @@ The command-line-first agentic harness - fully embracing the shell.
 
 ```
 fuglaro@localhost> m8 @pagey -- 'One word -> do you like Haiku?'
-▐ 🤖
+▐ 🤖:
 │ Yes.
 
-▐ 🧠pagey/+/swlyayqtjk
+▐ 🧠:pagey/+/swlyayqtjk
 fuglaro@localhost> m8 @ -- 'Throw me a quick one please.'
-▐ 🤖
+▐ 🤖:
 │ Moonlight on still ponds
 │ Crickets stitch the dark with song
 │ Dawn waits behind hills
 
-▐ 🧠pagey/+/psbarddrym
+▐ 🧠:pagey/+/psbarddrym
 fuglaro@localhost>
 ```
 
@@ -139,8 +139,8 @@ implement yourself and choose not to.
 
 ### It is markdown
 
-A stored m8 document is markdown. Headers and block
-quotes, with each sigil written as its gemoji
+A stored m8 document is markdown. A list item per
+record, holding its block quote, with each sigil written as its gemoji
 `:word:` shortcode — the table GitHub renders, and the
 closest thing to a common convention across the systems
 that substitute shortcodes at all. Typeable, greppable,
@@ -478,10 +478,10 @@ m8 @mathy/aside -- "And what about the Möbius strip?"
 echo "Tell me about the Riemann Sphere\nin detail." | m8 @mathy
 ```
 ```
-▐ 🤖
+▐ 🤖:
 │ The Riemann Sphere is a ...
 
-▐ 🧠mathy/+/tduyxbutjb
+▐ 🧠:mathy/+/tduyxbutjb
 ```
 
 The reply went to a tty, so it is rendered. The turn
@@ -491,25 +491,25 @@ it saved is a file, so it is markdown:
 cat ".m8-st8/+/mathy/+/tduyxbutjb.md"
 ```
 ```
-#### :brain:mathy
+* :brain::mathy
 
-#### :raising_hand:
-> Tell me about the Riemann Sphere
-> in detail.
+* :raising_hand::
+  > Tell me about the Riemann Sphere
+  > in detail.
 
-#### :robot:
-> The Riemann Sphere is a ...
+* :robot::
+  > The Riemann Sphere is a ...
 ```
 
 ```bash
 m8 @mathy/+/tduyxbutjb -- "Tell me more."
 ```
 ```
-▐ 🤖
+▐ 🤖:
 │ Additionally,
 │ ...
 
-▐ 🧠mathy/+/ypfpkuimzg
+▐ 🧠:mathy/+/ypfpkuimzg
 ```
 
 * `@` sits where a command would, and is short for one.
@@ -642,7 +642,7 @@ joins the prompt.
 
 ```bash
 cat notes.txt | m8 @ -- "Summarize:"               # one 🙋, prompt first
-echo "#### :brain:/local/tiny" | m8 @mathy -- "Quickly?"
+echo "* :brain::/local/tiny" | m8 @mathy -- "Quickly?"
 m8 top @tight-docs | m8 @mathy -- "Tidy the README."
 ```
 
@@ -760,7 +760,7 @@ A document follows an address by being written after it,
 which is all a document needs:
 
 ```bash
-{ m8 ref @mathy hi; echo "#### :brain:/local/tiny"; } | m8 send
+{ m8 ref @mathy hi; echo "* :brain::/local/tiny"; } | m8 send
 { m8 top @tight-docs; m8 ref @mathy "Tidy the README."; } | m8 send
 ```
 
@@ -1076,9 +1076,9 @@ trailer is not counted.
 Agent definition:
 
 ```m8
-▐ 🧠Address, Agent Name or Model
+▐ 🧠:Address, Agent Name or Model
 
-▐ 🧰Tool Name
+▐ 🧰:Tool Name
 │ │ Tool Description
 │ 🛡️Shield Name
 │ `m8` `call` `cmd` `{{propertyname|--flag}}`
@@ -1087,10 +1087,10 @@ Agent definition:
 │ * Other? integer
 │   Optional, so ? on the name
 
-▐ 🏃bash
+▐ 🏃:bash
 │ `m8` `call` `bash` `-e` `-c`
 
-▐ 🧰Tool Name
+▐ 🧰:Tool Name
 │ │ A fenced block runs through the 🏃 it names.
 │ ```bash
 │ echo "$__propertyname__"
@@ -1104,11 +1104,11 @@ Agent definition:
 │ * ParentName.PropertyName integer
 │   Nested
 
-▐ 🧰Tool Name
+▐ 🧰:Tool Name
 
-▐ 🛡️Shield Name
+▐ 🛡️:Shield Name
 
-▐ 🧭
+▐ 🧭:
 │ System Prompt
 │ A record is a header and a content block, and
 │ content is verbatim, so this line may begin with
@@ -1116,76 +1116,76 @@ Agent definition:
 │ A , separates a fixed number of fields, so the
 │ last field may hold one safely.
 
-▐ 🧭
+▐ 🧭:
 │ Included Agents inject Tools and System
 │ Prompts.
 ```
 
-#### :brain:Address, Agent Name or Model
+* :brain::Address, Agent Name or Model
 
-#### :toolbox:Tool Name
-> > Tool Description
-> :shield:Shield Name
-> `m8` `call` `cmd` `{{propertyname|--flag}}`
-> * PropertyName string
->   Property Description
-> * Other? integer
->   Optional, so ? on the name
+* :toolbox::Tool Name
+  > > Tool Description
+  > :shield:Shield Name
+  > `m8` `call` `cmd` `{{propertyname|--flag}}`
+  > * PropertyName string
+  >   Property Description
+  > * Other? integer
+  >   Optional, so ? on the name
 
-#### :runner:bash
-> `m8` `call` `bash` `-e` `-c`
+* :runner::bash
+  > `m8` `call` `bash` `-e` `-c`
 
-#### :toolbox:Tool Name
-> > A fenced block runs through the 🏃 it names.
-> ```bash
-> echo "$__propertyname__"
-> ```
-> * PropertyName celsius|fahrenheit
->   An enum is its values, which may hold a space
-> * PropertyName string[]
->   Arrays suffix []
-> * ParentName object
->   Mandatory Parent Def
-> * ParentName.PropertyName integer
->   Nested
+* :toolbox::Tool Name
+  > > A fenced block runs through the 🏃 it names.
+  > ```bash
+  > echo "$__propertyname__"
+  > ```
+  > * PropertyName celsius|fahrenheit
+  >   An enum is its values, which may hold a space
+  > * PropertyName string[]
+  >   Arrays suffix []
+  > * ParentName object
+  >   Mandatory Parent Def
+  > * ParentName.PropertyName integer
+  >   Nested
 
-#### :toolbox:Tool Name
+* :toolbox::Tool Name
 
-#### :shield:Shield Name
+* :shield::Shield Name
 
-#### :compass:
-> System Prompt
-> A record is a header and a content block, and
-> content is verbatim, so this line may begin with
-> anything at all.
-> A , separates a fixed number of fields, so the
-> last field may hold one safely.
+* :compass::
+  > System Prompt
+  > A record is a header and a content block, and
+  > content is verbatim, so this line may begin with
+  > anything at all.
+  > A , separates a fixed number of fields, so the
+  > last field may hold one safely.
 
-#### :compass:
-> Included Agents inject Tools and System
-> Prompts.
+* :compass::
+  > Included Agents inject Tools and System
+  > Prompts.
 
 Query:
 
 ```m8
-▐ 🧠Agent or Model Name
+▐ 🧠:Agent or Model Name
 
-▐ 🙋
+▐ 🙋:
 │ User Content Text
 
-▐ 💭
+▐ 💭:
 │ Assistant Thoughts
 │ 🔏Optional Signature
 
-▐ 🤖
+▐ 🤖:
 │ Assistant Content Text
 
-▐ 📲Called Tool Name,Call ID
+▐ 📲:Called Tool Name,Call ID
 
-▐ 🚫Call ID
+▐ 🚫:Call ID
 │ Error response
 
-▐ 📲Called Tool Name,Call ID
+▐ 📲:Called Tool Name,Call ID
 │ * Argument Name `value`
 │ * Argument Name
 │ * Argument Name
@@ -1194,48 +1194,48 @@ Query:
 │   more than one line
 │   ```
 
-▐ 🧾Call ID
+▐ 🧾:Call ID
 │     Response
 
-▐ 🔗Call ID
+▐ 🔗:Call ID
 │ <path/to/file.jpeg
 
-▐ 🟢Call ID
+▐ 🟢:Call ID
 ```
 
-#### :brain:Agent or Model Name
+* :brain::Agent or Model Name
 
-#### :raising_hand:
-> User Content Text
+* :raising_hand::
+  > User Content Text
 
-#### :thought_balloon:
-> Assistant Thoughts
-> :lock_with_ink_pen:Optional Signature
+* :thought_balloon::
+  > Assistant Thoughts
+  > :lock_with_ink_pen:Optional Signature
 
-#### :robot:
-> Assistant Content Text
+* :robot::
+  > Assistant Content Text
 
-#### :calling:Called Tool Name,Call ID
+* :calling::Called Tool Name,Call ID
 
-#### :no_entry_sign:Call ID
-> Error response
+* :no_entry_sign::Call ID
+  > Error response
 
-#### :calling:Called Tool Name,Call ID
-> * Argument Name `value`
-> * Argument Name
-> * Argument Name
->   ```
->   a value over
->   more than one line
->   ```
+* :calling::Called Tool Name,Call ID
+  > * Argument Name `value`
+  > * Argument Name
+  > * Argument Name
+  >   ```
+  >   a value over
+  >   more than one line
+  >   ```
 
-#### :receipt:Call ID
->     Response
+* :receipt::Call ID
+  >     Response
 
-#### :link:Call ID
-> <path/to/file.jpeg
+* :link::Call ID
+  > <path/to/file.jpeg
 
-#### :green_circle:Call ID
+* :green_circle::Call ID
 
 A call is answered by what the tool said and then by
 how it went. 🧾 is the saying, and it is written while
@@ -1309,9 +1309,9 @@ another to m8.
 Simple example query with definition:
 
 ```m8
-▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
+▐ 🧠:/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 
-▐ 🧭
+▐ 🧭:
 │ You are a mathematics expert that will answer questions,
 │ give insight, and advise on any relevant technique.
 │ Describe concepts with analogies and spatial models
@@ -1319,22 +1319,22 @@ Simple example query with definition:
 │ to the components, equations, and relationships in
 │ the mathematical equations.
 
-▐ 🙋
+▐ 🙋:
 │ Tell me about the Riemann Sphere in detail.
 ```
 
-#### :brain:/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
+* :brain::/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 
-#### :compass:
-> You are a mathematics expert that will answer questions,
-> give insight, and advise on any relevant technique.
-> Describe concepts with analogies and spatial models
-> that can be imagined by a human and include how it relates
-> to the components, equations, and relationships in
-> the mathematical equations.
+* :compass::
+  > You are a mathematics expert that will answer questions,
+  > give insight, and advise on any relevant technique.
+  > Describe concepts with analogies and spatial models
+  > that can be imagined by a human and include how it relates
+  > to the components, equations, and relationships in
+  > the mathematical equations.
 
-#### :raising_hand:
-> Tell me about the Riemann Sphere in detail.
+* :raising_hand::
+  > Tell me about the Riemann Sphere in detail.
 
 System Prompt is stable by design.
 Volatile data such as the time or when reading
@@ -1345,8 +1345,13 @@ sections of query, including tool requests to be invoked,
 and which are referenceable by name.
 
 A record is a header line and at most one content
-block. The header is a sigil and its value; the
-content is the block quoted beneath it. That is the
+block. The header is a sigil, a `:`, and its value;
+the content is the block quoted beneath it. In
+markdown the header is a list item and the quote is
+indented two spaces under it, so a renderer shows each
+record as one item holding its block. A sigil without
+its `:` is an error, which is also what lets a first line
+tell a document from a bulleted prompt. That is the
 whole of the harness. Content never nests further
 and records never interleave.
 
@@ -1409,8 +1414,8 @@ is an error. Files and piped streams are `m8.md`,
 which is also valid markdown, so anything that
 renders markdown renders them. A tty gets `m8`.
 
-* ▐ header -> `####`
-* │ content -> `>`
+* ▐ header -> `*`
+* │ content -> `  >`
 * 🧠 agent -> `:brain:`
 * 🙋 user -> `:raising_hand:`
 * 🤖 bot -> `:robot:`
@@ -1452,18 +1457,18 @@ A reply the model did not finish ends with a 🤖 that has a
 value and nothing under it.
 
 ```m8
-▐ 🤖
+▐ 🤖:
 │ Moonlight on still ponds
 │ Crickets stitch the
 
-▐ 🤖(cut off at max_output_tokens)
+▐ 🤖:(cut off at max_output_tokens)
 ```
 
-#### :robot:
-> Moonlight on still ponds
-> Crickets stitch the
+* :robot::
+  > Moonlight on still ponds
+  > Crickets stitch the
 
-#### :robot:(cut off at max_output_tokens)
+* :robot::(cut off at max_output_tokens)
 
 * The value is `(words term)`.
   * The words are for whoever reads the transcript.
@@ -1497,24 +1502,24 @@ the 🧠 naming it in its place. Without a block, `💭snip` is simply the
 compact one-line thought "snip".
 
 ```m8
-▐ 💭snip
+▐ 💭:snip
 │ 🔏c2lnbmF0dXJl
 
-▐ 🧠mathy/+/snip-oniwhbxumk
+▐ 🧠:mathy/+/snip-oniwhbxumk
 ```
 
-#### :thought_balloon:snip
-> :lock_with_ink_pen:c2lnbmF0dXJl
+* :thought_balloon::snip
+  > :lock_with_ink_pen:c2lnbmF0dXJl
 
-#### :brain:mathy/+/snip-oniwhbxumk
+* :brain::mathy/+/snip-oniwhbxumk
 
 A compact thought keeps its text on the header:
 
 ```m8
-▐ 💭Checking the result
+▐ 💭:Checking the result
 ```
 
-#### :thought_balloon:Checking the result
+* :thought_balloon::Checking the result
 
 Providers should use this compact form for one-line thought summaries when
 possible, and must interpret a value-only 💭 as thought text when reading it.
@@ -1539,22 +1544,22 @@ possible, and must interpret a value-only 💭 as thought text when reading it.
 A 🔗 hands files to the model beside what a tool said.
 
 ```m8
-▐ 📲see,c1
+▐ 📲:see,c1
 │ * file `shot.png`
 
-▐ 🔗c1
+▐ 🔗:c1
 │ <+/crew/^/shot_9f86d081b8.jpeg (9f86d081b8…)
 
-▐ 🟢c1
+▐ 🟢:c1
 ```
 
-#### :calling:see,c1
-> * file `shot.png`
+* :calling::see,c1
+  > * file `shot.png`
 
-#### :link:c1
-> <+/crew/^/shot_9f86d081b8.jpeg (9f86d081b8…)
+* :link::c1
+  > <+/crew/^/shot_9f86d081b8.jpeg (9f86d081b8…)
 
-#### :green_circle:c1
+* :green_circle::c1
 
 * Its value is the call it answers, as a 🧾's is.
 * Each line opening with `<` names a file.
@@ -1691,26 +1696,26 @@ What is between them is that file's top: what it says
 about itself, rather than what it says.
 
 ```m8
-▐ 🔝
+▐ 🔝:
 
-▐ 🧭
+▐ 🧭:
 │ Load tight-docs when working on documentation.
 
-▐ 🔝
+▐ 🔝:
 
-▐ 🧭
+▐ 🧭:
 │ Keep every doc comment to one line.
 ```
 
-#### :top:
+* :top::
 
-#### :compass:
-> Load tight-docs when working on documentation.
+* :compass::
+  > Load tight-docs when working on documentation.
 
-#### :top:
+* :top::
 
-#### :compass:
-> Keep every doc comment to one line.
+* :compass::
+  > Keep every doc comment to one line.
 
 Two sigils reach into another file and the mark decides
 which half comes back. 🧠 wants what the file says; 📚
@@ -1796,10 +1801,10 @@ definition's business.
   🚫.
 
 ```m8
-▐ 🏃bash
+▐ 🏃:bash
 │ `m8` `call` `bash` `-e` `-c`
 
-▐ 🧰search
+▐ 🧰:search
 │ │ Look for something.
 │ ```bash
 │ grep -r "$__pattern__" .
@@ -1808,16 +1813,16 @@ definition's business.
 │   what to look for
 ```
 
-#### :runner:bash
-> `m8` `call` `bash` `-e` `-c`
+* :runner::bash
+  > `m8` `call` `bash` `-e` `-c`
 
-#### :toolbox:search
-> > Look for something.
-> ```bash
-> grep -r "$__pattern__" .
-> ```
-> * pattern string
->   what to look for
+* :toolbox::search
+  > > Look for something.
+  > ```bash
+  > grep -r "$__pattern__" .
+  > ```
+  > * pattern string
+  >   what to look for
 
 What a tool is handed:
 
@@ -1846,18 +1851,18 @@ command's own business rather than the framework's.
 `m8 call` is the one m8 ships for it.
 
 ```m8
-▐ 🧰bash
+▐ 🧰:bash
 │ │ Run a bash command.
 │ `m8` `call` `bash` `-euo` `pipefail` `{{command|-c}}`
 │ * command string
 │   The bash command to run.
 ```
 
-#### :toolbox:bash
-> > Run a bash command.
-> `m8` `call` `bash` `-euo` `pipefail` `{{command|-c}}`
-> * command string
->   The bash command to run.
+* :toolbox::bash
+  > > Run a bash command.
+  > `m8` `call` `bash` `-euo` `pipefail` `{{command|-c}}`
+  > * command string
+  >   The bash command to run.
 
 Given `__command__=echo hi`:
 
@@ -1888,22 +1893,22 @@ putting them on the definition header. Each value gets its own
 blockless header, and a final bare header offers the tool:
 
 ```m8
-▐ 🧰read
+▐ 🧰:read
 │ │ Read a file or directory.
 │ `m8` `call` `m8` `munge` `read` `{{page_lines|--page-lines}}` `--` `{{path|}}`
 │ * path string
 
-▐ 🧰read page_lines 100
-▐ 🧰read
+▐ 🧰:read page_lines 100
+▐ 🧰:read
 ```
 
-#### :toolbox:read
-> > Read a file or directory.
-> `m8` `call` `m8` `munge` `read` `{{page_lines|--page-lines}}` `--` `{{path|}}`
-> * path string
+* :toolbox::read
+  > > Read a file or directory.
+  > `m8` `call` `m8` `munge` `read` `{{page_lines|--page-lines}}` `--` `{{path|}}`
+  > * path string
 
-#### :toolbox:read page_lines 100
-#### :toolbox:read
+* :toolbox::read page_lines 100
+* :toolbox::read
 
 Definition variables and call parameters share the `__name__`
 environment convention. Definitions are written with logical names,
@@ -1942,32 +1947,32 @@ the ledger, so the question and its answer are part of the
 conversation.
 
 ```m8
-▐ 📲deploy,c1
+▐ 📲:deploy,c1
 │ * target `prod`
 
-▐ ❓tool,c1
+▐ ❓:tool,c1
 │ deploy to prod?
 
-▐ ❗tool,c1
+▐ ❗:tool,c1
 │ yes
 
-▐ 🧾c1
+▐ 🧾:c1
 │     deployed
-▐ 🟢c1
+▐ 🟢:c1
 ```
 
-#### :calling:deploy,c1
-> * target `prod`
+* :calling::deploy,c1
+  > * target `prod`
 
-#### :question:tool,c1
-> deploy to prod?
+* :question::tool,c1
+  > deploy to prod?
 
-#### :exclamation:tool,c1
-> yes
+* :exclamation::tool,c1
+  > yes
 
-#### :receipt:c1
->     deployed
-#### :green_circle:c1
+* :receipt::c1
+  >     deployed
+* :green_circle::c1
 
 * A tool asks by ending in a particular way.
   * Exit status 75.
@@ -2055,16 +2060,16 @@ With a block it defines; with a value alone it
 activates.
 
 ```m8
-▐ 🛡️deny
+▐ 🛡️:deny
 │ `false`
 
-▐ 🛡️deny                   now it is on
+▐ 🛡️:deny                   now it is on
 ```
 
-#### :shield:deny
-> `false`
+* :shield::deny
+  > `false`
 
-#### :shield:deny                   now it is on
+* :shield::deny                   now it is on
 
 A definition body holds a command spelled out in
 backticks, a fenced block in some language, or another
@@ -2072,28 +2077,28 @@ backticks, a fenced block in some language, or another
 and all of them stack around the one command.
 
 ```m8
-▐ 🏃bash
+▐ 🏃:bash
 │ `m8` `call` `bash` `-e` `-c`
 
-▐ 🏃bash raw
+▐ 🏃:bash raw
 │ `bash` `-e` `-c`
 
-▐ 🛡️passthrough
+▐ 🛡️:passthrough
 │ ```bash raw
 │ exec "$@"
 │ ```
 ```
 
-#### :runner:bash
-> `m8` `call` `bash` `-e` `-c`
+* :runner::bash
+  > `m8` `call` `bash` `-e` `-c`
 
-#### :runner:bash raw
-> `bash` `-e` `-c`
+* :runner::bash raw
+  > `bash` `-e` `-c`
 
-#### :shield:passthrough
-> ```bash raw
-> exec "$@"
-> ```
+* :shield::passthrough
+  > ```bash raw
+  > exec "$@"
+  > ```
 
 A 🏃 is what makes a block runnable: an argv the code is
 appended to, the way a shebang's interpreter is handed its
@@ -2105,12 +2110,12 @@ A language that wants something after its code goes
 through `sh`, which puts the code wherever it is needed:
 
 ```m8
-▐ 🏃foo
+▐ 🏃:foo
 │ `sh` `-c` `exec foo "$0" --after-code "$@"`
 ```
 
-#### :runner:foo
-> `sh` `-c` `exec foo "$0" --after-code "$@"`
+* :runner::foo
+  > `sh` `-c` `exec foo "$0" --after-code "$@"`
 
 * It must be defined before a block names it, so a
   document reads in one pass.
@@ -2178,16 +2183,16 @@ A shield stands once, however many times it is activated.
 ### Where a shield is written
 
 ```m8
-▐ 🛡️jail                   the floor for this agent
+▐ 🛡️:jail                   the floor for this agent
 
-▐ 🧰deploy
+▐ 🧰:deploy
 │ 🛡️airgap                 and this tool as well
 ```
 
-#### :shield:jail                   the floor for this agent
+* :shield::jail                   the floor for this agent
 
-#### :toolbox:deploy
-> :shield:airgap                 and this tool as well
+* :toolbox::deploy
+  > :shield:airgap                 and this tool as well
 
 * **Top level**, in an agent. Cumulative over the
   lineage, and inclusion can only tighten.
@@ -2212,7 +2217,7 @@ something it includes, says it means.
 What `jail` means there is a composition you can read:
 
 ```m8
-▐ 🛡️sandbox
+▐ 🛡️:sandbox
 │ 🛡️freeze-toolbox
 │ 🛡️private
 │ 🛡️contain-writes
@@ -2222,24 +2227,24 @@ What `jail` means there is a composition you can read:
 │ 🛡️contain-env
 │ 🛡️contain-home
 
-▐ 🛡️jail
+▐ 🛡️:jail
 │ 🛡️sandbox
 │ 🛡️airgap
 ```
 
-#### :shield:sandbox
-> :shield:freeze-toolbox
-> :shield:private
-> :shield:contain-writes
-> :shield:no-loop
-> :shield:no-edit-git
-> :shield:no-edit-m8-st8
-> :shield:contain-env
-> :shield:contain-home
+* :shield::sandbox
+  > :shield:freeze-toolbox
+  > :shield:private
+  > :shield:contain-writes
+  > :shield:no-loop
+  > :shield:no-edit-git
+  > :shield:no-edit-m8-st8
+  > :shield:contain-env
+  > :shield:contain-home
 
-#### :shield:jail
-> :shield:sandbox
-> :shield:airgap
+* :shield::jail
+  > :shield:sandbox
+  > :shield:airgap
 
 Each of those atoms is `secure` with one more value
 appended to its variable, and `m8 secure-shield` turns
@@ -2273,18 +2278,18 @@ apply less than was asked for.
 wrapper that changes the environment before the tool starts:
 
 ```m8
-▐ 🛡️contain-home
+▐ 🛡️:contain-home
 │ `bash` `-c` `HOME=$TMPDIR exec "$@"`
 
-▐ 🛡️contain-env
+▐ 🛡️:contain-env
 │ `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8|M8_*|TMPDIR|PATH|HOME|LANG|LC_*) ;; *) unset "$v";; esac; done; exec "$@"`
 ```
 
-#### :shield:contain-home
-> `bash` `-c` `HOME=$TMPDIR exec "$@"`
+* :shield::contain-home
+  > `bash` `-c` `HOME=$TMPDIR exec "$@"`
 
-#### :shield:contain-env
-> `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8|M8_*|TMPDIR|PATH|HOME|LANG|LC_*) ;; *) unset "$v";; esac; done; exec "$@"`
+* :shield::contain-env
+  > `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8|M8_*|TMPDIR|PATH|HOME|LANG|LC_*) ;; *) unset "$v";; esac; done; exec "$@"`
 
 * `contain-home` points `HOME` at the mob's scratch.
 * `contain-env` drops every variable its body does not name.
@@ -2302,12 +2307,12 @@ records — that is how a toolmaker works — and closing
 that channel is a pipe rather than a rule:
 
 ```m8
-▐ 🛡️freeze-toolbox
+▐ 🛡️:freeze-toolbox
 │ `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
 ```
 
-#### :shield:freeze-toolbox
-> `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
+* :shield::freeze-toolbox
+  > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
 
 `m8 exclude` takes out every record of the kinds it is
 told. Both forms of 🧰 go with the one name, which is the
@@ -2355,22 +2360,22 @@ One that cannot widen, whatever it includes or is asked
 to do:
 
 ```m8
-▐ 🧠utils/shields
+▐ 🧠:utils/shields
 
-▐ 🛡️jail
+▐ 🛡️:jail
 
-▐ 🧠team/helpers
+▐ 🧠:team/helpers
 
-▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
+▐ 🧠:/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 ```
 
-#### :brain:utils/shields
+* :brain::utils/shields
 
-#### :shield:jail
+* :shield::jail
 
-#### :brain:team/helpers
+* :brain::team/helpers
 
-#### :brain:/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
+* :brain::/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 
 `team/helpers` may define whatever tools and shields it
 likes, and whatever model: the one named last is the one
@@ -2384,26 +2389,26 @@ channel too.
 One that builds its own:
 
 ```m8
-▐ 🧠/local/Ternary-Bonsai-27B-mlx-2bit
+▐ 🧠:/local/Ternary-Bonsai-27B-mlx-2bit
 
-▐ 🧰toolmaker
+▐ 🧰:toolmaker
 │ │ Write a new tool and return its definition.
 │ `make-tool`
 │ * spec string
 │   What the tool should do
 
-▐ 🧰toolmaker
+▐ 🧰:toolmaker
 ```
 
-#### :brain:/local/Ternary-Bonsai-27B-mlx-2bit
+* :brain::/local/Ternary-Bonsai-27B-mlx-2bit
 
-#### :toolbox:toolmaker
-> > Write a new tool and return its definition.
-> `make-tool`
-> * spec string
->   What the tool should do
+* :toolbox::toolmaker
+  > > Write a new tool and return its definition.
+  > `make-tool`
+  > * spec string
+  >   What the tool should do
 
-#### :toolbox:toolmaker
+* :toolbox::toolmaker
 
 No 🛡 at all, so `toolmaker` may hand back 🧰 records
 — a definition, and the blockless one that offers it —
@@ -2539,22 +2544,22 @@ and they are git's objects and refs.
   `m8 @mathy/+/tduyxbutjb` — and moves itself.
 
 ```m8
-▐ 🧠mathy/+/tduyxbutjb
+▐ 🧠:mathy/+/tduyxbutjb
 
-▐ 🙋
+▐ 🙋:
 │ Tell me more.
 
-▐ 🤖
+▐ 🤖:
 │ Additionally, ...
 ```
 
-#### :brain:mathy/+/tduyxbutjb
+* :brain::mathy/+/tduyxbutjb
 
-#### :raising_hand:
-> Tell me more.
+* :raising_hand::
+  > Tell me more.
 
-#### :robot:
-> Additionally, ...
+* :robot::
+  > Additionally, ...
 
 `m8 @` tags a run as it goes rather than once it is
 over, so a run is a chain of turns and the chat moves
@@ -2642,10 +2647,10 @@ A 🧠 written with a leading `/` names a model rather than an
 agent, and carries whatever the api should be asked for:
 
 ```m8
-▐ 🧠/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192,temperature:0.7
+▐ 🧠:/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192,temperature:0.7
 ```
 
-#### :brain:/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192,temperature:0.7
+* :brain::/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192,temperature:0.7
 
 Parameters are the api's own words, passed through as
 written. m8 translates none of them and knows none of them
@@ -2669,10 +2674,10 @@ used everywhere:
 ```
 
 ```m8
-▐ 🧠/local/Ternary-Bonsai-1.7B-mlx-2bit,max_output_tokens:2048
+▐ 🧠:/local/Ternary-Bonsai-1.7B-mlx-2bit,max_output_tokens:2048
 ```
 
-#### :brain:/local/Ternary-Bonsai-1.7B-mlx-2bit,max_output_tokens:2048
+* :brain::/local/Ternary-Bonsai-1.7B-mlx-2bit,max_output_tokens:2048
 
 An agent file is the only kind of alias there is, so it also
 composes: put a model after an agent you include and the
@@ -2680,12 +2685,12 @@ model wins, since the last model named is the one that
 answers — the same rule as a tool's last definition.
 
 ```m8
-▐ 🧠mathy
-▐ 🧠/local/Ternary-Bonsai-27B-mlx-2bit,max_output_tokens:16384
+▐ 🧠:mathy
+▐ 🧠:/local/Ternary-Bonsai-27B-mlx-2bit,max_output_tokens:16384
 ```
 
-#### :brain:mathy
-#### :brain:/local/Ternary-Bonsai-27B-mlx-2bit,max_output_tokens:16384
+* :brain::mathy
+* :brain::/local/Ternary-Bonsai-27B-mlx-2bit,max_output_tokens:16384
 
 A chat is the same: a model piped in after one runs it, and
 every turn after that is still on it, because the model is
@@ -2790,12 +2795,12 @@ m8 models                  every provider that can say
 m8 models local codex      the ones named
 ```
 ```m8
-#### :brain:/local/Ternary-Bonsai-8B-mlx-2bit
-#### :brain:/codex/gpt-5.5
+* :brain::/local/Ternary-Bonsai-8B-mlx-2bit
+* :brain::/codex/gpt-5.5
 ```
 
-#### :brain:/local/Ternary-Bonsai-8B-mlx-2bit
-#### :brain:/codex/gpt-5.5
+* :brain::/local/Ternary-Bonsai-8B-mlx-2bit
+* :brain::/codex/gpt-5.5
 
 * `models` in an entry is a command that prints one model
   name a line.

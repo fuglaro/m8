@@ -59,7 +59,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\A document follows an address by being written after it:
         \\
-        \\  { m8 ref @mathy; echo "#### :brain:/local/tiny"; } | m8 send
+        \\  { m8 ref @mathy; echo "* :brain::/local/tiny"; } | m8 send
         \\
         \\What `m8 @x` wrote ends on the 🧠 of the turn it kept, and `m8 tail`
         \\takes that out:
