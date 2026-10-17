@@ -162,7 +162,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     var progress: Progress = .{ .keeper = opts.keep, .lead = settled };
     // Records normally get a blank line, so writing one has to know what came
     // before it. Some records belong together and are shown touching. A
-    // terminal is shown every 📜, 🤖 and 💭 highlighted as markdown.
+    // terminal is shown every 📜, 🤖, 💭 and 📲 highlighted as markdown.
     var shown: Shown = .{ .look = if (mode == .m8) .{ .width = highlight.terminalWidth(ctx.env) } else null };
     var status: Status = .{ .err = if (level > 0 and !opts.echo_given) ctx.err else null };
     if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);

@@ -40,7 +40,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 ref @mathy | m8 encode | m8 render | less -R
         \\  m8 render <ledger.md
         \\
-        \\Every 📜, 🤖 and 💭 is highlighted as markdown, and a line wider than the
+        \\Every 📜, 🤖, 💭 and 📲 is highlighted as markdown, and a line wider than the
         \\terminal is broken, carrying its quote and indent.
         \\
         \\--parsable breaks no line and pads no table, so what a terminal shows

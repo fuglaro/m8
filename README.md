@@ -586,7 +586,7 @@ m8 @mathy/+/tduyxbutjb -- "Tell me more."
     alike, so it is one command and not two.
   * `m8 render` is the rendered spelling for any document:
     `m8 ref @mathy | m8 encode | m8 render | less -R`.
-* A rendered 📜, 🤖 or 💭 is highlighted as markdown.
+* A rendered 📜, 🤖, 💭 or 📲 is highlighted as markdown.
   * A provider handing over text that is not markdown indents
     it four spaces, and it is shown as it is.
   * A line wider than the terminal is broken, carrying its

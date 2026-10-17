@@ -23,8 +23,9 @@
 //!   is known to be one.
 //! * Nothing inline outlives its line, so every line starts plain. A line
 //!   broken to fit is the same line, and only its quote and indent are plain.
-//! * A fence opens only at the very start of a line and holds until it closes
-//!   or the block ends. `diff` is coloured a line at a time.
+//! * A fence opens at the start of a line, or at the indent of the list item
+//!   it is in, and holds until it closes or the block ends. `diff` is
+//!   coloured a line at a time.
 //! * A quote or list marker is coloured, and nothing after it.
 //! * A line that runs past the terminal is broken there, the next carrying
 //!   the line's quote and indent, except inside a code span.
@@ -189,6 +190,8 @@ pub const Highlighter = struct {
     // Across lines.
     fence_c: u8 = 0,
     fence_n: usize = 0,
+    /// How far in the fence opened, which its lines are read from.
+    fence_at: usize = 0,
     diff: bool = false,
     lang: [8]u8 = undefined,
     lang_n: usize = 0,
@@ -265,7 +268,11 @@ pub const Highlighter = struct {
     /// What may still be the opening of a line rather than its text.
     fn holds(h: *const Highlighter, b: u8) bool {
         if (h.fence_c != 0) {
-            const all = for (h.hold[0..h.held]) |x| {
+            // As far in as the fence opened, and then only its closing run.
+            const held = h.hold[0..h.held];
+            const in = std.mem.indexOfNone(u8, held, " ") orelse held.len;
+            if (b == ' ') return in == held.len and held.len < h.fence_at;
+            const all = for (held[in..]) |x| {
                 if (x != h.fence_c) break false;
             } else true;
             return b == h.fence_c and all;
@@ -280,13 +287,18 @@ pub const Highlighter = struct {
         h.held = 0;
 
         if (h.fence_c != 0) {
-            if (next == null and held.len >= h.fence_n) {
+            const in = std.mem.indexOfNone(u8, held, " ") orelse held.len;
+            if (next == null and held.len - in >= h.fence_n) {
                 try h.emitAll(held, look.fence);
                 h.fence_c = 0;
                 h.kind = .text;
                 return;
             }
-            const first = if (held.len > 0) held[0] else if (next) |n| n[0] else 0;
+            // A diff says what a line is by its first character inside the
+            // fence's own indent.
+            const first = if (held.len > h.fence_at)
+                held[h.fence_at]
+            else if (held.len == h.fence_at and next != null) next.?[0] else 0;
             h.line = if (!h.diff) look.block else switch (first) {
                 '+' => look.added,
                 '-' => look.removed,
@@ -297,20 +309,23 @@ pub const Highlighter = struct {
             return h.emitAll(held, h.line);
         }
 
-        // Only at the very start of a line: one inside a quote or a list
-        // is not a fence here.
-        if (held.len >= 3 and (held[0] == '`' or held[0] == '~')) {
-            const run = std.mem.indexOfNone(u8, held, held[0..1]) orelse held.len;
+        // At the start of a line, or at the indent of the list item it is
+        // in. One inside a quote is not a fence here.
+        const in = std.mem.indexOfNone(u8, held, " ") orelse held.len;
+        if ((in == 0 or in == h.pad) and held.len >= in + 3 and (held[in] == '`' or held[in] == '~')) {
+            const run = std.mem.indexOfNone(u8, held[in..], held[in .. in + 1]) orelse held.len - in;
             if (run >= 3) {
-                h.fence_c = held[0];
+                h.fence_c = held[in];
                 h.fence_n = run;
+                h.fence_at = in;
                 h.para = false;
-                h.pad = 0;
+                if (in == 0) h.pad = 0;
                 h.lang_n = 0;
                 h.kind = .fence;
                 h.columns = null;
-                try h.emitAll(held[0..run], look.fence);
-                for (held[run..]) |b| try h.char(&.{b});
+                try h.emitAll(held[0..in], .{});
+                try h.emitAll(held[in .. in + run], look.fence);
+                for (held[in + run ..]) |b| try h.char(&.{b});
                 return;
             }
         }
@@ -676,6 +691,16 @@ test "a fence holds until it closes, and a diff is coloured a line at a time" {
     try expectShown("{38;5;245}>{} {38;5;180}```a{}", "> ```a", .{});
     // Never closed, and the block's end closes it.
     try expectShown("{38;5;245}~~~{}\n{38;5;180}a{}", "~~~\na", .{});
+}
+
+test "a fence opens at its list item's indent, and is read from there" {
+    try expectShown(
+        "{38;5;245}1. {}a\n   {38;5;245}```diff{}\n{38;5;2}   +*b*{}\n{38;5;245} ```{}\n{38;5;245}- {3}*c*{}",
+        "1. a\n   ```diff\n   +*b*\n ```\n- *c*",
+        .{},
+    );
+    // Not at the item's indent, and it is only backticks.
+    try expectShown("{38;5;245}- {}a\n {38;5;180}```b{}", "- a\n ```b", .{});
 }
 
 test "a table's pipes take their share of the width, or a space past a wide cell" {

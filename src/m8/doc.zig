@@ -407,13 +407,13 @@ pub fn writeLooking(w: *std.Io.Writer, mode: Mode, look: ?Look, r: Record) std.I
     try b.finish();
 }
 
-/// What a record is highlighted with, if anything: a 📜, 🤖 or 💭, and only
-/// ever in the rendered spelling.
+/// What a record is highlighted with, if anything: a 📜, 🤖, 💭 or 📲, and
+/// only ever in the rendered spelling.
 fn looked(mode: Mode, look: ?Look, s: Sigil) ?Look {
     const l = look orelse return null;
     if (mode != .m8 or !(l.color or l.reflow)) return null;
     return switch (s) {
-        .scroll, .bot, .thought => l,
+        .scroll, .bot, .thought, .call => l,
         else => null,
     };
 }
