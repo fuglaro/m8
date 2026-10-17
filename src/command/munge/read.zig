@@ -32,8 +32,8 @@ pub const command: api.Command = .{
 /// A page ends on whichever of these comes first. Lines keep a page roughly
 /// the same shape as the file, and characters keep one long line from handing
 /// back a page nobody can afford.
-pub const default_page_lines = 100;
-const default_page_bytes = 10000;
+pub const default_page_lines = 30;
+const default_page_bytes = 3000;
 
 /// How much a call may be handed at once, over which whole pages are dropped
 /// from the end rather than a page being cut.
@@ -600,7 +600,7 @@ test "a page larger than the byte cap remains whole" {
     try testing.expectEqual(@as(usize, body.len), pages[0].end);
 }
 
-test "a page holds a hundred lines" {
+test "default pages hold thirty lines" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -608,11 +608,20 @@ test "a page holds a hundred lines" {
     const body = try lines(arena, 250, "line");
     const pages = try paginate(arena, body);
 
-    try testing.expectEqual(@as(usize, 3), pages.len);
+    try testing.expectEqual(@as(usize, 9), pages.len);
     try testing.expectEqual(@as(usize, 1), pages[0].first_line);
-    try testing.expectEqual(@as(usize, 100), pages[0].last_line);
-    try testing.expectEqual(@as(usize, 101), pages[1].first_line);
-    try testing.expectEqual(@as(usize, 250), pages[2].last_line);
+    try testing.expectEqual(@as(usize, 30), pages[0].last_line);
+    try testing.expectEqual(@as(usize, 31), pages[1].first_line);
+    try testing.expectEqual(@as(usize, 250), pages[8].last_line);
+
+    // The independent byte default also splits pages before the line limit.
+    const wide = try arena.alloc(u8, 4002);
+    @memset(wide, 'x');
+    wide[2000] = '\n';
+    wide[4001] = '\n';
+    const byte_pages = try paginate(arena, wide);
+    try testing.expectEqual(@as(usize, 2), byte_pages.len);
+    try testing.expect(byte_pages[0].end <= 3000);
 }
 
 test "a long line early in a page is cut, and both sides say so" {
@@ -643,7 +652,7 @@ test "a long line in the last third is pushed whole into the next page" {
     const long = try arena.alloc(u8, 5000);
     @memset(long, 'y');
     const body = try std.fmt.allocPrint(arena, "{s}{s}\ntail\n", .{ filler.items, long });
-    const pages = try paginate(arena, body);
+    const pages = try paginateConfig(arena, body, .{ .lines = 100, .bytes = 10000 });
 
     try testing.expect(pages.len >= 2);
     try testing.expect(!pages[0].ends_mid);
@@ -658,7 +667,7 @@ test "a range is read as generously as it can be" {
     const arena = arena_state.allocator();
 
     const body = try lines(arena, 1000, "line");
-    const pages = try paginate(arena, body);
+    const pages = try paginateConfig(arena, body, .{ .lines = 100, .bytes = 10000 });
     try testing.expectEqual(@as(usize, 10), pages.len);
 
     const plain = select("3-5", pages, body).span;
@@ -707,7 +716,7 @@ test "an anchor takes the page a match is on, and its neighbour when it is near 
     const arena = arena_state.allocator();
 
     const body = try lines(arena, 1000, "line");
-    const pages = try paginate(arena, body);
+    const pages = try paginateConfig(arena, body, .{ .lines = 100, .bytes = 10000 });
 
     // Line 150 is the middle of page 2, so one page is one page.
     const mid = select("1@line 150", pages, body).span;

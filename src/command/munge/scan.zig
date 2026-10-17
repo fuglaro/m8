@@ -659,7 +659,7 @@ test "matches are grouped into runs of neighbouring pages" {
         .program => |p| p,
     };
     var vm = try regex.Vm.init(arena, prog);
-    const said = try report(arena, &vm, "demo.txt", body.items, .{});
+    const said = try report(arena, &vm, "demo.txt", body.items, .{ .lines = 100, .bytes = 10000 });
 
     try testing.expect(std.mem.indexOf(u8, said, "has 3 matches:") != null);
     try testing.expect(std.mem.indexOf(u8, said, "* 2 matches on pages 1-1 in lines:") != null);
@@ -700,7 +700,7 @@ test "a glob with no pattern names files the way a search would" {
     // The same line a match report prints above its matches, with nothing
     // under it — so one shape is learned once.
     try testing.expectEqualStrings(
-        "demo.txt (2KB, 250 lines, 1-3 pages)\n",
+        "demo.txt (2KB, 250 lines, 1-9 pages)\n",
         try named(arena, "demo.txt", body.items, body.items.len, .{}),
     );
 

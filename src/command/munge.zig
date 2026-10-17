@@ -100,8 +100,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\Usage: m8 munge [OPTIONS] COMMAND [COMMAND-OPTIONS] ARGS
         \\
         \\Options:
-        \\  --page-lines N      page line target (default 100)
-        \\  --page-bytes N      page byte target (default 10000)
+        \\  --page-lines N      page line target (default 30)
+        \\  --page-bytes N      page byte target (default 3000)
         \\  --pages RANGE       select pages (for example 11-20 or 2@anchor)
         \\
         \\Commands:
@@ -118,7 +118,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\read:
         \\  read PATH           read a file or list a directory
-        \\  --byte-cap N        maximum answer size
+        \\  --byte-cap N        maximum answer size (default 20000 bytes)
         \\
         \\write:
         \\  write PATH TEXT     replace or append file content
@@ -127,13 +127,14 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\                      block-content tolerance between 8-char+ outer anchor lines;
         \\                      only single line edits may match many.
         \\  --tolerance N       % of anchored block lines allowed to differ (default 25)
+        \\  --diff-pad N        diff context lines (default 3)
         \\  --dry-run           view diff without making changes
         \\
         \\scan:
         \\  scan                search files
         \\  --glob GLOB         file path matching
         \\  --regex PATTERN     grep per-line on perl-style regex no backrefs no lookaround
-        \\  --byte-cap N        maximum answer size
+        \\  --byte-cap N        maximum answer size (default 20000 bytes)
         \\
         \\Use -- before a PATH that starts with --.
         \\

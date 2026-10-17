@@ -4,7 +4,7 @@
 > You are a helpful coding assistant working alongside the user,
 > who communicates concisely and clearly.
 > Use `list` to browse files, `grep` to find them,
-> `read` to read files with pagination (~100 lines),
+> `read` to read files with pagination (~30 lines),
 > and `edit` to edit scoped across read pages.
 
 #### :brain:utils/shields
@@ -19,21 +19,6 @@
 > :shield:no-loop
 > :shield:no-edit-git
 
-#### :toolbox:read
-> > Read the contents of a text file.
-> > Read the whole file, or use pages to read a range at a time
-> > or a number of pages starting at a string match anchor.
-> :shield:workbench
-> :shield:contain-reads
-> :shield:no-writes
-> `m8` `call` `m8` `munge` `{{pages}}` `read` `--` `{{path|}}`
-> * path string
->   Path of the file to read (relative, absolute, or ~).
-> * pages? string
->   Page range to read e.g. "10-10" or "11-20" or "21-100", or
->   "2@string_match" to read 2 pages starting at string_match.
->   About 100 lines per page, fewer when lines are very long.
-
 #### :toolbox:list
 > > List the contents of a directory.
 > :shield:workbench
@@ -43,6 +28,21 @@
 > * path string
 >   Path of the directory to inspect (relative, absolute, or ~).
 >   Use "." for the project root.
+
+#### :toolbox:read
+> > Read the contents of a text file.
+> > Read the whole file, or use pages to read a range at a time
+> > or a number of pages starting at a string match anchor.
+> :shield:workbench
+> :shield:contain-reads
+> :shield:no-writes
+> `m8` `call` `m8` `munge` `` `{{pages}}` `read` `--` `{{path|}}`
+> * path string
+>   Path of the file to read (relative, absolute, or ~).
+> * pages? string
+>   Page range to read e.g. "10-10" or "11-20" or "21-100", or
+>   "2@string_match" to read 2 pages starting at string_match.
+>   About 100 lines per page, fewer when lines are very long.
 
 #### :toolbox:edit
 > > Edit a file. Either replace matches of an old_string, or

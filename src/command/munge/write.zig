@@ -53,6 +53,7 @@ const options = [_]opts.Option{
     .{ .name = "dry-run", .kind = .flag },
     .{ .name = "page-lines", .kind = .number },
     .{ .name = "page-bytes", .kind = .number },
+    .{ .name = "diff-pad", .kind = .number },
 };
 
 fn run(ctx: Ctx) !u8 {
@@ -63,6 +64,7 @@ fn run(ctx: Ctx) !u8 {
     const new_string = if (given.words.len > 1) given.words[1] else "";
     const allowed = given.number("tolerance") orelse default_tolerance;
     const dry_run = given.flag("dry-run");
+    const diff_pad = given.number("diff-pad") orelse 3;
 
     // Pages are what this tool scopes by and answers in, so it cuts the file
     // the way the `read` that handed the model its page did.
@@ -70,10 +72,10 @@ fn run(ctx: Ctx) !u8 {
 
     const had = Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(max_file)) catch null;
 
-    if (old_string.len == 0) return append(ctx, path, had, new_string, config, dry_run);
+    if (old_string.len == 0) return append(ctx, path, had, new_string, config, dry_run, diff_pad);
 
     const bytes = had orelse return failure(ctx, "there is no {s} to edit", .{path});
-    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), allowed, config, dry_run);
+    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), allowed, config, dry_run, diff_pad);
 }
 
 // ------------------------------------------------------------------- adding
@@ -90,6 +92,7 @@ fn append(
     text: []const u8,
     config: read.PageConfig,
     dry_run: bool,
+    diff_pad: usize,
 ) !u8 {
     var out: std.ArrayList(u8) = .empty;
     if (had) |bytes| {
@@ -127,7 +130,7 @@ fn append(
     const first_line = lineNumber(old_bytes, if (had == null) 0 else from);
     const last_line = lineNumber(out.items, out.items.len -| 1);
     try line.print(ctx.arena, ", changing lines {d}-{d}", .{ first_line, last_line });
-    return finish(ctx, path, dry_run, line.items, old_bytes, out.items);
+    return finish(ctx, path, dry_run, line.items, old_bytes, out.items, diff_pad);
 }
 
 // ---------------------------------------------------------------- replacing
@@ -142,6 +145,7 @@ fn replace(
     tolerance: usize,
     config: read.PageConfig,
     dry_run: bool,
+    diff_pad: usize,
 ) !u8 {
     const pages = try read.paginateConfig(ctx.arena, bytes, config);
 
@@ -273,7 +277,7 @@ fn replace(
             return failure(ctx, "cannot write {s}", .{path});
     }
 
-    return receipt(ctx, path, pages, found, put.len == 0, bytes, out.items, dry_run);
+    return receipt(ctx, path, pages, found, put.len == 0, bytes, out.items, dry_run, diff_pad);
 }
 
 /// What happened, in pages, and how honestly it matched.
@@ -286,6 +290,7 @@ fn receipt(
     old_text: []const u8,
     new_text: []const u8,
     dry_run: bool,
+    diff_pad: usize,
 ) !u8 {
     const verb = if (removed) "Removed" else "Replaced";
     const first = read.pageOf(pages, found.at[0].at);
@@ -307,7 +312,7 @@ fn receipt(
     try line.print(ctx.arena, ", changing lines {d}-{d}", .{ changed.first, changed.last });
     if (found.how.len > 0) try line.print(ctx.arena, ". Matched {s}", .{found.how});
 
-    return finish(ctx, path, dry_run, line.items, old_text, new_text);
+    return finish(ctx, path, dry_run, line.items, old_text, new_text, diff_pad);
 }
 
 const DiffLine = struct {
@@ -335,21 +340,28 @@ fn finish(
     receipt_text: []const u8,
     old_text: []const u8,
     new_text: []const u8,
+    diff_pad: usize,
 ) !u8 {
     if (dry_run) try ctx.out.writeAll("Proposed changes would result in:\n");
-    const diff = try makeDiff(ctx.arena, old_text, new_text);
+    const diff = try makeDiffWithPad(ctx.arena, old_text, new_text, diff_pad);
     try ctx.out.writeAll(diff);
     try ctx.out.print("[{s}: {s}.]\n", .{ path, receipt_text });
     try ctx.out.flush();
     return 0;
 }
 
-/// Make a small, line-oriented diff with three lines of context around each
-/// changed region. This is deliberately local rather than a patch format:
-/// the receipt already identifies the file and the changed line range.
 pub fn makeDiff(allocator: Allocator, old_text: []const u8, new_text: []const u8) ![]u8 {
-    const context_lines: usize = 3;
+    return makeDiffWithPad(allocator, old_text, new_text, 3);
+}
 
+/// Make a local, line-oriented diff with `context_lines` lines of context
+/// around each changed region. The receipt identifies the file and line range.
+pub fn makeDiffWithPad(
+    allocator: Allocator,
+    old_text: []const u8,
+    new_text: []const u8,
+    context_lines: usize,
+) ![]u8 {
     const old_lines = try splitLines(allocator, old_text);
     const new_lines = try splitLines(allocator, new_text);
 
@@ -952,12 +964,12 @@ test "how far a line number may have drifted is the page it came off" {
     const arena = arena_state.allocator();
 
     // The same paste twice, against two page sizes. A number read off a
-    // hundred-line page is still believable forty lines out; read off a
+    // thirty-line page is still believable twenty lines out; read off a
     // ten-line page it names somewhere the model was never looking.
-    const wide = try match(arena, body, "40:    const total = a + b;", .{ .at = 0, .end = body.len }, default_tolerance, read.default_page_lines);
+    const wide = try match(arena, body, "20:    const total = a + b;", .{ .at = 0, .end = body.len }, default_tolerance, read.default_page_lines);
     try testing.expectEqual(@as(usize, 1), wide.at.len);
 
-    const narrow = try match(arena, body, "40:    const total = a + b;", .{ .at = 0, .end = body.len }, default_tolerance, 10);
+    const narrow = try match(arena, body, "20:    const total = a + b;", .{ .at = 0, .end = body.len }, default_tolerance, 10);
     try testing.expectEqual(@as(usize, 0), narrow.at.len);
 }
 
@@ -1158,6 +1170,31 @@ test "a diff between two changes keeps context on both sides" {
         \\+L
         \\
     , try makeDiff(arena, old_text, new_text));
+}
+
+test "diff padding controls context lines, including zero" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const old_text = "a\nb\nc\nd\ne\n";
+    const new_text = "a\nb\nC\nd\ne\n";
+    try testing.expectEqualStrings(
+        \\@@ 2 unchanged lines @@
+        \\-c
+        \\+C
+        \\@@ 2 unchanged lines @@
+        \\
+    , try makeDiffWithPad(arena, old_text, new_text, 0));
+    try testing.expectEqualStrings(
+        \\@@ 1 unchanged lines @@
+        \\ b
+        \\-c
+        \\+C
+        \\ d
+        \\@@ 1 unchanged lines @@
+        \\
+    , try makeDiffWithPad(arena, old_text, new_text, 1));
 }
 
 test "a diff short enough to print whole keeps every line" {

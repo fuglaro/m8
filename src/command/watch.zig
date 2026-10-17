@@ -32,7 +32,7 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 watch @CHAT
+        \\  m8 watch [--unsnip] @CHAT
         \\
         \\Writes what the chat holds, and then whatever is added to it, until
         \\it is interrupted. It is how to look on at a chat something else is
@@ -47,6 +47,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\What arrives is a turn at a time, since a turn is what is kept: a
         \\reply once it is whole, and a call once it is answered.
         \\
+        \\`--unsnip` expands snipped content instead of leaving its 🧠 standing.
+        \\
         \\Only the chat's own pointer is read. One with none is waited on,
         \\rather than shown as the chat above it.
         \\
@@ -57,12 +59,15 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
 const pause: std.Io.Duration = .fromMilliseconds(150);
 
 fn run(ctx: Ctx) !u8 {
-    if (ctx.args.len != 1 or !address.isAddress(ctx.args[0])) {
+    var args = ctx.args;
+    const unsnip = args.len > 0 and std.mem.eql(u8, args[0], "--unsnip");
+    if (unsnip) args = args[1..];
+    if (args.len != 1 or !address.isAddress(args[0])) {
         try ctx.err.writeAll("m8 watch: name one @CHAT\n");
         return 1;
     }
     const dirs = try config.discover(ctx.arena, ctx.io, ctx.env);
-    const a = try address.typed(ctx.arena, ctx.io, dirs, ctx.args[0], ctx.err);
+    const a = try address.typed(ctx.arena, ctx.io, dirs, args[0], ctx.err);
     if (a.kind != .chat or a.suffix != .none) {
         try ctx.err.writeAll("m8 watch: only a chat moves, and it is named without `:` or `-`\n");
         return 1;
@@ -91,7 +96,7 @@ fn run(ctx: Ctx) !u8 {
                 dirs,
                 &.{.{ .sigil = .agent, .value = head }},
                 .md,
-                .{ .names = &.{ shown, agent }, .snips = true },
+                .{ .names = &.{ shown, agent }, .snips = !unsnip },
             );
             try ledger.writeAll(ctx.out, arena, ctx.mode, new.records);
             try ctx.out.writeByte('\n');
