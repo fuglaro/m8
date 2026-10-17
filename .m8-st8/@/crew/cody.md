@@ -52,7 +52,7 @@
 > > Pages may be used to scope matches.
 > :shield:workbench
 > :shield:contain-reads
-> `m8` `call` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
+> `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
 > * path string
 >   Path of the file to edit or create (relative, absolute, or ~).
 > * new_string string

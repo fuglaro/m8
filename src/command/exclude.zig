@@ -201,10 +201,10 @@ test "every kind named goes, and nothing else" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const said = "#### :toolbox:x\n> gone\n\n#### :receipt:c1\n> kept\n\n" ++
+    const said = "#### :toolbox:x\n> gone\n\n#### :receipt:c1\n>     kept\n\n" ++
         "#### :brain:somebody\n\n#### :books:skill\n\n#### :green_circle:c1\n";
     try testing.expectEqualStrings(
-        "#### :receipt:c1\n> kept\n\n#### :green_circle:c1\n",
+        "#### :receipt:c1\n>     kept\n\n#### :green_circle:c1\n",
         try without(arena, said, &.{ .tool, .agent, .skill }),
     );
 }

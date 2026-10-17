@@ -250,7 +250,7 @@ pub fn answer(ctx: Ctx, mode: doc.Mode, records: []const doc.Record, model: []co
             .{outcome.consumed + 1},
         );
     } else {
-        try body.writer.writeAll(outcome.text);
+        try writeIndented(&body.writer, outcome.text);
     }
 
     try out.append(ctx.arena, .{ .sigil = .bot, .content = body.written() });
@@ -307,12 +307,31 @@ fn writeBoot(
     }
 
     try w.writeAll("\n---\n");
-    try w.writeAll(opening);
+    try writeIndented(w, opening);
+}
+
+/// What the game says, indented four spaces so that it reads as literal:
+/// it is a game's own text and not markdown, whatever it happens to hold.
+fn writeIndented(w: *std.Io.Writer, text: []const u8) !void {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        if (!first) try w.writeByte('\n');
+        first = false;
+        if (line.len > 0) try w.print("    {s}", .{line});
+    }
 }
 
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+
+test "the game's own text is indented, and its empty lines are left empty" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeIndented(&out.writer, "West of House\n\n*You* are here.\n");
+    try testing.expectEqualStrings("    West of House\n\n    *You* are here.\n", out.written());
+}
 
 test "a Z-Machine model is told by what its name begins with, exactly" {
     try testing.expect(serves("Z-Machine/zork1"));

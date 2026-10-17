@@ -4,6 +4,7 @@ comptime {
     _ = @import("main.zig");
     _ = @import("m8/sigil.zig");
     _ = @import("m8/markdown.zig");
+    _ = @import("m8/highlight.zig");
     _ = @import("m8/doc.zig");
     _ = @import("m8/model.zig");
     _ = @import("session.zig");

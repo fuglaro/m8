@@ -35,7 +35,7 @@ pub fn fromModel(s: Sigil) bool {
 /// 📚 alongside 🧰 rather than resolving them to see what they carry.
 pub fn fromTool(s: Sigil) bool {
     return switch (s) {
-        .result, .link, .ok, .failed => true,
+        .result, .scroll, .link, .ok, .failed => true,
         .tool, .agent, .skill => true,
         else => false,
     };
@@ -59,7 +59,7 @@ test "a model may not produce a definition, whatever the shields" {
 }
 
 test "a tool answers, and may hand back definitions for a shield to take away" {
-    for ([_]Sigil{ .result, .link, .ok, .failed, .tool, .agent, .skill }) |s|
+    for ([_]Sigil{ .result, .scroll, .link, .ok, .failed, .tool, .agent, .skill }) |s|
         try testing.expect(fromTool(s));
     // Never: a tool does not speak as the model or as the person, and no
     // shield opens that — it is not a door.

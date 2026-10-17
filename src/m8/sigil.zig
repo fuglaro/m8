@@ -38,6 +38,11 @@ pub const Sigil = enum {
     // went. 🧾 is what the tool said; 🟢 and 🚫 are the verdict, which is only
     // known once it has stopped saying it.
     result,
+    // 📜 is a 🧾 meant to be read as markdown. A 🧾 is literal, and carries
+    // its block indented four spaces so that anything rendering the file
+    // shows it as code; a 📜 carries its block as it is. A tool may answer
+    // with both, and a model is handed them joined in order.
+    scroll,
     // 🔗 hands over files beside what a tool said, one `<path` line each. It
     // names its call as 🧾 does, and is kept by copying what it names into
     // the turn's `+/`, so what the ledger says was seen cannot change after.
@@ -81,6 +86,7 @@ pub const Sigil = enum {
             .signature => "\u{1F50F}", // 🔏
             .call => "\u{1F4F2}", // 📲
             .result => "\u{1F9FE}", // 🧾
+            .scroll => "\u{1F4DC}", // 📜
             .link => "\u{1F517}", // 🔗
             .ok => "\u{1F7E2}", // 🟢
             .failed => "\u{1F6AB}", // 🚫
@@ -110,6 +116,7 @@ pub const Sigil = enum {
             .signature => ":lock_with_ink_pen:",
             .call => ":calling:",
             .result => ":receipt:",
+            .scroll => ":scroll:",
             .link => ":link:",
             .ok => ":green_circle:",
             .failed => ":no_entry_sign:",
@@ -142,6 +149,16 @@ pub const Sigil = enum {
         return switch (s) {
             .user, .system, .top => false,
             else => true,
+        };
+    }
+
+    /// How far each content line is indented inside its quote, in both
+    /// spellings. Framing rather than content: written and stripped here, so
+    /// every reader is handed the literal text. An empty line carries none.
+    pub fn indent(s: Sigil) []const u8 {
+        return switch (s) {
+            .result => "    ",
+            else => "",
         };
     }
 
@@ -275,6 +292,7 @@ test "every plain spelling is the gemoji shortcode for its own emoji" {
         .{ .sigil = .signature, .cp = 0x1F50F, .word = ":lock_with_ink_pen:" },
         .{ .sigil = .call, .cp = 0x1F4F2, .word = ":calling:" },
         .{ .sigil = .result, .cp = 0x1F9FE, .word = ":receipt:" },
+        .{ .sigil = .scroll, .cp = 0x1F4DC, .word = ":scroll:" },
         .{ .sigil = .link, .cp = 0x1F517, .word = ":link:" },
         .{ .sigil = .ok, .cp = 0x1F7E2, .word = ":green_circle:" },
         .{ .sigil = .failed, .cp = 0x1F6AB, .word = ":no_entry_sign:" },

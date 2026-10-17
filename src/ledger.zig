@@ -410,7 +410,7 @@ pub fn outstanding(arena: Allocator, records: []const doc.Record) ![]const doc.R
     var out: std.ArrayList(doc.Record) = .empty;
     for (records) |r| switch (r.sigil) {
         .call => try out.append(arena, r),
-        .result, .link, .ok, .failed => {
+        .result, .scroll, .link, .ok, .failed => {
             const id = std.mem.trim(u8, r.value, " \t");
             var i: usize = 0;
             while (i < out.items.len) {
@@ -618,7 +618,7 @@ test "tool calls stay, and only an unanswered one is still owed" {
         \\> * text `hi`
         \\
         \\#### :receipt:c1
-        \\> hi
+        \\>     hi
         \\
         \\#### :calling:say,c2
         \\> * text `bye`

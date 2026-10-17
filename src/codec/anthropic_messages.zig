@@ -202,7 +202,7 @@ fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
             .call => i = try run(arena, &turn, records, i, claimed),
             // An answer whose call was never written still names what it
             // answers, and is left where the ledger put it.
-            .result, .link, .ok, .failed => {
+            .result, .scroll, .link, .ok, .failed => {
                 if (!claimed[i]) {
                     const id = std.mem.trim(u8, r.value, " \t");
                     if (try answerTo(arena, records, claimed, i, id)) |a| {
@@ -231,7 +231,7 @@ fn run(
     var end = start;
     while (end < records.len) : (end += 1) {
         switch (records[end].sigil) {
-            .call, .result, .link, .ok, .failed => {},
+            .call, .result, .scroll, .link, .ok, .failed => {},
             else => break,
         }
     }
@@ -266,7 +266,7 @@ fn run(
     // the same; the ledger is what says so.
     for (records[start..end], start..) |r, idx| {
         switch (r.sigil) {
-            .result, .link, .ok, .failed => {},
+            .result, .scroll, .link, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
@@ -309,7 +309,7 @@ fn answerTo(
 
     for (records[from..], from..) |r, idx| {
         switch (r.sigil) {
-            .result, .link, .ok, .failed => {},
+            .result, .scroll, .link, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
@@ -329,7 +329,7 @@ fn answerTo(
 
         // A verdict ends the answer; anything later with this id answers a
         // call made again rather than this one.
-        if (r.sigil != .result) break;
+        if (r.sigil != .result and r.sigil != .scroll) break;
     }
     return if (found) .{
         .said = said.items,

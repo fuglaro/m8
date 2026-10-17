@@ -16,6 +16,7 @@
 //! `/dev/tty` fails cleanly rather than fighting riff for the terminal.
 
 const std = @import("std");
+const width = @import("../m8/highlight.zig").width;
 const posix = std.posix;
 const api = @import("../api.zig");
 const Ctx = api.Ctx;
@@ -1066,21 +1067,6 @@ fn glyph(text: []const u8, i: usize) Glyph {
     if (i + len > text.len) return .{ .cp = 0xfffd, .len = 1 };
     const cp = std.unicode.utf8Decode(text[i..][0..len]) catch return .{ .cp = 0xfffd, .len = 1 };
     return .{ .cp = cp, .len = len };
-}
-
-/// How many cells a character takes. A table rather than `wcwidth`, which is
-/// libc's and answers for the locale rather than for the terminal.
-fn width(cp: u21) usize {
-    if (cp == 0x200d or (cp >= 0x300 and cp <= 0x36f) or (cp >= 0xfe00 and cp <= 0xfe0f)) return 0;
-    const wide = [_][2]u21{
-        .{ 0x1100, 0x115f }, .{ 0x2e80, 0xa4cf },   .{ 0xac00, 0xd7a3 },
-        .{ 0xf900, 0xfaff }, .{ 0xfe30, 0xfe4f },   .{ 0xff00, 0xff60 },
-        .{ 0xffe0, 0xffe6 }, .{ 0x1f300, 0x1faff }, .{ 0x20000, 0x3fffd },
-        // ❓ and ❗, the two sigils from outside the emoji block.
-        .{ 0x2753, 0x2755 }, .{ 0x2757, 0x2757 },
-    };
-    for (wide) |range| if (cp >= range[0] and cp <= range[1]) return 2;
-    return 1;
 }
 
 /// How many cells text takes, by the same count as `put`.

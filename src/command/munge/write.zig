@@ -25,6 +25,7 @@ const std = @import("std");
 const api = @import("../../api.zig");
 const read = @import("read.zig");
 const opts = @import("opts.zig");
+const markdown = @import("../../m8/markdown.zig");
 const Ctx = api.Ctx;
 const Dir = std.Io.Dir;
 const Allocator = std.mem.Allocator;
@@ -333,6 +334,9 @@ fn lineNumber(text: []const u8, at: usize) usize {
 /// Print a write receipt and the compact before/after diff. A dry run follows
 /// exactly the same path, but announces the proposal and leaves the file
 /// untouched.
+///
+/// The diff is fenced as `diff`, so whatever shows it as markdown — a 📜 is
+/// what `m8 call --md` makes of it — colours it as one.
 fn finish(
     ctx: Ctx,
     path: []const u8,
@@ -344,7 +348,7 @@ fn finish(
 ) !u8 {
     if (dry_run) try ctx.out.writeAll("Proposed changes would result in:\n");
     const diff = try makeDiffWithPad(ctx.arena, old_text, new_text, diff_pad);
-    try ctx.out.writeAll(diff);
+    if (diff.len > 0) try markdown.writeFence(ctx.out, "", "diff", std.mem.trimEnd(u8, diff, "\n"));
     try ctx.out.print("[{s}: {s}.]\n", .{ path, receipt_text });
     try ctx.out.flush();
     return 0;

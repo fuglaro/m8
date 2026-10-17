@@ -190,8 +190,9 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
         error.FollowLoops => try err.writeAll(
             "m8: that would have a chat follow something that leads back to it\n",
         ),
-        // Already said, in terms of what was typed.
-        error.Said => {},
+        // Already said, in terms of what was typed, or by the provider stage
+        // that failed, which is the line worth leaving on screen.
+        error.Said, error.ProviderFailed => {},
         else => if (name.len == 0)
             try err.print("m8: {s}\n", .{@errorName(e)})
         else

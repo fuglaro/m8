@@ -2,13 +2,14 @@
 //!
 //!     m8 call PROG [ARGS]             run a program from the environment
 //!     m8 call --no-wrap PROG [ARGS]   one that answers in records itself
+//!     m8 call --md PROG [ARGS]        one that answers in markdown
 //!
 //! What a command may not do is not asked about here. A 🛡 is the process a
 //! command runs inside, so refusing, asking and confining are all arranged
 //! around this rather than as conditions within it — which is why there is no
 //! flag, no list, and nothing to keep in step with what a shield can mean.
 //!
-//! Output is m8: the child's stdout becomes a 🧾 receipt. A non-zero exit is a
+//! Output is m8: the child's stdout becomes a 🧾 receipt, or a 📜 under `--md`. A non-zero exit is a
 //! 🚫 naming the code, with the child's stderr after it when there was any —
 //! a failure with no reason in it tells a model only that something broke.
 //! Stdin remains whatever descriptor call was given. Stdout is captured only
@@ -37,8 +38,15 @@ pub const command: api.Command = .{
 pub const Error = error{NothingToRun};
 
 fn run(ctx: Ctx) !u8 {
-    const unwrapped = ctx.args.len > 0 and std.mem.eql(u8, ctx.args[0], "--no-wrap");
-    const args = if (unwrapped) ctx.args[1..] else ctx.args;
+    const how: Answer = if (ctx.args.len == 0)
+        .framed
+    else if (std.mem.eql(u8, ctx.args[0], "--no-wrap"))
+        .unwrapped
+    else if (std.mem.eql(u8, ctx.args[0], "--md"))
+        .scrolled
+    else
+        .framed;
+    const args = if (how == .framed) ctx.args else ctx.args[1..];
     if (args.len == 0) return help(ctx);
     const expanded = try argline.line(ctx.arena, ctx.env, ctx.err, args);
     if (expanded.len == 0) {
@@ -51,7 +59,7 @@ fn run(ctx: Ctx) !u8 {
     // nothing.
     var inner = ctx;
     if (ctx.env.get("M8_CALL_ID")) |id| inner.call_id = id;
-    return execute(inner, expanded, if (unwrapped) .unwrapped else .framed);
+    return execute(inner, expanded, how);
 }
 
 /// Run an already-built command line.
@@ -73,6 +81,9 @@ pub fn execute(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
 pub const Answer = enum {
     /// Quoted into a 🧾, with a verdict under it. What `m8 call` does.
     framed,
+    /// Quoted into a 📜 instead, to be read as markdown. What `m8 call --md`
+    /// does.
+    scrolled,
     /// Records the program wrote itself, such as a 🔗, with the verdict under
     /// them. What `m8 call --no-wrap` does.
     unwrapped,
@@ -116,7 +127,13 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
     pipes.init(ctx.arena, ctx.io, streams.toStreams(), &.{ child.stdout.?, child.stderr.? });
     defer pipes.deinit();
 
-    var said: Body = .{ .out = ctx.out, .mode = ctx.mode, .call_id = ctx.call_id, .frame = how == .framed };
+    var said: Body = .{
+        .out = ctx.out,
+        .mode = ctx.mode,
+        .call_id = ctx.call_id,
+        .frame = how == .framed or how == .scrolled,
+        .sigil = if (how == .scrolled) .scroll else .result,
+    };
     var complaint: Tail = .{};
 
     // Read as much at a time as anything else here does. Everything is tossed
@@ -195,6 +212,7 @@ const Body = struct {
     /// False for a 🧰 that declared it answers in m8: what it says is already
     /// records, and quoting them would make them content.
     frame: bool = true,
+    sigil: doc.Sigil = .result,
     w: ?doc.ContentWriter = null,
     held: usize = 0,
     wrote: bool = false,
@@ -217,7 +235,7 @@ const Body = struct {
             return;
         }
         if (b.w == null)
-            b.w = try doc.ContentWriter.begin(b.out, b.mode, .result, b.call_id);
+            b.w = try doc.ContentWriter.begin(b.out, b.mode, b.sigil, b.call_id);
         while (b.held > 0) : (b.held -= 1) try b.w.?.write("\n");
         try b.w.?.write(bytes[0..end]);
         b.held = bytes.len - end;
@@ -315,10 +333,13 @@ fn help(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 call [--no-wrap] PROG [ARGS]
+        \\  m8 call [--no-wrap|--md] PROG [ARGS]
         \\
         \\The program's stdout becomes a 🧾 receipt, followed by 🟢 or 🚫 for
         \\how it ended. Stdin remains the descriptor call itself was given.
+        \\
+        \\--md makes it a 📜 instead: the same answer, written to be read as
+        \\markdown rather than as literal output.
         \\
         \\--no-wrap passes stdout through as the records the program wrote,
         \\such as a 🔗 for files it hands over, and still adds the verdict.
@@ -431,11 +452,18 @@ test "a body opens on the first byte and holds the last newline" {
     try testing.expect(try body.finish());
     try testing.expectEqualStrings(
         \\#### :receipt:c1
-        \\> a
+        \\>     a
         \\>
-        \\> b
+        \\>     b
         \\
     , split.written());
+
+    // Under --md the same answer is a 📜, carried as it is.
+    var md: std.Io.Writer.Allocating = .init(arena);
+    var scroll: Body = .{ .out = &md.writer, .mode = .md, .call_id = "c1", .sigil = .scroll };
+    try scroll.write("# a\n");
+    try testing.expect(try scroll.finish());
+    try testing.expectEqualStrings("#### :scroll:c1\n> # a\n", md.written());
 }
 
 test "unwrapped records pass through, and a verdict always starts its own line" {

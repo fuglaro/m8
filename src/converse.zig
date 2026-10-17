@@ -23,6 +23,7 @@ const toolbox = @import("toolbox.zig");
 const shield = @import("shield.zig");
 const doc = @import("m8/doc.zig");
 const sigil = @import("m8/sigil.zig");
+const highlight = @import("m8/highlight.zig");
 const api = @import("api.zig");
 const Ctx = api.Ctx;
 const posix = std.posix;
@@ -160,8 +161,9 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     var turn: std.ArrayList(doc.Record) = .empty;
     var progress: Progress = .{ .keeper = opts.keep, .lead = settled };
     // Records normally get a blank line, so writing one has to know what came
-    // before it. Some records belong together and are shown touching.
-    var shown: Shown = .{};
+    // before it. Some records belong together and are shown touching. A
+    // terminal is shown every 📜 and 🤖 highlighted as markdown.
+    var shown: Shown = .{ .look = if (mode == .m8) .{ .width = highlight.terminalWidth(ctx.env) } else null };
     var status: Status = .{ .err = if (level > 0 and !opts.echo_given) ctx.err else null };
     if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);
     // The rendered spelling is only ever written for a terminal, and a
@@ -617,6 +619,8 @@ fn failure(
 const Shown = struct {
     written: bool = false,
     last: ?sigil.Sigil = null,
+    /// How markdown is highlighted, for a terminal.
+    look: ?doc.Look = null,
 
     fn begin(self: *Shown, out: *std.Io.Writer, s: sigil.Sigil) !void {
         if (self.written and !touches(self.last, s)) try out.writeByte('\n');
@@ -632,7 +636,7 @@ const Shown = struct {
         return switch (s) {
             .thought, .bot => l == s,
             .agent => l == .thought,
-            .result, .link, .ok, .failed => l == .call or l == .result or l == .link,
+            .result, .scroll, .link, .ok, .failed => l == .call or l == .result or l == .scroll or l == .link,
             else => false,
         };
     }
@@ -647,7 +651,7 @@ fn show(
     r: doc.Record,
 ) !void {
     try shown.begin(out, r.sigil);
-    try doc.write(out, mode, try ledger.rendered(arena, mode, r));
+    try doc.writeLooking(out, mode, shown.look, try ledger.rendered(arena, mode, r));
 }
 
 /// What a run says it is doing, for whoever is watching it work rather than
@@ -808,9 +812,10 @@ const LiveReply = struct {
         if (self.body == null) {
             const s = self.pending orelse .bot;
             try self.shown.begin(self.out, s);
-            self.body = try doc.ContentWriter.begin(
+            self.body = try doc.ContentWriter.beginLooking(
                 self.out,
                 self.mode,
+                self.shown.look,
                 s,
                 self.said.value,
             );
@@ -1033,7 +1038,7 @@ test "a call runs into its answer" {
     try std.testing.expectEqualStrings(
         "#### :robot:\n> looking\n\n" ++
             "#### :calling:read,c1\n> * path x\n" ++
-            "#### :receipt:c1\n> one\n#### :receipt:c1\n> two\n#### :green_circle:c1\n\n" ++
+            "#### :receipt:c1\n>     one\n#### :receipt:c1\n>     two\n#### :green_circle:c1\n\n" ++
             "#### :calling:read,c2\n> * path y\n#### :no_entry_sign:c2\n> no\n\n" ++
             "#### :robot:\n> done\n",
         out.written(),

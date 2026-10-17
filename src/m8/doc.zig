@@ -17,6 +17,11 @@
 //! It is not required between records: a header is never content, so one that
 //! follows another opens its record whether or not a line separates them.
 //!
+//! A sigil may also ask for its lines to be indented inside the quote, as 🧾
+//! does so that a renderer shows what a tool said as code. That indent is
+//! framing too: written and stripped here, and an error when missing, except
+//! on an empty line, which carries nothing to indent.
+//!
 //! What a content block *means* is decided by the sigil above it, and none of
 //! that is known here. A prose block is handed back as bytes; a structured one
 //! is handed back as bytes too, for its own reader to make sense of.
@@ -27,7 +32,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const sigil = @import("sigil.zig");
+const highlight = @import("highlight.zig");
 pub const Sigil = sigil.Sigil;
+pub const Look = highlight.Options;
 
 pub const Mode = sigil.Mode;
 
@@ -70,6 +77,8 @@ pub const ParseError = error{
     OrphanContent,
     /// A quote was not followed by a space. Missing it is never content.
     MissingSpace,
+    /// A line of a block its sigil indents was not indented.
+    MissingIndent,
     /// A line that is neither blank, a header, nor a content line.
     UnexpectedLine,
     /// A sigil that takes no value was given one.
@@ -200,7 +209,15 @@ pub fn parseMode(arena: Allocator, src: []const u8, mode: Mode, diag: *Diagnosti
                 return error.UnexpectedContent;
             }
             if (lines > 0) try content.append(arena, '\n');
-            if (line.len > bareQuote(mode).len) try content.appendSlice(arena, line[quote(mode).len..]);
+            if (line.len > bareQuote(mode).len) {
+                const indent = cur.?.indent();
+                const text = line[quote(mode).len..];
+                if (!std.mem.startsWith(u8, text, indent)) {
+                    diag.* = .{ .line = line_no, .detail = "this sigil's content is indented four spaces" };
+                    return error.MissingIndent;
+                }
+                try content.appendSlice(arena, text[indent.len..]);
+            }
             lines += 1;
             blank = false;
             continue;
@@ -257,10 +274,28 @@ pub fn write(w: *std.Io.Writer, mode: Mode, r: Record) std.Io.Writer.Error!void 
             try w.writeAll(bareQuote(mode));
         } else {
             try w.writeAll(quote(mode));
+            try w.writeAll(r.sigil.indent());
             try w.writeAll(line);
         }
         try w.writeByte('\n');
     }
+}
+
+/// Write one record, its content highlighted as markdown when it is.
+pub fn writeLooking(w: *std.Io.Writer, mode: Mode, look: ?Look, r: Record) std.Io.Writer.Error!void {
+    const c = r.content orelse return write(w, mode, r);
+    if (looked(mode, look, r.sigil) == null) return write(w, mode, r);
+    var b = try ContentWriter.beginLooking(w, mode, look, r.sigil, r.value);
+    try b.write(c);
+    try b.finish();
+}
+
+/// What a record is highlighted with, if anything: a 📜 or a 🤖, and only
+/// ever in the rendered spelling.
+fn looked(mode: Mode, look: ?Look, s: Sigil) ?Look {
+    const l = look orelse return null;
+    if (mode != .m8 or !(l.color or l.reflow)) return null;
+    return if (s == .scroll or s == .bot) l else null;
 }
 
 /// Write a document, one blank line between records.
@@ -281,7 +316,9 @@ pub fn writeAll(w: *std.Io.Writer, mode: Mode, records: []const Record) std.Io.W
 pub const ContentWriter = struct {
     w: *std.Io.Writer,
     mode: Mode,
+    indent: []const u8 = "",
     at_line_start: bool = true,
+    hl: ?highlight.Highlighter = null,
 
     /// Open a record. The header is known up front; the content follows.
     pub fn begin(w: *std.Io.Writer, mode: Mode, s: Sigil, value: []const u8) std.Io.Writer.Error!ContentWriter {
@@ -289,30 +326,40 @@ pub const ContentWriter = struct {
         try w.writeAll(s.text(mode));
         try w.writeAll(value);
         try w.writeByte('\n');
-        return .{ .w = w, .mode = mode };
+        return .{ .w = w, .mode = mode, .indent = s.indent() };
     }
+
+    /// Open a record whose content is highlighted when `look` says it is.
+    pub fn beginLooking(w: *std.Io.Writer, mode: Mode, look: ?Look, s: Sigil, value: []const u8) std.Io.Writer.Error!ContentWriter {
+        var b = try begin(w, mode, s, value);
+        if (looked(mode, look, s)) |l| b.hl = .init(w, l, quote(mode));
+        return b;
+    }
+
 
     pub fn write(b: *ContentWriter, bytes: []const u8) std.Io.Writer.Error!void {
         for (bytes) |c| {
             if (b.at_line_start) {
                 if (c == '\n') {
                     try b.w.writeAll(bareQuote(b.mode));
-                    try b.w.writeByte('\n');
+                    if (b.hl) |*h| try h.write("\n") else try b.w.writeByte('\n');
                     continue;
                 }
                 try b.w.writeAll(quote(b.mode));
+                try b.w.writeAll(b.indent);
                 b.at_line_start = false;
             } else if (c == '\n') {
-                try b.w.writeByte('\n');
+                if (b.hl) |*h| try h.write("\n") else try b.w.writeByte('\n');
                 b.at_line_start = true;
                 continue;
             }
-            try b.w.writeByte(c);
+            if (b.hl) |*h| try h.write(&.{c}) else try b.w.writeByte(c);
         }
     }
 
     /// Closes the pending line, which is the empty one when nothing arrived.
     pub fn finish(b: *ContentWriter) std.Io.Writer.Error!void {
+        if (b.hl) |*h| try h.finish();
         if (b.at_line_start) try b.w.writeAll(bareQuote(b.mode));
         try b.w.writeByte('\n');
     }
@@ -383,6 +430,23 @@ test "a quote with no space is an error, and alone is an empty line" {
     var d2: Diagnostic = .{};
     const recs = try parse(b.allocator(), "#### :compass:\n> one\n>\n> three\n", &d2);
     try testing.expectEqualStrings("one\n\nthree", recs[0].content.?);
+}
+
+test "a receipt is indented four spaces, and an empty line carries none" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    var diag: Diagnostic = .{};
+    const src = "#### :receipt:c1\n>     one\n>\n>       two\n\n#### :scroll:c1\n> # three\n";
+    const recs = try parse(a.allocator(), src, &diag);
+    try testing.expectEqualStrings("one\n\n  two", recs[0].content.?);
+    try testing.expectEqualStrings("# three", recs[1].content.?);
+
+    var out: std.Io.Writer.Allocating = .init(a.allocator());
+    try writeAll(&out.writer, .md, recs);
+    try testing.expectEqualStrings(src, out.written());
+
+    try testing.expectError(error.MissingIndent, parse(a.allocator(), "#### :receipt:c1\n>   one\n", &diag));
+    try testing.expectEqual(@as(usize, 2), diag.line);
 }
 
 test "content is verbatim, so it needs no escape" {

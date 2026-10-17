@@ -180,7 +180,7 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                 try s.write(try toolbox.parseArgs(arena, .md, r.content orelse ""));
                 try s.endObject();
             },
-            .result, .link, .ok, .failed => {
+            .result, .scroll, .link, .ok, .failed => {
                 if (claimed[i]) continue;
                 const id = std.mem.trim(u8, r.value, " \t");
                 const a = try answerTo(arena, records, claimed, i, id);
@@ -216,7 +216,7 @@ fn answerTo(
     var links: std.ArrayList([]const u8) = .empty;
     for (records[from..], from..) |r, idx| {
         switch (r.sigil) {
-            .result, .link, .ok, .failed => {},
+            .result, .scroll, .link, .ok, .failed => {},
             else => continue,
         }
         if (claimed[idx]) continue;
@@ -231,7 +231,7 @@ fn answerTo(
             if (said.items.len > 0) try said.append(arena, '\n');
             try said.appendSlice(arena, content);
         };
-        if (r.sigil != .result) break;
+        if (r.sigil != .result and r.sigil != .scroll) break;
     }
     return .{ .said = said.items, .links = links.items };
 }
