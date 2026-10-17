@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
+const highlight = @import("../m8/highlight.zig");
 const config = @import("../config.zig");
 const address = @import("../address.zig");
 const session = @import("../session.zig");
@@ -78,6 +79,7 @@ fn run(ctx: Ctx) !u8 {
     // What was last shown outlives the look that showed it.
     var shown_buf: [std.fs.max_path_bytes]u8 = undefined;
     var shown: []const u8 = agent;
+    const look: doc.Look = .{ .width = highlight.terminalWidth(ctx.env) };
     var scratch: std.heap.ArenaAllocator = .init(ctx.arena);
     while (true) : (try ctx.io.sleep(pause, .awake)) {
         _ = scratch.reset(.retain_capacity);
@@ -98,7 +100,7 @@ fn run(ctx: Ctx) !u8 {
                 .md,
                 .{ .names = &.{ shown, agent }, .snips = !unsnip },
             );
-            try ledger.writeAll(ctx.out, arena, ctx.mode, new.records);
+            try ledger.writeAll(ctx.out, arena, ctx.mode, look, new.records);
             try ctx.out.writeByte('\n');
             try ctx.out.flush();
         }

@@ -334,7 +334,8 @@ pub fn rendered(arena: Allocator, mode: doc.Mode, r: doc.Record) !doc.Record {
     return restate(arena, .md, mode, r);
 }
 
-/// Write records in `mode`, nested content included.
+/// Write records in `mode`, nested content included, and highlighted as
+/// `look` says when there is one.
 ///
 /// `doc.writeAll` writes content verbatim, which is right — it knows nothing
 /// about what a sigil's block means. Two sigils carry a whole grammar inside
@@ -343,11 +344,12 @@ pub fn writeAll(
     w: *std.Io.Writer,
     arena: Allocator,
     mode: doc.Mode,
+    look: ?doc.Look,
     records: []const doc.Record,
 ) !void {
     for (records, 0..) |r, i| {
         if (i > 0) try w.writeByte('\n');
-        try doc.write(w, mode, try rendered(arena, mode, r));
+        try doc.writeLooking(w, mode, look, try rendered(arena, mode, r));
     }
 }
 
@@ -796,7 +798,7 @@ test "nested content is kept in one spelling and restated for the reader" {
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .tool, .value = "say", .content = "> Says a thing.\n:shield:jail\n`say`\n* text string" },
+        .{ .sigil = .tool, .value = "say", .content = "> Says a thing.\n\n:shield:jail\n`say`\n* text string" },
         .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
     };
 
@@ -804,7 +806,7 @@ test "nested content is kept in one spelling and restated for the reader" {
     // inside the 🧰 and the quote its description sits behind are both the
     // reader's, not the file's.
     var buf: std.Io.Writer.Allocating = .init(arena);
-    try writeAll(&buf.writer, arena, .m8, &records);
+    try writeAll(&buf.writer, arena, .m8, null, &records);
     try testing.expect(std.mem.indexOf(u8, buf.written(), "\u{1F6E1}\u{FE0F}jail") != null);
     try testing.expect(std.mem.indexOf(u8, buf.written(), ":shield:") == null);
     try testing.expect(std.mem.indexOf(u8, buf.written(), "\u{2502} \u{2502} Says a thing.") != null);

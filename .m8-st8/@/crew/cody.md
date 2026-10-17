@@ -21,6 +21,7 @@
 
 * :toolbox::list
   > > List the contents of a directory.
+  >
   > :shield:workbench
   > :shield:contain-reads
   > :shield:no-writes
@@ -33,6 +34,7 @@
   > > Read the contents of a text file.
   > > Read the whole file, or use pages to read a range at a time
   > > or a number of pages starting at a string match anchor.
+  >
   > :shield:workbench
   > :shield:contain-reads
   > :shield:no-writes
@@ -50,6 +52,7 @@
   > > Attempt exact matches to avoid falling below match tolerance.
   > > Must only match once if using multiple lines to replace.
   > > Pages may be used to scope matches.
+  >
   > :shield:workbench
   > :shield:contain-reads
   > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
@@ -68,6 +71,7 @@
   > > Grep search inside files matching a glob.
   > > Glob descent skips hidden path components unless named explicitly.
   > > Omitting regex will just glob files.
+  >
   > :shield:workbench
   > :shield:contain-reads
   > :shield:no-writes
@@ -89,6 +93,7 @@
 
 * :toolbox::bash
   > > Run a bash command.
+  >
   > :shield:workbench
   > ```bash
   > set -m
@@ -105,6 +110,7 @@
 
 * :toolbox::webfetch
   > > Download a web page for viewing.
+  >
   > :shield:sandbox
   > ```bash
   > [ "${#__url__}" -gt 1024 ] && {
@@ -121,6 +127,7 @@
   > > Look at an image or PDF file yourself.
   > > Supported: jpg, jpeg, png, gif, webp, bmp, tif, tiff, pdf.
   > > Images are shown as a JPEG with the long side at most 2048px.
+  >
   > :shield:workbench
   > :shield:contain-reads
   > ```bash records

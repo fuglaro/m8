@@ -26,7 +26,7 @@ pub const codec: api.Codec = .{
 
 fn encode(arena: Allocator, records: []const doc.Record, target: api.Target) ![]const u8 {
     var buf: std.Io.Writer.Allocating = .init(arena);
-    try ledger.writeAll(&buf.writer, arena, target.mode, records);
+    try ledger.writeAll(&buf.writer, arena, target.mode, null, records);
     return buf.written();
 }
 

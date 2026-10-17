@@ -36,7 +36,7 @@ to have a name:
 ▐ 🧠:/anthropic/claude-opus-5,max_tokens:16000,thinking:{"type":"adaptive","display":"summarized"}
 ```
 
-* :brain::/anthropic/claude-opus-5,max_tokens:16000,thinking:{"type":"adaptive","display":"summarized"}
+> * :brain::/anthropic/claude-opus-5,max_tokens:16000,thinking:{"type":"adaptive","display":"summarized"}
 
 A parameter may be JSON, and a `,` inside it is the JSON's
 rather than the form's, so an object goes on a 🧠 whole.

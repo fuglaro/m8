@@ -432,8 +432,12 @@ pub fn render(arena: Allocator, mode: Mode, t: Tool) ![]const u8 {
     const w = &buf.writer;
 
     // The description first, because it is what the tool is; then what it
-    // stands inside, then how it runs, then what it takes.
-    if (t.description.len > 0) try writeNested(w, mode, t.description);
+    // stands inside, then how it runs, then what it takes. An empty line ends
+    // it, or anything rendering the file reads the next line as more of it.
+    if (t.description.len > 0) {
+        try writeNested(w, mode, t.description);
+        try w.writeByte('\n');
+    }
     for (t.shields) |sh| {
         try w.print("{s}{s}", .{ sigil.Sigil.shield.text(mode), sh.name });
         if (sh.env_var.len > 0) try w.print(" {s}", .{sh.env_var});
