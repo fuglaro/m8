@@ -31,6 +31,9 @@
 * :shield::no-edit-git
   > :shield:secure secures no-edit-git
 
+* :shield::no-edit-core
+  > :shield:secure secures no-edit-core
+
 * :shield::no-edit-m8-st8
   > :shield:secure secures no-edit-m8-st8
 

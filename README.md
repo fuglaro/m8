@@ -1557,7 +1557,7 @@ A 🔗 hands files to the model beside what a tool said.
 │ * file `shot.png`
 
 ▐ 🔗:c1
-│ <+/crew/^/shot_9f86d081b8.jpeg (9f86d081b8…)
+│ <+/crew/^/see-shot-c1.jpeg (9f86d081b8…)
 
 ▐ 🟢:c1
 ```
@@ -1566,7 +1566,7 @@ A 🔗 hands files to the model beside what a tool said.
 >   > * file `shot.png`
 >
 > * :link::c1
->   > <+/crew/^/shot_9f86d081b8.jpeg (9f86d081b8…)
+>   > <+/crew/^/see-shot-c1.jpeg (9f86d081b8…)
 >
 > * :green_circle::c1
 
@@ -1586,9 +1586,9 @@ A 🔗 hands files to the model beside what a tool said.
   * An `upload` that skips the check trusts every tool's
     links, whatever they name.
 * Where a file lives, and whether it stays, is the tool's.
-  * `see` writes into its mob's `^/`, as the file's name
-    with `_` and the first 10 characters of its SHA-256
-    before the extension.
+  * `see` writes directly into `$M8_MOB_DIR/^/` as
+    `see-STEM-CALL_ID.jpeg` (or `.pdf`), with the input's
+    final extension removed from its filename to form `STEM`.
 * A tool writes its 🔗 itself, through `m8 call --no-wrap`.
   See Calling.
 * How a file reaches a model is the provider entry's
@@ -1638,11 +1638,13 @@ named by the id the api gave back.
   * Chat completions names no image by id, so a `ref:`
     image fails there.
 
-Both of these read `<path (SHA-256)`. They find the path
-through `M8_ST8_DIRS`, copy the file once, and refuse it
-when its hash is not the one linked.
+Both read `<path (SHA-256)`, resolve relative paths against
+`M8_MOB_ST8_DIR`, and refuse a file whose hash differs from
+the link.
 
-This one carries a file whole, and suits every codec:
+This one carries a file whole. It uses macOS `stat` to detect
+ordinary concurrent changes; a failed command's output is
+discarded. It does not defend against adversarial timing:
 
 ```bash
 p=${1% (*} h=${1##* (} h=${h%)}; n=${p##*/}
@@ -1651,11 +1653,13 @@ case $n in
   *.webp) m=image/webp ;; *.pdf) m=application/pdf ;;
   *) echo "upload: no type for $n" >&2; exit 1 ;;
 esac
-case $p in /*) f=$p ;; *) f= IFS=:; for d in $M8_ST8_DIRS; do [ -e "$d/$p" ] && { f=$d/$p; break; }; done; unset IFS ;; esac
-[ -n "$f" ] || { echo "upload: no $p" >&2; exit 1; }
-t=$(mktemp -d) && trap 'rm -rf "$t"' EXIT && c=$t/$n && cat -- "$f" >"$c" || exit
-[ "$(shasum -a 256 <"$c" | cut -c1-64)" = "$h" ] || { echo "upload: $p is not the file linked" >&2; exit 1; }
-printf '%s data:%s;base64,' $m $m; base64 <"$c" | tr -d '\n'; printf ' %s' "$n"
+case $p in /*) f=$p ;; *) f=$M8_MOB_ST8_DIR/$p ;; esac
+
+before=$(stat -f '%d:%i:%z:%m:%c' -- "$f") || exit
+[ "$(shasum -a 256 <"$f" | cut -c1-64)" = "$h" ] || { echo "upload: $p is not the file linked" >&2; exit 1; }
+printf '%s data:%s;base64,' $m $m; base64 <"$f" | tr -d '\n'; printf ' %s' "$n"
+after=$(stat -f '%d:%i:%z:%m:%c' -- "$f") || exit
+[ "$before" = "$after" ] || { echo "upload: $p changed while encoding" >&2; exit 1; }
 ```
 
 This one uploads to OpenAI, once per file:
@@ -1667,12 +1671,11 @@ case $n in
   *.webp) m=image/webp ;; *.pdf) m=application/pdf ;;
   *) echo "upload: no type for $n" >&2; exit 1 ;;
 esac
-case $p in /*) f=$p ;; *) f= IFS=:; for d in $M8_ST8_DIRS; do [ -e "$d/$p" ] && { f=$d/$p; break; }; done; unset IFS ;; esac
-[ -n "$f" ] || { echo "upload: no $p" >&2; exit 1; }
+case $p in /*) f=$p ;; *) f=$M8_MOB_ST8_DIR/$p ;; esac
+
 t=$(mktemp -d) && trap 'rm -rf "$t"' EXIT && c=$t/$n && cat -- "$f" >"$c" || exit
 [ "$(shasum -a 256 <"$c" | cut -c1-64)" = "$h" ] || { echo "upload: $p is not the file linked" >&2; exit 1; }
-[ -n "$2" ] || { echo "upload: no config directory to cache in" >&2; exit 1; }
-u=$M8_PROVIDER_FILES_URL k=$2/cache/openai/${M8_PROVIDER_ACCOUNT:-_}/uploads/$h.txt
+u=$M8_PROVIDER_FILES_URL k=$M8_MOB_ST8_DIR/cache/$M8_PROVIDER_NAME/${M8_PROVIDER_ACCOUNT:-_}/uploads/$h.txt
 id() { grep -o '"id": *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; }
 i=$(cat "$k" 2>/dev/null)
 [ -n "$i" ] && [ "$("$M8" url-provider --get "$u/$i" | id)" = "$i" ] && { echo "$m ref:$i $n"; exit; }
@@ -1684,11 +1687,13 @@ mkdir -p "${k%/*}" && printf %s "$i" >"$k" && echo "$m ref:$i $n"
 
 * `m8 url-provider --upload URL FILE [NAME=VALUE]...` posts a
   file as a form, with the entry's headers.
-  * The file goes up under its own name, so the script
-    copies it to one named the same.
+  * The temporary copy keeps the verified bytes stable while
+    the remote upload runs; a later local failure cannot undo
+    a remote upload.
 * Remembering what was uploaded is the command's business.
-  * This one keeps each id in that directory's `cache/`,
-    under the SHA-256 the 🔗 gave, once it has checked it.
+  * This one keeps each id in the owning config's `cache/`,
+    grouped by `M8_PROVIDER_NAME` (the selected provider
+    entry's name), account, and the verified SHA-256.
   * `account` in the entry names whose ids they are, `_`
     when unsaid, so two keys never share one.
   * An image goes up as `vision` and a pdf as `user_data`,
@@ -2522,7 +2527,17 @@ A name is a path, so the folder part is the mob
 it belongs to. Mobs bundle the agents, skills and
 starting scripts that travel together, and each
 mob's agents share its mirrored `+/<mob>/.tmpdir/`
-for scratch.
+for scratch. Tools and the provider pipeline (including
+encode and upload) receive:
+
+* `M8_MOB_ST8_DIR`: the absolute owning config root, such
+  as `/project/.m8-st8`.
+* `M8_MOB_DIR`: the absolute mob state directory, such
+  as `/project/.m8-st8/+/team`.
+* `TMPDIR`: its pre-created `.tmpdir/` scratch directory.
+
+The configured Codex upload resolves relative links against
+`M8_MOB_ST8_DIR`; absolute links are used directly.
 
 Walking down a name, the first agent file met is
 the agent and every word after it is a chat. So

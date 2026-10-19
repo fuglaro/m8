@@ -149,6 +149,9 @@ pub fn addEnvironment(
     env: *std.process.Environ.Map,
 ) !void {
     for (p.args) |a| try env.put(try envName(arena, a.key), a.value);
+    // The selected entry name is metadata, not an entry argument. Set it last
+    // so an entry's own `name` field cannot shadow the actual selection.
+    try env.put("M8_PROVIDER_NAME", p.name);
 }
 
 /// Where the command actually is.
@@ -379,6 +382,7 @@ test "an entry is its commands, and whatever else it wants to say" {
         \\  "encode": ["m8", "encode", "openai-completions"],
         \\  "url": "http://x/v1/chat/completions",
         \\  "key": "cat ~/.key",
+        \\  "name": "not-the-selection",
         \\  "api-version": "2024-02-01",
         \\  "timeout": 30,
         \\  "use-cache": true,
@@ -408,6 +412,12 @@ test "an entry is its commands, and whatever else it wants to say" {
 
     try testing.expectEqualStrings("M8_PROVIDER_API_VERSION", try envName(arena, "api-version"));
     try testing.expectEqualStrings("M8_PROVIDER_URL", try envName(arena, "url"));
+
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("M8_PROVIDER_NAME", "inherited-value");
+    try addEnvironment(arena, p, &env);
+    try testing.expectEqualStrings("local", env.get("M8_PROVIDER_NAME").?);
+    try testing.expectEqualStrings("http://x/v1/chat/completions", env.get("M8_PROVIDER_URL").?);
 }
 
 test "an entry with no command is not a provider" {

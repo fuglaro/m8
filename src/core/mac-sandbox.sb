@@ -1,16 +1,8 @@
 (version 1)
 
-;; This operates as a template where
-;; lines ending in ;;!! !with ... are added
-;; UNLESS the associated WITH feature is
-;; activated.
-
-;; Note that behavior defaults to full access!
-;; Use template flags to restrict.
-;; Things not restricted:
-;;  - environment variables (inherited in full),
-;;  - resource limits,
-;;  - process execution.
+;; Template: a line tagged ;;!! !FLAG is removed when FLAG is active.
+;; Defaults to full access; flags restrict it. Environment variables,
+;; resource limits and process execution are not restricted here.
 
 ;; TEMPLATE FLAGS
 ;;
@@ -36,6 +28,7 @@
 ;; Tampering
 ;;   no-edit-git     no writing to a .git anywhere
 ;;   no-edit-m8-st8  no writing to a config directory anywhere
+;;   no-edit-core    no writing to core/ in a config directory
 ;;
 ;; A level such as sandbox or jail is a composition of the above, written
 ;; in an agent's shields.
@@ -44,24 +37,10 @@
 ;;   reads of system dirs and the standard /dev nodes; reads of
 ;;   cwd and TMP; stat of the cwd parent; process exec and fork.
 ;;
-;; Always denied, in every mode:
-;;   writing to core/ in a config directory. That rule carries no
-;;   tag, so no combination of flags can subtract it. It is what
-;;   makes this file safe to override from config: you may edit
-;;   core/ with an editor, since none of this applies to you, but
-;;   nothing running under the sandbox can reach it — including a
-;;   process trying to widen the profile it is already inside.
-;;
-;; Always allowed, in every mode, and the pair to that:
-;;   writing to a mob's .tmpdir/ under +/ in a config directory. It is the
-;;   mob's scratch, which m8 makes before a tool runs and guarantees is
-;;   writable. It carries no tag either, so no combination of
-;;   flags can take it away.
+;; Core protection is opt-in via no-edit-core or no-edit-m8-st8.
+;; Mob scratch under +/ remains writable under every restriction.
 
-;; Must be exectuted with parameters.
-;; TMPDIR should be pre-created and set inside a safe area like:
-;;   private/var/tmp/m8call-UUID
-;; Example run command:
+;; Pass CWD, PARENTWD, TMP (pre-created scratch), and HOME:
 ;;   sandbox-exec -f resolved.sb \
 ;;    -D CWD="$(pwd)" \
 ;;    -D PARENTWD="$(dirname "$(pwd)")" \
@@ -149,28 +128,18 @@
   (literal (param "PARENTWD")))
 
 ;; --- tampering ---
-;; Deny, then allow back conditionally, the same shape as localhost below.
-;; A flag removes the allow rather than adding the deny, so flags still only
-;; ever subtract and any combination stays safe.
-;;
-;; The component anchor ($|/) matches the directory itself as well as
-;; everything under it, which is what stops the three ways in: creating it,
-;; renaming something else onto it, and pointing a symlink at it. Without the
-;; $ the directory path never matches, a rename carries a whole subtree past
-;; the check, and the contents arrive already inside.
+;; Remove conditional allows, not denies, so restrictions only subtract.
+;; ($|/) covers the directory itself as well as its contents, blocking
+;; replacement by rename or symlink as well as writes inside it.
 (deny file-write* (regex #"(^|/)\.git($|/)"))
 (allow file-write* (regex #"(^|/)\.git($|/)"))          ;;!! !no-edit-git
 
 (deny file-write* (regex #"(^|/)\.?m8-st8($|/)"))
 (allow file-write* (regex #"(^|/)\.?m8-st8($|/)"))      ;;!! !no-edit-m8-st8
 
-;; Last, so they win over the allow above, and untagged, so nothing can
-;; subtract either. core/ decides what a restriction means, which is what makes
-;; this file safe to override from config. A .tmpdir/ is a mob's scratch,
-;; which m8 guarantees a tool can write — it holds no definitions, so the one
-;; kind of directory always open inside a config directory is the one that
-;; says nothing about what runs.
+;; Core rules must follow the broad config allow; scratch stays writable.
 (deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))
+(allow file-write* (regex #"(^|/)\.?m8-st8/core($|/)")) ;;!! !no-edit-core !no-edit-m8-st8 !no-writes
 (allow file-write* (regex #"(^|/)\.?m8-st8/\+/([^/]+/)*\.tmpdir($|/)"))
 
 ;; --- non-local internet access ---
@@ -187,21 +156,9 @@
   (remote unix-socket))               ;;!! !no-loop
 
 ;; --- name resolution ---
-;; After the deny above, so it survives no-loop. macOS resolves through
-;; mDNSResponder, so no-loop otherwise leaves a tool with the internet allowed
-;; and no way to name anything on it.
-;;
-;; Tagged !airgap: a lookup is a message to a resolver, so a jailed tool with
-;; one has a channel out whether or not it can open a connection.
-;;
-;; Both ways to the resolver are allowed, because which one is taken is the
-;; OS version's business: the socket, and the two named XPC services that
-;; `private` otherwise revokes. On a macOS wanting the newer spelling, the
-;; socket is
-;;   (remote unix-socket (path-literal "/private/var/run/mDNSResponder"))
-;;
-;; Named services rather than (allow system-socket), which is every system
-;; socket there is and far past what resolving a name asks for.
+;; Allow mDNSResponder after no-loop's deny so internet DNS still works.
+;; airgap removes these exceptions: resolver access is a network channel.
+;; Use the socket and named XPC services, not blanket system-socket access.
 (allow network-outbound                                     ;;!! !airgap
   (literal "/private/var/run/mDNSResponder"))               ;;!! !airgap
 (allow mach-lookup                                          ;;!! !airgap

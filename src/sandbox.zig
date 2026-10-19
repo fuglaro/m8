@@ -47,6 +47,7 @@ pub const all = [_]Restriction{
     .{ .name = "no-loop", .summary = "no loopback or unix sockets; internet stays" },
     .{ .name = "no-edit-git", .summary = "no writing to a .git anywhere" },
     .{ .name = "no-edit-m8-st8", .summary = "no writing to a config directory anywhere" },
+    .{ .name = "no-edit-core", .summary = "no writing to core/ in a config directory" },
 };
 
 pub fn find(name: []const u8) ?Restriction {
@@ -233,26 +234,35 @@ test "a tampering restriction removes the allow, never the deny" {
 const broad_deny = "(deny file-write* (regex #\"(^|/)\\.?m8-st8($|/)\"))";
 const broad_allow = "(allow file-write* (regex #\"(^|/)\\.?m8-st8($|/)\"))";
 
-test "the core deny survives every restriction, and comes last" {
-    const core_rule = "m8-st8/core($|/)";
+test "core protection is conditional and respects broader write restrictions" {
+    const core_deny = "(deny file-write* (regex #\"(^|/)\\.?m8-st8/core($|/)\"))";
+    const core_allow = "(allow file-write* (regex #\"(^|/)\\.?m8-st8/core($|/)\"))";
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
     for ([_][]const []const u8{
         &.{},
-        &.{"jail"},
+        &.{"no-edit-core"},
         &.{"no-edit-m8-st8"},
-        &.{ "no-writes", "private", "airgap" },
+        &.{"no-writes"},
+        &.{"contain-writes"},
+        &.{"contain-writes-home"},
+        &.{ "no-edit-core", "no-edit-m8-st8" },
     }) |active| {
         const out = try res(arena, active);
-        const at = std.mem.indexOf(u8, out, core_rule) orelse return error.CoreRuleMissing;
-        // Last matching rule wins, so it must follow the allow it overrides.
-        // The allow it overrides rather than the last one there is: the
-        // scratch rule below it is an allow that is meant to come after.
-        if (std.mem.indexOf(u8, out, broad_allow)) |allow| {
-            try testing.expect(at > allow);
-        }
+        const deny = std.mem.indexOf(u8, out, core_deny) orelse return error.CoreRuleMissing;
+        const allow = std.mem.indexOf(u8, out, core_allow);
+        const allowed = !contains(active, "no-edit-core") and
+            !contains(active, "no-edit-m8-st8") and
+            !contains(active, "no-writes");
+        try testing.expectEqual(allowed, allow != null);
+        if (allow) |at| try testing.expect(at > deny);
     }
+}
+
+fn contains(names: []const []const u8, needle: []const u8) bool {
+    for (names) |name| if (std.mem.eql(u8, name, needle)) return true;
+    return false;
 }
 
 test "the mob's scratch stays writable under every restriction" {
@@ -274,6 +284,28 @@ test "the mob's scratch stays writable under every restriction" {
         const deny = std.mem.indexOf(u8, out, broad_deny) orelse return error.DenyMissing;
         try testing.expect(at > deny);
     }
+}
+
+test "no-edit-core toggles core writes and composes with no-edit-m8-st8" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    if (!try canApplySandbox(io)) return error.SkipZigTest;
+
+    const dir = try scratch(testing.allocator, io, "m8-restriction-core-toggle");
+    defer testing.allocator.free(dir);
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    const core = try std.fs.path.join(testing.allocator, &.{ dir, ".m8-st8", "core" });
+    defer testing.allocator.free(core);
+    try std.Io.Dir.cwd().createDirPath(io, core);
+
+    const write = "echo changed > .m8-st8/core/profile";
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{}, write));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-core"}, write));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, write));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{ "no-edit-core", "no-edit-m8-st8" }, write));
 }
 
 // The tampering rules are worth exercising against the real sandbox: the

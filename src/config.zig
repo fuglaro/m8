@@ -167,6 +167,46 @@ pub fn where(
     return null;
 }
 
+fn mobSelection(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    agent: []const u8,
+) !?struct { root: []const u8, name: []const u8 } {
+    var base = saveDir(dirs) orelse return null;
+    var mob: []const u8 = "";
+    if (agent.len > 0) {
+        if (try where(arena, io, dirs, try nameFile(arena, agent))) |found| {
+            if (!std.mem.eql(u8, found, system_dir)) base = found;
+            mob = std.fs.path.dirname(agent) orelse "";
+        }
+    }
+    return .{ .root = try std.fs.path.resolve(arena, &.{base}), .name = mob };
+}
+
+/// Absolute owning config root for the mob (not its generated state path).
+pub fn mobSt8Dir(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    agent: []const u8,
+) !?[]const u8 {
+    const selected = (try mobSelection(arena, io, dirs, agent)) orelse return null;
+    return selected.root;
+}
+
+/// The directory for a mob's state, made absolute so children can locate the
+/// mob independently of their temporary-directory policy.
+pub fn mobDir(
+    arena: Allocator,
+    io: std.Io,
+    dirs: []const []const u8,
+    agent: []const u8,
+) !?[]const u8 {
+    const selected = (try mobSelection(arena, io, dirs, agent)) orelse return null;
+    return try std.fs.path.resolve(arena, &.{ selected.root, state_dir, selected.name });
+}
+
 /// A mob's scratch directory, made before a tool runs.
 ///
 /// Persistence is the whole of why it is here. A tool that writes a file and
@@ -185,20 +225,8 @@ pub fn mobTmp(
     dirs: []const []const u8,
     agent: []const u8,
 ) !?[]const u8 {
-    // The mob is where the agent lives, so one named below the top keeps its
-    // scratch below the top too. A ledger handed straight in names no agent,
-    // and takes the nearest config's own, as does an agent the system
-    // defines, since scratch is state.
-    var base = saveDir(dirs) orelse return null;
-    var mob: []const u8 = "";
-    if (agent.len > 0) {
-        if (try where(arena, io, dirs, try nameFile(arena, agent))) |found| {
-            if (!std.mem.eql(u8, found, system_dir)) base = found;
-            mob = std.fs.path.dirname(agent) orelse "";
-        }
-    }
-
-    const tmp = try std.fs.path.join(arena, &.{ base, state_dir, mob, tmp_dir_name });
+    const mob = (try mobDir(arena, io, dirs, agent)) orelse return null;
+    const tmp = try std.fs.path.join(arena, &.{ mob, tmp_dir_name });
     try std.Io.Dir.cwd().createDirPath(io, tmp);
     // No trailing slash, ever, so no tool has to strip one.
     return std.mem.trimEnd(u8, tmp, "/");
@@ -346,6 +374,12 @@ test "mob scratch is generated state beside definitions" {
     try t.write(arena, "@/team/reviewer.md", "* :brain::/local/tiny\n");
     const dirs = [_][]const u8{t.root};
 
+    const st8 = (try mobSt8Dir(arena, t.io, &dirs, "team/reviewer")).?;
+    try testing.expectEqualStrings(t.root, st8);
+    try testing.expect(std.fs.path.isAbsolute(st8));
+    const mob = (try mobDir(arena, t.io, &dirs, "team/reviewer")).?;
+    try testing.expectEqualStrings(try t.join(arena, "+/team"), mob);
+    try testing.expect(std.fs.path.isAbsolute(mob));
     const got = (try mobTmp(arena, t.io, &dirs, "team/reviewer")).?;
     try testing.expectEqualStrings(try t.join(arena, "+/team/.tmpdir"), got);
     var scratch = try std.Io.Dir.cwd().openDir(t.io, got, .{});

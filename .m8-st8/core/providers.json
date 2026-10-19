@@ -26,7 +26,7 @@
       "openai-responses"
     ],
     "url": "https://chatgpt.com/backend-api/codex/responses",
-    "upload": "p=${1% (*} h=${1##* (} h=${h%)}; n=${p##*/}\ncase $n in\n  *.jpeg|*.jpg) m=image/jpeg ;; *.png) m=image/png ;; *.gif) m=image/gif ;;\n  *.webp) m=image/webp ;; *.pdf) m=application/pdf ;;\n  *) echo \"upload: no type for $n\" >&2; exit 1 ;;\nesac\ncase $p in /*) f=$p ;; *) f= IFS=:; for d in $M8_ST8_DIRS; do [ -e \"$d/$p\" ] && { f=$d/$p; break; }; done; unset IFS ;; esac\n[ -n \"$f\" ] || { echo \"upload: no $p\" >&2; exit 1; }\nt=$(mktemp -d) && trap 'rm -rf \"$t\"' EXIT && c=$t/$n && cat -- \"$f\" >\"$c\" || exit\n[ \"$(shasum -a 256 <\"$c\" | cut -c1-64)\" = \"$h\" ] || { echo \"upload: $p is not the file linked\" >&2; exit 1; }\nprintf '%s data:%s;base64,' $m $m; base64 <\"$c\" | tr -d '\\n'; printf ' %s' \"$n\"",
+    "upload": "# Emit MIME data:MIME;base64,BYTES NAME \np=${1% (*} h=${1##* (} h=${h%)}; n=${p##*/}\ncase $n in\n  *.jpeg|*.jpg) m=image/jpeg ;; *.png) m=image/png ;; *.gif) m=image/gif ;;\n  *.webp) m=image/webp ;; *.pdf) m=application/pdf ;;\n  *) echo \"upload: no type for $n\" >&2; exit 1 ;;\nesac\ncase $p in /*) f=$p ;; *) f=$M8_MOB_ST8_DIR/$p ;; esac\nbefore=$(stat -f '%d:%i:%z:%m:%c' -- \"$f\") || exit\n[ \"$(shasum -a 256 <\"$f\" | cut -c1-64)\" = \"$h\" ] || { echo \"upload: $p is not the file linked\" >&2; exit 1; }\nprintf '%s data:%s;base64,' $m $m; base64 <\"$f\" | tr -d '\\n'; printf ' %s' \"$n\"\nafter=$(stat -f '%d:%i:%z:%m:%c' -- \"$f\") || exit\n[ \"$before\" = \"$after\" ] || { echo \"upload: $p changed while encoding\" >&2; exit 1; }",
     "models-url": "https://chatgpt.com/backend-api/codex/models?client_version=999.0.0",
     "models": [
       "sh",

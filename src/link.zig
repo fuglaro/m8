@@ -95,6 +95,20 @@ fn upload(
 
 const testing = std.testing;
 
+test "an upload inherits the selected provider name" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put(upload_var, "printf 'image/jpeg %s' \"$M8_PROVIDER_NAME\"");
+    try env.put("M8_PROVIDER_NAME", "local");
+    const records = [_]doc.Record{.{ .sigil = .link, .value = "c1", .content = "<file.jpg" }};
+    const got = try handOver(arena, threaded.io(), &.{"/kept"}, &env, &records);
+    try testing.expectEqualStrings(">image/jpeg local", got[0].content.?);
+}
+
 /// A 🔗 with `content`, after the hand-over, with `cmd` as the entry's `upload`.
 fn testHand(arena: Allocator, io: std.Io, cmd: ?[]const u8, content: []const u8) ![]const u8 {
     var env: std.process.Environ.Map = .init(arena);
@@ -122,5 +136,10 @@ test "a 🔗's files are handed over as the entry's upload says" {
     try testing.expectEqualStrings("<a.jpeg", try testHand(arena, io, null, "<a.jpeg"));
 
     try testing.expectError(error.UploadFailed, testHand(arena, io, "exit 1", "<a.jpeg"));
+    // A valid-looking hand-over is discarded when the upload command fails.
+    try testing.expectError(
+        error.UploadFailed,
+        testHand(arena, io, "printf 'image/jpeg ref:partial'; exit 1", "<a.jpeg"),
+    );
     try testing.expectError(error.UploadFailed, testHand(arena, io, "echo file-1", "<a.jpeg"));
 }

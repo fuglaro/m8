@@ -124,6 +124,8 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // A mob's own scratch, made before any tool runs. Worked out once: it
     // belongs to the mob rather than to a call, which is what lets a tool
     // write a file and answer with a path the next call can open.
+    const mob_dir = (try config.mobDir(arena, io, dirs, expanded.origin)) orelse "";
+    const mob_st8_dir = (try config.mobSt8Dir(arena, io, dirs, expanded.origin)) orelse "";
     const scratch = (try config.mobTmp(arena, io, dirs, expanded.origin)) orelse "";
 
     var records: std.ArrayList(doc.Record) = .empty;
@@ -139,7 +141,11 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // The commands are found once, before anything is said, so a provider
     // that is not there fails before a turn is half made.
     const stages = try provider.stages(arena, io, ctx.self, try config.coreDirs(arena, io, ctx.env), p);
-    const environ = try api.childEnvironment(arena, ctx, &.{});
+    var provider_env: std.ArrayList(api.EnvVar) = .empty;
+    if (scratch.len > 0) try provider_env.append(arena, .{ .key = "TMPDIR", .value = scratch });
+    if (mob_dir.len > 0) try provider_env.append(arena, .{ .key = "M8_MOB_DIR", .value = mob_dir });
+    if (mob_st8_dir.len > 0) try provider_env.append(arena, .{ .key = "M8_MOB_ST8_DIR", .value = mob_st8_dir });
+    const environ = try api.childEnvironment(arena, ctx, provider_env.items);
     try provider.addEnvironment(arena, p, environ);
 
     // Only what a blockless 🧰 named, and the last definition of a name wins.
@@ -205,7 +211,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             const said = try ledger.exclamations(arena, records.items, c.id);
             try status.call(arena, c);
             var how: Went = .settled;
-            for (try answer(ctx, scratch, shields, offered, def.tools, c, said, &how)) |record| {
+            for (try answer(ctx, scratch, mob_dir, mob_st8_dir, shields, offered, def.tools, c, said, &how)) |record| {
                 try show(arena, out, mode, &shown, record);
                 try records.append(arena, record);
                 try turn.append(arena, record);
@@ -304,7 +310,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 // The answer comes from the tool, not the model, and was already
                 // checked against what a tool may say.
                 var how: Went = .settled;
-                const answers = try answer(ctx, scratch, shields, offered, def.tools, c, &.{}, &how);
+                const answers = try answer(ctx, scratch, mob_dir, mob_st8_dir, shields, offered, def.tools, c, &.{}, &how);
                 // A question stops the run, so the calls behind it are written
                 // down first. They are owed, and whoever picks this up with the
                 // person's answer runs them once the one that asked is through.
@@ -441,6 +447,8 @@ fn mergeEnv(arena: Allocator, vars: *std.ArrayList(api.EnvVar)) !void {
 fn answer(
     ctx: Ctx,
     scratch: []const u8,
+    mob_dir: []const u8,
+    mob_st8_dir: []const u8,
     shields: shield.Set,
     tools: []const toolbox.Tool,
     /// Every tool with a definition, offered or not, to say which is missing.
@@ -503,9 +511,11 @@ fn answer(
 
     var env: std.ArrayList(api.EnvVar) = .empty;
     try env.appendSlice(arena, stood.env);
-    // The mob's scratch. It is made by m8, so a tool neither creates one nor
-    // finds a trailing slash on it.
+    // The mob's scratch and identity. Scratch is made by m8, so a tool
+    // neither creates one nor finds a trailing slash on it.
     if (scratch.len > 0) try env.append(arena, .{ .key = "TMPDIR", .value = scratch });
+    if (mob_dir.len > 0) try env.append(arena, .{ .key = "M8_MOB_DIR", .value = mob_dir });
+    if (mob_st8_dir.len > 0) try env.append(arena, .{ .key = "M8_MOB_ST8_DIR", .value = mob_st8_dir });
     // What the tool's own definition adds, which is neither the machine's nor
     // the call's and so is written down once rather than supplied every time.
     if (tool.env_vars.len > 0) {
