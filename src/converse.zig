@@ -169,7 +169,10 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // Records normally get a blank line, so writing one has to know what came
     // before it. Some records belong together and are shown touching. A
     // terminal is shown every 📜, 🤖, 💭 and 📲 highlighted as markdown.
-    var shown: Shown = .{ .look = if (mode == .m8) .{ .width = highlight.terminalWidth(ctx.env) } else null };
+    var shown: Shown = .{ .look = if (mode == .m8) .{
+        .width = highlight.terminalWidth(ctx.env),
+        .palette = try config.highlights(ctx.arena, ctx.io, ctx.env),
+    } else null };
     var status: Status = .{ .err = if (level > 0 and !opts.echo_given) ctx.err else null };
     if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);
 
@@ -524,7 +527,25 @@ fn answer(
         .key = tool.env_var,
         .value = try std.mem.join(arena, " ", tool.env_values),
     });
-    try env.appendSlice(arena, try toolbox.callEnv(arena, args, c.arguments, c.id));
+    // Enforce required top-level enums against converted strings before running the tool.
+    const call_env = try toolbox.callEnv(arena, args, c.arguments, c.id);
+    for (tool.properties) |prop| {
+        if (!prop.required or std.mem.indexOfScalar(u8, prop.name, '.') != null or
+            std.mem.endsWith(u8, prop.type, "[]") or std.mem.indexOfScalar(u8, prop.type, '|') == null) continue;
+
+        // Restrict the value the command receives, not its original JSON type.
+        const key = (try toolbox.envName(arena, prop.name)) orelse continue;
+        const value: ?[]const u8 = for (call_env) |v| {
+            if (std.mem.eql(u8, v.key, key)) break v.value;
+        } else null;
+        if (value) |v| {
+            var choices = std.mem.splitScalar(u8, prop.type, '|');
+            while (choices.next()) |choice| {
+                if (std.mem.eql(u8, v, std.mem.trim(u8, choice, " \t"))) break;
+            } else return failure(arena, c.id, "'{s}' must be one of {s}; got '{s}'", .{ prop.name, prop.type, v });
+        } else return failure(arena, c.id, "'{s}' must be one of {s}; no scalar value supplied", .{ prop.name, prop.type });
+    }
+    try env.appendSlice(arena, call_env);
     try mergeEnv(arena, &env);
 
     try env.appendSlice(arena, try exclaimed(arena, said));
@@ -1086,4 +1107,65 @@ test "a run starts with nothing answered, whatever it was handed" {
     const own = try unanswered(arena, &env);
     try std.testing.expectEqual(@as(usize, 1), own.count());
     try std.testing.expectEqualStrings("/bin", own.get("PATH").?);
+}
+
+test "required top-level enums constrain converted call values before running" {
+    const testing = std.testing;
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var env: std.process.Environ.Map = .init(arena);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = threaded.io(),
+        .mode = .md,
+        .env = &env,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &out.writer,
+        .tty = null,
+    };
+    const cases = [_]struct {
+        args: []const u8,
+        type: []const u8 = "alpha | true | 42",
+        required: bool = true,
+        name: []const u8 = "choice",
+        expected: []const u8,
+    }{
+        .{ .args = "{\"choice\":\"alpha\"}", .expected = "ran:alpha" },
+        .{ .args = "{\"choice\":true}", .expected = "ran:true" },
+        .{ .args = "{\"choice\":\"true\"}", .expected = "ran:true" },
+        .{ .args = "{\"choice\":42}", .expected = "ran:42" },
+        .{ .args = "{\"choice\":\"42\"}", .expected = "ran:42" },
+        .{ .args = "{\"choice\":\"beta\"}", .expected = "'choice' must be one of alpha | true | 42; got 'beta'" },
+        .{ .args = "{\"choice\":false}", .expected = "'choice' must be one of alpha | true | 42; got 'false'" },
+        .{ .args = "{\"choice\":null}", .expected = "'choice' must be one of alpha | true | 42; no scalar value supplied" },
+        .{ .args = "{\"choice\":{}}", .expected = "'choice' must be one of alpha | true | 42; no scalar value supplied" },
+        .{ .args = "{\"choice\":[\"alpha\"]}", .expected = "'choice' must be one of alpha | true | 42; no scalar value supplied" },
+        .{ .args = "{}", .expected = "'choice' is required" },
+        .{ .args = "{\"choice\":\"beta\"}", .required = false, .expected = "ran:beta" },
+        .{ .args = "{\"choice\":[\"beta\"]}", .type = "alpha|true|42[]", .expected = "ran:" },
+        .{ .args = "{\"choice\":42}", .type = "string", .expected = "ran:42" },
+        .{ .args = "{\"parent.choice\":\"beta\"}", .name = "parent.choice", .expected = "ran:" },
+    };
+    for (cases) |case| {
+        const tools = [_]toolbox.Tool{.{
+            .name = "test",
+            .command = .{ .argv = &.{ "/bin/sh", "-c", "printf '* :no_entry_sign::c1\\n  > ran:%s\\n' \"$__choice__\"" } },
+            .properties = &.{.{ .name = case.name, .type = case.type, .required = case.required }},
+        }};
+        var how: Went = .settled;
+        const records = try answer(ctx, "", "", "", .{}, &tools, &tools, .{
+            .name = "test",
+            .id = "c1",
+            .arguments = case.args,
+        }, &.{}, &how);
+        try testing.expectEqual(@as(usize, 1), records.len);
+        try testing.expectEqual(sigil.Sigil.failed, records[0].sigil);
+        try testing.expectEqualStrings(case.expected, records[0].content.?);
+    }
 }

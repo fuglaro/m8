@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const highlight = @import("m8/highlight.zig");
 
 pub const max_file = 4 * 1024 * 1024;
 
@@ -269,6 +270,8 @@ pub fn providers(
 pub const Error = error{
     /// `tui` in core/config.json is not a list of words.
     BadTui,
+    /// `highlights` in core/config.json is not a valid highlight string.
+    BadHighlight,
 };
 
 /// What an address alone at a terminal opens: the `tui` of the nearest
@@ -295,7 +298,25 @@ pub fn tui(
     return null;
 }
 
-// ---------------------------------------------------------------- tests
+/// The markdown highlight palette from the nearest core/config.json that
+/// names `highlights`. A file without the key falls through to the next one.
+pub fn highlights(
+    arena: Allocator,
+    io: std.Io,
+    env: *const std.process.Environ.Map,
+) !highlight.Palette {
+    var palette: highlight.Palette = .{};
+    for (try coreFiles(arena, io, env, "config.json")) |path| {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file));
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
+        if (parsed != .object) continue;
+        const value = parsed.object.get("highlights") orelse continue;
+        if (value != .string) return Error.BadHighlight;
+        highlight.parsePalette(&palette, value.string) catch return Error.BadHighlight;
+        return palette;
+    }
+    return palette;
+}
 
 const testing = std.testing;
 const test_tmp = @import("test_tmp.zig");
@@ -438,6 +459,44 @@ test "the user directory follows XDG, then HOME" {
 
     var none: std.process.Environ.Map = .init(arena);
     try testing.expect((try userDir(arena, &none)) == null);
+}
+
+test "highlight config falls through absent keys and takes nearest override" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const t = try Tree.init(arena, &threaded, "m8-config-highlights");
+    defer t.deinit(arena);
+    try t.write(arena, "near/core/config.json", "{}");
+    try t.write(arena, "far/core/config.json", "{\"highlights\":\"quote:fg4\"}");
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put(dirs_var, try std.mem.join(arena, ":", &.{ try t.join(arena, "near"), try t.join(arena, "far") }));
+
+    var p = try highlights(arena, t.io, &env);
+    try testing.expectEqual(@as(?u16, 4), p.quote.fg);
+    try t.write(arena, "near/core/config.json", "{\"highlights\":\"list:fg2\"}");
+    p = try highlights(arena, t.io, &env);
+    try testing.expectEqual(@as(?u16, 2), p.list.fg);
+    try testing.expectEqual(@as(?u16, 245), p.quote.fg);
+}
+
+test "highlight config rejects wrong value types and invalid style specs" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const t = try Tree.init(arena, &threaded, "m8-config-bad-highlights");
+    defer t.deinit(arena);
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put(dirs_var, t.root);
+
+    try t.write(arena, "core/config.json", "{\"highlights\":[]}");
+    try testing.expectError(Error.BadHighlight, highlights(arena, t.io, &env));
+    try t.write(arena, "core/config.json", "{\"highlights\":\"quote:fg999\"}");
+    try testing.expectError(Error.BadHighlight, highlights(arena, t.io, &env));
 }
 
 test "the system's directory is never where anything is kept" {

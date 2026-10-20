@@ -45,9 +45,9 @@ pub const Style = struct {
     underline: bool = false,
     inverse: bool = false,
     strike: bool = false,
-    /// 256-colour indices, or null for the terminal's own.
-    fg: ?u8 = null,
-    bg: ?u8 = null,
+    /// 0–255: indexed colour; 256–271: ANSI terminal palette; null: default.
+    fg: ?u16 = null,
+    bg: ?u16 = null,
 
     /// `b` over `a`: what either sets, with `b`'s colour winning.
     fn with(a: Style, b: Style) Style {
@@ -71,8 +71,12 @@ pub const Style = struct {
         if (s.underline) try w.writeAll(";4");
         if (s.inverse) try w.writeAll(";7");
         if (s.strike) try w.writeAll(";9");
-        if (s.fg) |c| try w.print(";38;5;{d}", .{c});
-        if (s.bg) |c| try w.print(";48;5;{d}", .{c});
+        if (s.fg) |c| {
+            if (c < 256) try w.print(";38;5;{d}", .{c}) else try w.print(";{d}", .{if (c < 264) 30 + c - 256 else 90 + c - 264});
+        }
+        if (s.bg) |c| {
+            if (c < 256) try w.print(";48;5;{d}", .{c}) else try w.print(";{d}", .{if (c < 264) 40 + c - 256 else 100 + c - 264});
+        }
         try w.writeByte('m');
     }
 };
@@ -81,28 +85,30 @@ pub const Style = struct {
 //
 // Every colour the highlighter uses, and nothing else reads them.
 
-pub const look = struct {
-    /// `>`, a list's bullet or number, and a heading's `#`s.
-    pub const marker: Style = .{ .fg = 245 };
-    pub const heading: Style = .{ .bold = true, .fg = 75 };
-    pub const strong: Style = .{ .bold = true, .fg = 231 };
-    pub const emphasis: Style = .{ .italic = true };
-    pub const strike: Style = .{ .strike = true };
-    pub const code: Style = .{ .fg = 180 };
-    pub const link: Style = .{ .underline = true, .fg = 75 };
-    pub const rule: Style = .{ .fg = 245 };
+pub const Palette = struct {
+    /// `>`, list markers, and heading hashes.
+    quote: Style = .{ .fg = 245 },
+    list: Style = .{ .fg = 245 },
+    hash: Style = .{ .fg = 245 },
+    heading: Style = .{ .bold = true, .fg = 75 },
+    strong: Style = .{ .bold = true, .fg = 231 },
+    emphasis: Style = .{ .italic = true },
+    strike: Style = .{ .strike = true },
+    code: Style = .{ .fg = 180 },
+    link: Style = .{ .underline = true, .fg = 75 },
+    rule: Style = .{ .fg = 245 },
     /// A table's `|`, and the first row it opens with.
-    pub const pipe: Style = .{ .fg = 245 };
-    pub const header: Style = .{ .bold = true };
+    pipe: Style = .{ .fg = 245 },
+    header: Style = .{ .bold = true },
     /// A fence's own lines, and what is inside one that is not a diff.
-    pub const fence: Style = .{ .fg = 245 };
-    pub const block: Style = .{ .fg = 180 };
-    pub const added: Style = .{ .fg = 2 };
-    pub const removed: Style = .{ .fg = 1 };
-    pub const hunk: Style = .{ .fg = 6 };
-    pub const context: Style = .{};
+    fence: Style = .{ .fg = 245 },
+    block: Style = .{ .fg = 180 },
+    added: Style = .{ .fg = 2 },
+    removed: Style = .{ .fg = 1 },
+    hunk: Style = .{ .fg = 6 },
+    context: Style = .{},
     /// A line opening with four spaces.
-    pub const indented: Style = .{};
+    indented: Style = .{},
 };
 
 // ----------------------------------------------------------------
@@ -115,7 +121,58 @@ pub const Options = struct {
     reflow: bool = true,
     /// The terminal's width in cells, or 0 for none known.
     width: usize = 0,
+    palette: Palette = .{},
 };
+
+/// Apply compact style entries. Each entry replaces the prior style for its name.
+pub fn parsePalette(p: *Palette, text: []const u8) error{BadHighlight}!void {
+    if (text.len == 0) return;
+    var entries = std.mem.splitScalar(u8, text, ',');
+    while (entries.next()) |entry| {
+        const colon = std.mem.lastIndexOfScalar(u8, entry, ':') orelse return error.BadHighlight;
+        const name = entry[0..colon];
+        const names = [_][]const u8{ "quote", "list", "hash", "heading", "strong", "em", "strike", "code", "link", "rule", "table:pipe", "table:head", "fence", "block", "diff:add", "diff:remove", "diff:hunk", "diff:context", "indent" };
+        const styles = [_]*Style{ &p.quote, &p.list, &p.hash, &p.heading, &p.strong, &p.emphasis, &p.strike, &p.code, &p.link, &p.rule, &p.pipe, &p.header, &p.fence, &p.block, &p.added, &p.removed, &p.hunk, &p.context, &p.indented };
+        const target = for (names, styles) |key, style| {
+            if (std.mem.eql(u8, name, key)) break style;
+        } else return error.BadHighlight;
+        var style: Style = .{};
+        var i = colon + 1;
+        while (i < entry.len) {
+            const c = entry[i];
+            i += 1;
+            switch (c) {
+                '+' => {
+                    style.bold = true;
+                    style.faint = false;
+                },
+                '-' => {
+                    style.faint = true;
+                    style.bold = false;
+                },
+                'i' => style.italic = true,
+                '_' => style.underline = true,
+                '!' => style.inverse = true,
+                '/' => style.strike = true,
+                'f', 'b' => {
+                    const fg = c == 'f';
+                    if (i >= entry.len or entry[i] != 'g') return error.BadHighlight;
+                    i += 1;
+                    const terminal = i < entry.len and entry[i] == 't';
+                    if (terminal) i += 1;
+                    const begin = i;
+                    while (i < entry.len and std.ascii.isDigit(entry[i])) : (i += 1) {}
+                    if (begin == i) return error.BadHighlight;
+                    const n = std.fmt.parseInt(u16, entry[begin..i], 10) catch return error.BadHighlight;
+                    if ((terminal and n > 15) or (!terminal and n > 255)) return error.BadHighlight;
+                    if (fg) style.fg = if (terminal) 256 + n else n else style.bg = if (terminal) 256 + n else n;
+                },
+                else => return error.BadHighlight,
+            }
+        }
+        target.* = style;
+    }
+}
 
 /// The width of the terminal on stdout, or what `COLUMNS` says when stdout
 /// is not one, as it is not under riff.
@@ -252,9 +309,9 @@ pub const Highlighter = struct {
                 try h.char(c);
             },
             .text, .row => try h.text(c),
-            .heading => try h.emit(c, look.heading),
+            .heading => try h.emit(c, h.opts.palette.heading),
             .fence => {
-                try h.emit(c, look.fence);
+                try h.emit(c, h.opts.palette.fence);
                 if (c.len == 1 and c[0] != ' ' and c[0] != h.fence_c and h.lang_n < h.lang.len) {
                     h.lang[h.lang_n] = c[0];
                     h.lang_n += 1;
@@ -289,7 +346,7 @@ pub const Highlighter = struct {
         if (h.fence_c != 0) {
             const in = std.mem.indexOfNone(u8, held, " ") orelse held.len;
             if (next == null and held.len - in >= h.fence_n) {
-                try h.emitAll(held, look.fence);
+                try h.emitAll(held, h.opts.palette.fence);
                 h.fence_c = 0;
                 h.kind = .text;
                 return;
@@ -299,11 +356,11 @@ pub const Highlighter = struct {
             const first = if (held.len > h.fence_at)
                 held[h.fence_at]
             else if (held.len == h.fence_at and next != null) next.?[0] else 0;
-            h.line = if (!h.diff) look.block else switch (first) {
-                '+' => look.added,
-                '-' => look.removed,
-                '@' => look.hunk,
-                else => look.context,
+            h.line = if (!h.diff) h.opts.palette.block else switch (first) {
+                '+' => h.opts.palette.added,
+                '-' => h.opts.palette.removed,
+                '@' => h.opts.palette.hunk,
+                else => h.opts.palette.context,
             };
             h.kind = .block;
             return h.emitAll(held, h.line);
@@ -324,7 +381,7 @@ pub const Highlighter = struct {
                 h.kind = .fence;
                 h.columns = null;
                 try h.emitAll(held[0..in], .{});
-                try h.emitAll(held[in .. in + run], look.fence);
+                try h.emitAll(held[in .. in + run], h.opts.palette.fence);
                 for (held[in + run ..]) |b| try h.char(&.{b});
                 return;
             }
@@ -337,7 +394,7 @@ pub const Highlighter = struct {
             if (spaces < h.pad) h.pad = 0;
             if (spaces >= h.pad + 4) {
                 h.columns = null;
-                h.line = look.indented;
+                h.line = h.opts.palette.indented;
                 h.kind = .block;
                 return h.emitAll(held, h.line);
             }
@@ -346,7 +403,7 @@ pub const Highlighter = struct {
         var i: usize = 0;
         h.cont_n = 0;
         while (i < held.len and (held[i] == ' ' or held[i] == '>')) : (i += 1) {
-            try h.emit(held[i .. i + 1], if (held[i] == '>') look.marker else .{});
+            try h.emit(held[i .. i + 1], if (held[i] == '>') h.opts.palette.quote else .{});
             h.indent(held[i]);
         }
         const rest = held[i..];
@@ -356,7 +413,7 @@ pub const Highlighter = struct {
             h.columns = null;
             h.para = false;
             h.pad = 0;
-            return h.emitAll(rest, look.rule);
+            return h.emitAll(rest, h.opts.palette.rule);
         }
         const hashes = std.mem.indexOfNone(u8, rest, "#") orelse rest.len;
         if (hashes >= 1 and hashes <= 6 and (if (hashes < rest.len) rest[hashes] == ' ' else next == null)) {
@@ -364,7 +421,8 @@ pub const Highlighter = struct {
             h.para = false;
             h.pad = 0;
             h.kind = .heading;
-            return h.emitAll(rest, look.heading);
+            try h.emitAll(rest[0..hashes], h.opts.palette.hash);
+            return h.emitAll(rest[hashes..], h.opts.palette.heading);
         }
         if (rest.len == 0 and next != null and std.mem.eql(u8, next.?, "|")) {
             h.para = false;
@@ -382,7 +440,7 @@ pub const Highlighter = struct {
         const marker = listMarker(rest);
         if (marker > 0) h.pad = i + marker;
         if (next != null or rest.len > 0) h.para = true;
-        try h.emitAll(rest[0..marker], look.marker);
+        try h.emitAll(rest[0..marker], h.opts.palette.list);
         for (0..marker) |_| h.indent(' ');
         h.prev = .space;
         for (rest[marker..]) |b| try h.text(&.{b});
@@ -483,12 +541,12 @@ pub const Highlighter = struct {
     }
 
     fn current(h: *const Highlighter) Style {
-        var s: Style = if (h.kind == .row and h.header_row) look.header else .{};
-        if (h.code > 0) return s.with(look.code);
-        if (h.strong) s = s.with(look.strong);
-        if (h.emphasis) s = s.with(look.emphasis);
-        if (h.struck) s = s.with(look.strike);
-        if (h.link) s = s.with(look.link);
+        var s: Style = if (h.kind == .row and h.header_row) h.opts.palette.header else .{};
+        if (h.code > 0) return s.with(h.opts.palette.code);
+        if (h.strong) s = s.with(h.opts.palette.strong);
+        if (h.emphasis) s = s.with(h.opts.palette.emphasis);
+        if (h.struck) s = s.with(h.opts.palette.strike);
+        if (h.link) s = s.with(h.opts.palette.link);
         return s;
     }
 
@@ -498,7 +556,7 @@ pub const Highlighter = struct {
         const columns = h.columns orelse 1;
         if (h.opts.reflow and h.opts.width > h.row_base + 1 and h.row_k > 0) {
             const at = h.row_base + h.row_k * (h.opts.width - h.row_base - 1) / columns;
-            try h.set(look.pipe);
+            try h.set(h.opts.palette.pipe);
             if (h.col < at) {
                 while (h.col < at) : (h.col += 1) try h.out.writeByte(' ');
             } else if (h.col > at) {
@@ -506,7 +564,7 @@ pub const Highlighter = struct {
                 h.col += 1;
             }
         }
-        try h.emit("|", look.pipe);
+        try h.emit("|", h.opts.palette.pipe);
         h.row_k += 1;
         h.prev = .space;
         h.last = '|';
@@ -633,6 +691,40 @@ fn expectShown(want: []const u8, src: []const u8, opts: Options) !void {
     try testing.expectEqualStrings(want, got);
 }
 
+test "compact palette syntax composes and validates" {
+    var p: Palette = .{};
+    try parsePalette(&p, "quote:fgt4bg255+i_!/,strong:-+i,strong:fg1");
+    try testing.expectEqual(@as(?u16, 260), p.quote.fg);
+    try testing.expectEqual(@as(?u16, 255), p.quote.bg);
+    try testing.expect(p.quote.italic and p.quote.underline and p.quote.inverse and p.quote.strike);
+    try testing.expectEqual(@as(?u16, 1), p.strong.fg);
+    try testing.expect(!p.strong.bold and !p.strong.faint and !p.strong.italic);
+    try parsePalette(&p, "quote:+-,list:-+");
+    try testing.expect(!p.quote.bold and p.quote.faint);
+    try testing.expect(p.list.bold and !p.list.faint);
+    try parsePalette(&p, "");
+    try testing.expectError(error.BadHighlight, parsePalette(&p, "nope:fg1"));
+    try parsePalette(&p, "table:pipe:fg8");
+    try testing.expectEqual(@as(?u16, 8), p.pipe.fg);
+    try testing.expectError(error.BadHighlight, parsePalette(&p, "quote:fg256"));
+    try testing.expectError(error.BadHighlight, parsePalette(&p, "quote:fgt16"));
+    try testing.expectError(error.BadHighlight, parsePalette(&p, "quote:f"));
+}
+test "quote, list, and heading marker styles are independent" {
+    var opts: Options = .{};
+    opts.palette.quote = .{ .fg = 1 };
+    opts.palette.list = .{ .fg = 2 };
+    opts.palette.hash = .{ .fg = 3 };
+    try expectShown("{38;5;1}>{} quote\n{38;5;2}- {}list\n{38;5;3}##{1;38;5;75} heading{}", "> quote\n- list\n## heading", opts);
+}
+
+test "terminal palette indices use ANSI foreground and background codes" {
+    var opts: Options = .{};
+    opts.palette.quote = .{ .fg = 256, .bg = 271 };
+    try expectShown("{30;107}>{} x", "> x", opts);
+    opts.palette.quote = .{ .fg = 263, .bg = 264 };
+    try expectShown("{37;100}>{} x", "> x", opts);
+}
 test "every character arrives, and nothing else does without colour or reflow" {
     const src = "# t\n> - **a** `b` [c](d)\n```diff\n+x\n```\n| a | b |\n|---|---|\n---\n";
     try expectShown(src, src, .{ .color = false, .reflow = false, .width = 4 });
@@ -669,7 +761,7 @@ test "a marker is coloured, and nothing after it" {
     try expectShown("{38;5;245}>{} {38;5;245}- {}a", "> - a", .{});
     try expectShown("{38;5;245}12. {}a", "12. a", .{});
     try expectShown("3.14 a", "3.14 a", .{});
-    try expectShown("{1;38;5;75}## a *b*{}", "## a *b*", .{});
+    try expectShown("{38;5;245}##{1;38;5;75} a *b*{}", "## a *b*", .{});
     try expectShown("#a", "#a", .{});
 }
 

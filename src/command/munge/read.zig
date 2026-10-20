@@ -17,6 +17,7 @@
 const std = @import("std");
 const api = @import("../../api.zig");
 const opts = @import("opts.zig");
+const test_tmp = @import("../../test_tmp.zig");
 const Ctx = api.Ctx;
 const Dir = std.Io.Dir;
 const Allocator = std.mem.Allocator;
@@ -529,8 +530,7 @@ fn measure(ctx: Ctx, full: []const u8, cap: usize, config: PageConfig) ![]const 
         return std.fmt.allocPrint(ctx.arena, " ({s})", .{try size(ctx.arena, st.size)});
 
     const pages = try paginateConfig(ctx.arena, bytes, config);
-    return std.fmt.allocPrint(ctx.arena, " ({s}, {d} lines, 1-{d} pages)", .{
-        try size(ctx.arena, st.size),
+    return std.fmt.allocPrint(ctx.arena, " ({d} lines, 1-{d} pages)", .{
         pages[pages.len - 1].last_line,
         pages.len,
     });
@@ -574,6 +574,39 @@ fn lines(arena: Allocator, n: usize, text: []const u8) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     for (0..n) |i| try out.print(arena, "{s} {d}\n", .{ text, i + 1 });
     return out.items;
+}
+
+test "listing measure reports text pages and binary size" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = threaded.io();
+
+    const root = try test_tmp.make(testing.allocator, io, "m8-read-measure");
+    defer {
+        Dir.cwd().deleteTree(io, root) catch {};
+        testing.allocator.free(root);
+    }
+    const text_path = try std.fs.path.join(arena, &.{ root, "text.txt" });
+    const binary_path = try std.fs.path.join(arena, &.{ root, "binary.dat" });
+    try Dir.cwd().writeFile(io, .{ .sub_path = text_path, .data = try lines(arena, 31, "line") });
+    try Dir.cwd().writeFile(io, .{ .sub_path = binary_path, .data = "a\x00bc" });
+
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = io,
+        .mode = undefined,
+        .env = undefined,
+        .args = &.{},
+        .in = "",
+        .out = undefined,
+        .err = undefined,
+        .tty = null,
+    };
+    try testing.expectEqualStrings(" (31 lines, 1-2 pages)", try measure(ctx, text_path, default_byte_cap, .{}));
+    try testing.expectEqualStrings(" (4B)", try measure(ctx, binary_path, default_byte_cap, .{}));
 }
 
 test "page lines and bytes are independently configurable" {

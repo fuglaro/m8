@@ -45,9 +45,8 @@ pub const all = [_]Restriction{
     .{ .name = "no-writes", .summary = "nothing is writable, including TMP" },
     .{ .name = "airgap", .summary = "no internet; loopback and unix sockets stay" },
     .{ .name = "no-loop", .summary = "no loopback or unix sockets; internet stays" },
-    .{ .name = "no-edit-git", .summary = "no writing to a .git anywhere" },
+    .{ .name = "no-edit-git", .summary = "no writing to the nearest .git entry from cwd upward" },
     .{ .name = "no-edit-m8-st8", .summary = "no writing to a config directory anywhere" },
-    .{ .name = "no-edit-core", .summary = "no writing to core/ in a config directory" },
 };
 
 pub fn find(name: []const u8) ?Restriction {
@@ -101,8 +100,25 @@ pub fn makeTmp(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map
     return tmp;
 }
 
+/// The nearest `.git` entry at or above cwd, resolved for sandbox path matching.
+/// Git metadata may be a directory or a worktree's `.git` file.
+pub fn gitEntry(arena: Allocator, io: std.Io, cwd: []const u8) !?[]const u8 {
+    var dir = cwd;
+    while (true) {
+        const candidate = try std.fs.path.join(arena, &.{ dir, ".git" });
+        _ = std.Io.Dir.cwd().statFile(io, candidate, .{}) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => {
+                if (std.mem.eql(u8, dir, "/")) return null;
+                dir = std.fs.path.dirname(dir) orelse "/";
+                continue;
+            },
+            else => return err,
+        };
+        return try std.Io.Dir.cwd().realPathFileAlloc(io, candidate, arena);
+    }
+}
+
 /// `sandbox-exec -p <resolved> -D ... -- argv`
-///
 /// The profile is handed over as text rather than written to a temporary file.
 pub fn exec(
     arena: Allocator,
@@ -117,6 +133,8 @@ pub fn exec(
     const len = try std.process.currentPath(io, &buf);
     const cwd = try arena.dupe(u8, buf[0..len]);
     const parent = std.fs.path.dirname(cwd) orelse "/";
+    const git = try gitEntry(arena, io, cwd);
+
     // macOS matches the resolved path. Resolve HOME for the restrictions that
     // use it just as currentPath resolved CWD; without HOME they grant only TMP.
     // A contain-home wrapper has already replaced the value before we arrive.
@@ -143,6 +161,8 @@ pub fn exec(
         try std.fmt.allocPrint(arena, "TMP={s}", .{tmp}),
         "-D",
         try std.fmt.allocPrint(arena, "HOME={s}", .{home}),
+        "-D",
+        try std.fmt.allocPrint(arena, "GIT={s}", .{git orelse ""}),
     });
     try full.appendSlice(arena, argv);
     return full.items;
@@ -214,61 +234,57 @@ test "home containment leaves HOME and washes out under stricter containment" {
     try testing.expectEqualStrings(writes_none, try res(arena, &.{ "contain-writes-home", "no-writes" }));
 }
 
-test "a tampering restriction removes the allow, never the deny" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-    const git = "(^|/)\\.git($|/)";
+test "no-edit-git resolves nearest entries and falls back upward" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = try scratch(arena, io, "m8-git-lookup");
+    defer std.Io.Dir.cwd().deleteTree(io, base) catch {};
+    const outer_git = try std.fs.path.join(arena, &.{ base, ".git" });
+    const repo = try std.fs.path.join(arena, &.{ base, "repo" });
+    const nested = try std.fs.path.join(arena, &.{ repo, "nested" });
+    try std.Io.Dir.cwd().createDirPath(io, outer_git);
+    try std.Io.Dir.cwd().createDirPath(io, nested);
 
-    const off = try res(arena, &.{});
-    try testing.expect(std.mem.indexOf(u8, off, git) != null);
-    // Both the deny and the allow that follows it.
-    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, off, git));
+    try testing.expectEqualStrings(outer_git, (try gitEntry(arena, io, nested)).?);
+    const inner_git = try std.fs.path.join(arena, &.{ repo, ".git" });
+    try std.Io.Dir.cwd().createDirPath(io, inner_git);
+    try testing.expectEqualStrings(inner_git, (try gitEntry(arena, io, nested)).?);
 
-    const on = try res(arena, &.{"no-edit-git"});
-    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, on, git));
-    try testing.expect(std.mem.indexOf(u8, on, "(deny file-write* (regex #\"" ++ "(^|/)\\.git($|/)") != null);
+    try std.Io.Dir.cwd().deleteTree(io, inner_git);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = inner_git, .data = "gitdir: elsewhere" });
+    try testing.expectEqualStrings(inner_git, (try gitEntry(arena, io, nested)).?);
+
+    try std.Io.Dir.cwd().deleteFile(io, inner_git);
+    try testing.expectEqualStrings(outer_git, (try gitEntry(arena, io, nested)).?);
+
+    var root_has_git = true;
+    _ = std.Io.Dir.cwd().statFile(io, "/.git", .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => root_has_git = false,
+        else => return err,
+    };
+    if (!root_has_git) try testing.expect((try gitEntry(arena, io, "/")) == null);
 }
 
 /// The broad pair the two permanent rules are written against.
 const broad_deny = "(deny file-write* (regex #\"(^|/)\\.?m8-st8($|/)\"))";
 const broad_allow = "(allow file-write* (regex #\"(^|/)\\.?m8-st8($|/)\"))";
 
-test "core protection is conditional and respects broader write restrictions" {
-    const core_deny = "(deny file-write* (regex #\"(^|/)\\.?m8-st8/core($|/)\"))";
-    const core_allow = "(allow file-write* (regex #\"(^|/)\\.?m8-st8/core($|/)\"))";
+test "no-edit-m8-st8 removes the broad config allow covering core" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    for ([_][]const []const u8{
-        &.{},
-        &.{"no-edit-core"},
-        &.{"no-edit-m8-st8"},
-        &.{"no-writes"},
-        &.{"contain-writes"},
-        &.{"contain-writes-home"},
-        &.{ "no-edit-core", "no-edit-m8-st8" },
-    }) |active| {
-        const out = try res(arena, active);
-        const deny = std.mem.indexOf(u8, out, core_deny) orelse return error.CoreRuleMissing;
-        const allow = std.mem.indexOf(u8, out, core_allow);
-        const allowed = !contains(active, "no-edit-core") and
-            !contains(active, "no-edit-m8-st8") and
-            !contains(active, "no-writes");
-        try testing.expectEqual(allowed, allow != null);
-        if (allow) |at| try testing.expect(at > deny);
-    }
-}
-
-fn contains(names: []const []const u8, needle: []const u8) bool {
-    for (names) |name| if (std.mem.eql(u8, name, needle)) return true;
-    return false;
+    const out = try res(arena, &.{"no-edit-m8-st8"});
+    try testing.expect(std.mem.indexOf(u8, out, broad_deny) != null);
+    try testing.expect(std.mem.indexOf(u8, out, broad_allow) == null);
 }
 
 test "the mob's scratch stays writable under every restriction" {
-    // The pair to the core deny: m8 guarantees a tool can write here, so no
-    // combination of flags may take it away, and it has to follow the deny
-    // that would otherwise carry it off with the rest of a config directory.
+    // m8 guarantees a tool can write here, so no combination of flags may
+    // take the exception away, even under no-edit-m8-st8.
     const scratch_rule = "m8-st8/\\+/([^/]+/)*\\.tmpdir($|/)";
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
@@ -286,7 +302,7 @@ test "the mob's scratch stays writable under every restriction" {
     }
 }
 
-test "no-edit-core toggles core writes and composes with no-edit-m8-st8" {
+test "no-edit-m8-st8 protects core writes" {
     if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
@@ -303,14 +319,43 @@ test "no-edit-core toggles core writes and composes with no-edit-m8-st8" {
 
     const write = "echo changed > .m8-st8/core/profile";
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{}, write));
-    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-core"}, write));
     try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, write));
-    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{ "no-edit-core", "no-edit-m8-st8" }, write));
 }
 
-// The tampering rules are worth exercising against the real sandbox: the
-// component anchor in them broke twice under hand testing before it was
-// right, and nothing about the regex text says whether it holds.
+test "no-edit-git protects the nested repo and leaves its outer repo writable" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    if (!try canApplySandbox(io)) return error.SkipZigTest;
+
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const outer = try scratch(arena, io, "m8-restriction-git-outer");
+    defer std.Io.Dir.cwd().deleteTree(io, outer) catch {};
+    const outer_git = try std.fs.path.join(arena, &.{ outer, ".git" });
+    const repo = try std.fs.path.join(arena, &.{ outer, "nested-repo" });
+    const nearest = try std.fs.path.join(arena, &.{ repo, ".git" });
+    try std.Io.Dir.cwd().createDirPath(io, outer_git);
+    try std.Io.Dir.cwd().createDirPath(io, nearest);
+    const objects = try std.fs.path.join(arena, &.{ nearest, "objects" });
+    try std.Io.Dir.cwd().createDirPath(io, objects);
+
+    try testing.expect(!try sandboxAllows(testing.allocator, io, repo, &.{"no-edit-git"}, "echo changed > .git/objects/test"));
+    try std.Io.Dir.cwd().deleteTree(io, nearest);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = nearest, .data = "gitdir: elsewhere" });
+    try testing.expect(!try sandboxAllows(testing.allocator, io, repo, &.{"no-edit-git"}, "echo changed > .git"));
+
+    const outer_file = try std.fs.path.join(arena, &.{ outer_git, "m8-sandbox-test" });
+    const outer_script = try std.fmt.allocPrint(arena, "echo changed > '{s}' && rm '{s}'", .{ outer_file, outer_file });
+    // Keep the nearest .git file in place: only the synthetic outer repo may
+    // be written by this command.
+    try testing.expect(try sandboxAllows(testing.allocator, io, repo, &.{"no-edit-git"}, outer_script));
+}
+
+// Exercise the entry-scoped rule against the real sandbox, including both
+// metadata representations and an enclosing repository left writable.
 
 fn canApplySandbox(io: std.Io) !bool {
     var child = std.process.spawn(io, .{
@@ -329,6 +374,8 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []
     defer a.deinit();
     const arena = a.allocator();
 
+    const git = try gitEntry(arena, io, dir);
+
     const path = try std.fs.path.join(arena, &.{ dir, "resolved.sb" });
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = path,
@@ -342,7 +389,8 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []
             try std.fmt.allocPrint(arena, "CWD={s}", .{dir}),                                      "-D",
             try std.fmt.allocPrint(arena, "PARENTWD={s}", .{std.fs.path.dirname(dir) orelse "/"}), "-D",
             try std.fmt.allocPrint(arena, "TMP={s}", .{dir}),                                      "-D",
-            try std.fmt.allocPrint(arena, "HOME={s}", .{dir}),                                     "/bin/sh",
+            try std.fmt.allocPrint(arena, "HOME={s}", .{dir}),                                     "-D",
+            try std.fmt.allocPrint(arena, "GIT={s}", .{git orelse ""}),                            "/bin/sh",
             "-c",                                                                                  script,
         },
         .cwd = .{ .path = dir },
@@ -380,8 +428,7 @@ test "a config directory cannot be staged elsewhere and renamed in" {
     // path is the only thing standing in the way.
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p staging && echo x > staging/evil.md"));
     try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mv staging .m8-st8"));
-    // And the same for core, with a restriction that never mentions it.
-    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"}, "mkdir -p .m8-st8 2>/dev/null; mv staging .m8-st8/core"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p .m8-st8 2>/dev/null; mv staging .m8-st8/core"));
 }
 
 test "a config directory cannot be reached through a symlink" {
@@ -397,7 +444,7 @@ test "a config directory cannot be reached through a symlink" {
 
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p elsewhere"));
     try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "ln -s elsewhere .m8-st8"));
-    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"contain-reads"}, "mkdir -p .m8-st8 2>/dev/null; ln -s elsewhere .m8-st8/core"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p .m8-st8 2>/dev/null; ln -s elsewhere .m8-st8/core"));
 }
 
 test "a restriction leaves ordinary work alone" {

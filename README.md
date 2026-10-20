@@ -1174,6 +1174,10 @@ Agent definition:
 >   > Included Agents inject Tools and System
 >   > Prompts.
 
+Required top-level tool enums are checked before the command runs, using the
+converted argument strings (so `true` and `"true"` match the same enum item).
+Optional enums, nested fields, and enum arrays are not checked.
+
 Query:
 
 ```m8
@@ -2280,7 +2284,7 @@ contain-writes-home  writes confined to cwd, TMP and HOME
 no-writes            nothing is writable, including TMP
 airgap               no internet; loopback and unix sockets stay
 no-loop               no loopback or unix sockets; internet stays
-no-edit-git           no writing to a .git anywhere
+no-edit-git           no writing to the nearest .git entry from cwd upward
 no-edit-m8-st8        no writing to a config directory anywhere
 ```
 
@@ -2491,6 +2495,25 @@ working directory and searching outwards:
 * `mac-sandbox.sb` is taken whole from the nearest directory
   that has one, else from the copy m8 carries.
 * m8 carries no providers.
+
+`core/config.json` may also set `highlights`, a compact string for markdown
+highlighting. The nearest file that contains the key wins; a file without it
+falls through. Unspecified styles keep their defaults, while each supplied
+style replaces that style. Duplicate entries are applied left to right, so
+the last wins:
+
+```json
+{ "highlights": "quote:fgt4bg255+i_!/,list:fg244,table:pipe:fgt8" }
+```
+
+Entries are comma-separated `name:style` pairs. Names are `quote`, `list`,
+`hash`, `heading`, `strong`, `em`, `strike`, `code`, `link`, `rule`,
+`table:pipe`, `table:head`, `fence`, `block`, `diff:add`, `diff:remove`,
+`diff:hunk`, `diff:context`, and `indent`. Styles concatenate `fgN` or `bgN`
+for 256-colour indices `N` (0–255), or `fgtN` / `bgtN` for terminal palette
+indices `N` (0–15). Modifiers are `+` bold, `-` faint, `i` italic, `_`
+underline, `!` inverse, and `/` strike. They are read left to right; `+` and
+`-` are mutually exclusive, with the last one taking effect.
 
 Authored names live under `@/`, so `@mathy` on the command
 line is `@/mathy.md` on disk. Generated state lives in the

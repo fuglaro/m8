@@ -26,9 +26,8 @@
 ;;   no-loop         no loopback or unix sockets; internet stays
 ;;
 ;; Tampering
-;;   no-edit-git     no writing to a .git anywhere
+;;   no-edit-git     no writing to the nearest .git entry from cwd upward
 ;;   no-edit-m8-st8  no writing to a config directory anywhere
-;;   no-edit-core    no writing to core/ in a config directory
 ;;
 ;; A level such as sandbox or jail is a composition of the above, written
 ;; in an agent's shields.
@@ -37,15 +36,16 @@
 ;;   reads of system dirs and the standard /dev nodes; reads of
 ;;   cwd and TMP; stat of the cwd parent; process exec and fork.
 ;;
-;; Core protection is opt-in via no-edit-core or no-edit-m8-st8.
 ;; Mob scratch under +/ remains writable under every restriction.
 
-;; Pass CWD, PARENTWD, TMP (pre-created scratch), and HOME:
+;; Pass CWD, PARENTWD, TMP (pre-created scratch), HOME and GIT (nearest .git
+;; entry, or an empty string when no entry exists):
 ;;   sandbox-exec -f resolved.sb \
 ;;    -D CWD="$(pwd)" \
 ;;    -D PARENTWD="$(dirname "$(pwd)")" \
 ;;    -D TMP="$TMPDIR" \
 ;;    -D HOME="$HOME" \
+;;    -D GIT="/resolved/path/to/nearest/.git" \
 ;;    date
 
 (debug deny)
@@ -131,15 +131,15 @@
 ;; Remove conditional allows, not denies, so restrictions only subtract.
 ;; ($|/) covers the directory itself as well as its contents, blocking
 ;; replacement by rename or symlink as well as writes inside it.
-(deny file-write* (regex #"(^|/)\.git($|/)"))
-(allow file-write* (regex #"(^|/)\.git($|/)"))          ;;!! !no-edit-git
+(if (not (string=? (param "GIT") ""))
+  (begin
+    (deny file-write* (subpath (param "GIT")))
+    (allow file-write* (subpath (param "GIT"))) ;;!! !no-edit-git
+  ))
 
 (deny file-write* (regex #"(^|/)\.?m8-st8($|/)"))
 (allow file-write* (regex #"(^|/)\.?m8-st8($|/)"))      ;;!! !no-edit-m8-st8
 
-;; Core rules must follow the broad config allow; scratch stays writable.
-(deny file-write* (regex #"(^|/)\.?m8-st8/core($|/)"))
-(allow file-write* (regex #"(^|/)\.?m8-st8/core($|/)")) ;;!! !no-edit-core !no-edit-m8-st8 !no-writes
 (allow file-write* (regex #"(^|/)\.?m8-st8/\+/([^/]+/)*\.tmpdir($|/)"))
 
 ;; --- non-local internet access ---

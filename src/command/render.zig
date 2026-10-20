@@ -15,6 +15,7 @@
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
 const highlight = @import("../m8/highlight.zig");
+const config = @import("../config.zig");
 const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
@@ -78,6 +79,8 @@ fn run(ctx: Ctx) !u8 {
             return 1;
         }
     }
+
+    if (mode == .m8 and look.color) look.palette = try config.highlights(ctx.arena, ctx.io, ctx.env);
 
     var diag: doc.Diagnostic = .{};
     var p: doc.Parser = .{ .arena = ctx.arena, .diag = &diag };

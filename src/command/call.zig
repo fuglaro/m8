@@ -140,9 +140,12 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
     // each round, so asking for the window back is a rebase rather than a
     // growth: the buffers settle at one window and stay there, however much
     // goes through them.
+    //
+    // What is passed on ends on a whole character. A read that stopped inside
+    // one leaves it in the buffer, where the next read finishes it.
     const window = 64 * 1024;
     while (pipes.fill(window, .none)) |_| {
-        const out = pipes.reader(0).buffered();
+        const out = wholeChars(pipes.reader(0).buffered());
         if (out.len > 0) {
             try said.write(out);
             try ctx.out.flush();
@@ -158,6 +161,8 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
         else => return e,
     }
     try pipes.checkAnyError();
+    // The stream stopped, so what is left is a character that never finished.
+    try said.write(pipes.reader(0).buffered());
 
     const code = status(try child.wait(ctx.io));
     const wrote = try said.finish();
@@ -195,6 +200,20 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
     return code;
 }
 
+/// `bytes` up to its last whole character. A character is at most four
+/// bytes, so only the last three can belong to one that is unfinished.
+fn wholeChars(bytes: []const u8) []const u8 {
+    var i = bytes.len;
+    while (i > 0 and bytes.len - i < 3) {
+        i -= 1;
+        if (bytes[i] & 0xC0 != 0x80) {
+            const need = std.unicode.utf8ByteSequenceLength(bytes[i]) catch return bytes;
+            return if (i + need > bytes.len) bytes[0..i] else bytes;
+        }
+    }
+    return bytes;
+}
+
 /// What a tool said, written into a 🧾 as it says it.
 ///
 /// The record is opened on the first byte, because a tool that says nothing is
@@ -220,7 +239,29 @@ const Body = struct {
     /// after it starts on a line of its own either way.
     ended: bool = false,
 
+    /// What a tool says is bytes, and a record is text: a request carries it
+    /// as a JSON string, which only valid UTF-8 can be. So what is not a
+    /// character becomes U+FFFD, once per byte, here where it is first said
+    /// rather than in every codec that will later send it. Pieces arrive
+    /// ending on whole characters, so a broken one here is really broken.
     fn write(b: *Body, bytes: []const u8) !void {
+        var start: usize = 0;
+        var i: usize = 0;
+        while (i < bytes.len) {
+            const need = std.unicode.utf8ByteSequenceLength(bytes[i]) catch 0;
+            if (need > 0 and i + need <= bytes.len and std.unicode.utf8ValidateSlice(bytes[i..][0..need])) {
+                i += need;
+                continue;
+            }
+            try b.put(bytes[start..i]);
+            try b.put(&std.unicode.replacement_character_utf8);
+            i += 1;
+            start = i;
+        }
+        try b.put(bytes[start..]);
+    }
+
+    fn put(b: *Body, bytes: []const u8) !void {
         if (!b.frame) {
             if (bytes.len == 0) return;
             b.wrote = true;
@@ -291,7 +332,14 @@ const Tail = struct {
     }
 
     /// What was kept, oldest first, said to be a tail when it is one.
+    /// Text, like a body, since it lands in a 🚫.
     fn written(t: *const Tail, arena: std.mem.Allocator) ![]const u8 {
+        const kept = try t.raw(arena);
+        if (std.unicode.utf8ValidateSlice(kept)) return kept;
+        return std.fmt.allocPrint(arena, "{f}", .{std.unicode.fmtUtf8(kept)});
+    }
+
+    fn raw(t: *const Tail, arena: std.mem.Allocator) ![]const u8 {
         if (!t.lost) return std.mem.trimEnd(u8, t.buf[0..t.at], "\n");
 
         var whole: std.ArrayList(u8) = .empty;
@@ -480,4 +528,40 @@ test "unwrapped records pass through, and a verdict always starts its own line" 
 
     try body.write("\n");
     try testing.expect(body.ended);
+}
+
+test "what is not a character is said as U+FFFD, wherever a read cuts" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    // What `cat -v` makes of ▐ on macOS: the lead byte kept, the rest escaped.
+    var broken: std.Io.Writer.Allocating = .init(arena);
+    var body: Body = .{ .out = &broken.writer, .mode = .md, .call_id = "c1", .frame = false };
+    try body.write("\xe2M-^V \xf0\x9f x \xff");
+    _ = try body.finish();
+    try testing.expectEqualStrings("\u{FFFD}M-^V \u{FFFD}\u{FFFD} x \u{FFFD}", broken.written());
+
+    // A read that stops inside a character passes on what comes before it,
+    // wherever the cut falls.
+    const word = "a📜é▐z";
+    for (1..word.len) |at| {
+        const whole = wholeChars(word[0..at]);
+        try testing.expect(std.unicode.utf8ValidateSlice(whole));
+        try testing.expect(at - whole.len < 4);
+    }
+    try testing.expectEqualStrings(word, wholeChars(word));
+    // Broken bytes are not held back: they will never finish.
+    try testing.expectEqualStrings("x\xff", wholeChars("x\xff"));
+
+    // One the stream stopped inside of is not a character either.
+    var short: std.Io.Writer.Allocating = .init(arena);
+    var cut: Body = .{ .out = &short.writer, .mode = .md, .call_id = "c1", .frame = false };
+    try cut.write("ok\xf0\x9f");
+    _ = try cut.finish();
+    try testing.expectEqualStrings("ok\u{FFFD}\u{FFFD}", short.written());
+
+    var complaint: Tail = .{};
+    complaint.keep("bad \xe2M\n");
+    try testing.expectEqualStrings("bad \u{FFFD}M", try complaint.written(arena));
 }
