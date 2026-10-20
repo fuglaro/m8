@@ -2281,7 +2281,8 @@ contain-reads-home   as above, with HOME readable too
 private              as contain-reads, and tool dirs go too
 contain-writes       writes confined to cwd and TMP
 contain-writes-home  writes confined to cwd, TMP and HOME
-no-writes            nothing is writable, including TMP
+only-tmp-writes      writes confined to TMP
+no-writes            no filesystem writes, including TMP
 airgap               no internet; loopback and unix sockets stay
 no-loop               no loopback or unix sockets; internet stays
 no-edit-git           no writing to the nearest .git entry from cwd upward
@@ -2291,7 +2292,10 @@ no-edit-m8-st8        no writing to a config directory anywhere
 Those are atoms and the profile knows nothing else. Each
 one only takes permissions away, so combinations silently
 take the most restrictive form: `contain-writes` together
-with `contain-writes-home` is `contain-writes`. A level is
+with `contain-writes-home` is `contain-writes`; `only-tmp-writes`
+with either containment flag still allows writes only to TMP, and
+`no-writes` wins over every other write flag (including
+`only-tmp-writes`). A level is
 a composition in the language, where it can be read,
 overridden or taken apart — and a value `secure` does not
 recognise is refused rather than ignored, so not

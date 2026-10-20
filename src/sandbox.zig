@@ -42,7 +42,8 @@ pub const all = [_]Restriction{
     .{ .name = "private", .summary = "as contain-reads, and tool dirs go too" },
     .{ .name = "contain-writes", .summary = "writes confined to cwd and TMP" },
     .{ .name = "contain-writes-home", .summary = "writes confined to cwd, TMP and HOME" },
-    .{ .name = "no-writes", .summary = "nothing is writable, including TMP" },
+    .{ .name = "only-tmp-writes", .summary = "writes confined to the current tool's TMP" },
+    .{ .name = "no-writes", .summary = "no filesystem writes, including TMP" },
     .{ .name = "airgap", .summary = "no internet; loopback and unix sockets stay" },
     .{ .name = "no-loop", .summary = "no loopback or unix sockets; internet stays" },
     .{ .name = "no-edit-git", .summary = "no writing to the nearest .git entry from cwd upward" },
@@ -232,6 +233,14 @@ test "home containment leaves HOME and washes out under stricter containment" {
     try testing.expectEqualStrings(writes_strict, try res(arena, &.{ "contain-writes-home", "contain-writes" }));
     const writes_none = try res(arena, &.{"no-writes"});
     try testing.expectEqualStrings(writes_none, try res(arena, &.{ "contain-writes-home", "no-writes" }));
+    try testing.expectEqualStrings(writes_none, try res(arena, &.{ "only-tmp-writes", "no-writes" }));
+    try testing.expectEqualStrings(writes_none, try res(arena, &.{ "only-tmp-writes", "contain-writes-home", "no-writes" }));
+
+    const only_tmp = try res(arena, &.{"only-tmp-writes"});
+    try testing.expect(std.mem.indexOf(u8, only_tmp, home_write) == null);
+    try testing.expect(std.mem.indexOf(u8, only_tmp, "(allow file-write* (subpath (param \"TMP\")))") != null);
+    try testing.expect(std.mem.indexOf(u8, only_tmp, "(allow file-write* (subpath (param \"CWD\")))") == null);
+    try testing.expectEqualStrings(only_tmp, try res(arena, &.{ "contain-writes-home", "only-tmp-writes" }));
 }
 
 test "no-edit-git resolves nearest entries and falls back upward" {
@@ -282,26 +291,66 @@ test "no-edit-m8-st8 removes the broad config allow covering core" {
     try testing.expect(std.mem.indexOf(u8, out, broad_allow) == null);
 }
 
-test "the mob's scratch stays writable under every restriction" {
-    // m8 guarantees a tool can write here, so no combination of flags may
-    // take the exception away, even under no-edit-m8-st8.
-    const scratch_rule = "m8-st8/\\+/([^/]+/)*\\.tmpdir($|/)";
+test "only-tmp-writes and no-writes remove broad and special config/GIT allows" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    for ([_][]const []const u8{
-        &.{},
-        &.{"jail"},
-        &.{"no-edit-m8-st8"},
-        &.{ "no-writes", "private", "airgap" },
-    }) |active| {
+    const config_allow = broad_allow;
+    const git_allow = "(allow file-write* (subpath (param \"GIT\")))";
+    for ([_][]const []const u8{ &.{"only-tmp-writes"}, &.{"no-writes"} }) |active| {
         const out = try res(arena, active);
-        const at = std.mem.indexOf(u8, out, scratch_rule) orelse return error.ScratchRuleMissing;
-        const deny = std.mem.indexOf(u8, out, broad_deny) orelse return error.DenyMissing;
-        try testing.expect(at > deny);
+        try testing.expect(std.mem.indexOf(u8, out, config_allow) == null);
+        try testing.expect(std.mem.indexOf(u8, out, git_allow) == null);
     }
 }
 
+test "TMP writes are allowed only when requested" {
+    const tmp_write = "(allow file-write* (subpath (param \"TMP\")))";
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    try testing.expect(std.mem.indexOf(u8, try res(arena, &.{"only-tmp-writes"}), tmp_write) != null);
+    try testing.expect(std.mem.indexOf(u8, try res(arena, &.{"no-writes"}), tmp_write) == null);
+}
+
+test "only-tmp-writes preserves TMP across combinations" {
+    const scratch_rule = "(allow file-write* (subpath (param \"TMP\")))";
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    for ([_][]const []const u8{ &.{"only-tmp-writes"}, &.{ "only-tmp-writes", "contain-writes-home", "private" } }) |active| {
+        try testing.expect(std.mem.indexOf(u8, try res(arena, active), scratch_rule) != null);
+    }
+}
+
+test "no-writes denies the current tool's scratch" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    if (!try canApplySandbox(io)) return error.SkipZigTest;
+
+    const dir = try scratch(testing.allocator, io, "m8-restriction-tmp");
+    defer testing.allocator.free(dir);
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"no-writes"}, "echo scratch > tool-scratch/file"));
+}
+test "only-tmp-writes allows TMP but denies cwd" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    if (!try canApplySandbox(io)) return error.SkipZigTest;
+
+    const dir = try scratch(testing.allocator, io, "m8-restriction-only-tmp");
+    defer testing.allocator.free(dir);
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"only-tmp-writes"}, "echo tmp > tool-scratch/file"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{"only-tmp-writes"}, "echo cwd > cwd-file"));
+    try testing.expect(!try sandboxAllows(testing.allocator, io, dir, &.{ "only-tmp-writes", "contain-writes-home" }, "echo cwd > cwd-file"));
+}
 test "no-edit-m8-st8 protects core writes" {
     if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
@@ -375,6 +424,8 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []
     const arena = a.allocator();
 
     const git = try gitEntry(arena, io, dir);
+    const tmp = try std.fs.path.join(arena, &.{ dir, "tool-scratch" });
+    try std.Io.Dir.cwd().createDirPath(io, tmp);
 
     const path = try std.fs.path.join(arena, &.{ dir, "resolved.sb" });
     try std.Io.Dir.cwd().writeFile(io, .{
@@ -388,7 +439,7 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []
             path,                                                                                  "-D",
             try std.fmt.allocPrint(arena, "CWD={s}", .{dir}),                                      "-D",
             try std.fmt.allocPrint(arena, "PARENTWD={s}", .{std.fs.path.dirname(dir) orelse "/"}), "-D",
-            try std.fmt.allocPrint(arena, "TMP={s}", .{dir}),                                      "-D",
+            try std.fmt.allocPrint(arena, "TMP={s}", .{tmp}),                                      "-D",
             try std.fmt.allocPrint(arena, "HOME={s}", .{dir}),                                     "-D",
             try std.fmt.allocPrint(arena, "GIT={s}", .{git orelse ""}),                            "/bin/sh",
             "-c",                                                                                  script,
