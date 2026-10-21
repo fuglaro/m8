@@ -551,11 +551,13 @@ pub const Highlighter = struct {
     }
 
     /// A column's `|`, at its share of the width, or a space past the last
-    /// character when the cell is already wider than that.
+    /// character when the cell is already wider than that. The last column
+    /// gets three shares, as it often holds the longest and is encroached.
     fn pipe(h: *Highlighter) Error!void {
         const columns = h.columns orelse 1;
         if (h.opts.reflow and h.opts.width > h.row_base + 1 and h.row_k > 0) {
-            const at = h.row_base + h.row_k * (h.opts.width - h.row_base - 1) / columns;
+            const shares = h.row_k + @as(usize, if (h.row_k >= columns) 2 else 0);
+            const at = h.row_base + shares * (h.opts.width - h.row_base - 1) / (columns + 2);
             try h.set(h.opts.palette.pipe);
             if (h.col < at) {
                 while (h.col < at) : (h.col += 1) try h.out.writeByte(' ');
@@ -797,12 +799,24 @@ test "a fence opens at its list item's indent, and is read from there" {
 
 test "a table's pipes take their share of the width, or a space past a wide cell" {
     try expectShown(
-        "| a   | b   |\n| --- | --- |\n| ccccc  | d  |\nx",
+        "| a  | b    |\n| ---  | ---  |\n| ccccc  | d  |\nx",
         "| a | b |\n| --- | --- |\n| ccccc | d |\nx",
         .{ .color = false, .width = 13 },
     );
     // The first line is the header.
     try expectShown("{38;5;245}|{1} a {38;5;245}|{}\n{38;5;245}|{} b {38;5;245}|{}", "| a |\n| b |", .{});
+}
+
+test "a table's last column gets three times the width share" {
+    try expectShown(
+        "| a | b | c         |",
+        "| a | b | c |",
+        .{ .color = false, .width = 21 },
+    );
+    // A single column still uses the whole available width.
+    try expectShown("| a     |", "| a |", .{ .color = false, .width = 9 });
+    // Without reflow, table spacing is left alone.
+    try expectShown("| a | b | c |", "| a | b | c |", .{ .color = false, .reflow = false, .width = 17 });
 }
 
 test "a long line is broken at the width, carrying its quote and indent" {
