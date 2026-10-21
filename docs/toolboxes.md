@@ -56,3 +56,16 @@ environment, and as flags wherever the command line names it.
 This syntax keeps a tool definition readable when it has several defaults and
 lets an agent override or extend those defaults through ordinary call
 parameters.
+
+## Returning image and file records
+
+A `bash records` tool returns m8 records. For example, after preparing a JPEG
+for the selected provider's upload command:
+
+```bash
+printf '* :link::%s\n  > <%s (%s)\n' "$M8_CALL_ID" "$part" "$hash"
+```
+
+The link record names the call it answers and the file to hand over. Its content
+quote is indented beneath the list header. The records runner supplies the final
+success/failure verdict.

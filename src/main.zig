@@ -87,6 +87,11 @@ fn overviewCommands(w: *std.Io.Writer) !void {
 pub fn main(init: std.process.Init) !u8 {
     const arena = init.arena.allocator();
     const io = init.io;
+    // Startup setup belongs to normal invocations, never tool children.
+    if (!config.isChild(init.environ_map)) {
+        if (try config.userDir(arena, init.environ_map)) |path|
+            _ = try std.Io.Dir.cwd().createDirPathStatus(io, path, .fromMode(0o700));
+    }
 
     const argv = try init.minimal.args.toSlice(arena);
     const args = argv[@min(1, argv.len)..];

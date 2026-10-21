@@ -113,6 +113,12 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     const given = try doc.parse(arena, ctx.in, &diag);
 
     const dirs = try config.discover(arena, io, ctx.env);
+    // Tool children inherit the parent's validated config context, not the
+    // original environment's possibly unvalidated list.
+    const inherited = try arena.create(std.process.Environ.Map);
+    inherited.* = try ctx.env.clone(arena);
+    try inherited.put(config.dirs_var, try std.mem.join(arena, ":", dirs));
+    ctx.env = inherited;
     const expanded = try ledger.expandRecords(
         arena,
         io,

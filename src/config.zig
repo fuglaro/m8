@@ -1,13 +1,12 @@
 //! Finding configuration.
 //!
-//! Config directories are searched nearest first: every `.m8-st8/` from the
-//! working directory upward, the way git finds `.git`, then the user's own,
-//! then the system's. A child m8 runs is told them as `M8_ST8_DIRS`, and
-//! takes them from there rather than finding its own.
+//! Config directories are searched nearest first: registered `.m8-st8/` paths
+//! from the working directory upward, then the user's own and the system's.
+//! Children inherit the parent's validated `M8_ST8_DIRS` without revalidation.
 //!
 //! `core/` is searched the same way. A file is taken from the nearest
 //! directory that has one, and `providers.json` is merged through all of them,
-//! so running m8 in a directory trusts the config found from it.
+//! so registering a config directory explicitly trusts its contents.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -24,7 +23,14 @@ pub fn discover(arena: Allocator, io: std.Io, env: *const std.process.Environ.Ma
     var dirs: std.ArrayList([]const u8) = .empty;
     if (env.get(dirs_var)) |told| {
         var it = std.mem.tokenizeScalar(u8, told, ':');
-        while (it.next()) |d| try dirs.append(arena, d);
+        const user = try userDir(arena, env);
+        while (it.next()) |d| {
+            if (isChild(env) or (user != null and std.mem.eql(u8, d, user.?)) or std.mem.eql(u8, d, system_dir)) {
+                try dirs.append(arena, d);
+            } else if (try registered(arena, io, env, d)) {
+                try dirs.append(arena, d);
+            }
+        }
         return dirs.toOwnedSlice(arena);
     }
 
@@ -33,7 +39,7 @@ pub fn discover(arena: Allocator, io: std.Io, env: *const std.process.Environ.Ma
     var walk: []const u8 = buf[0..len];
     while (walk.len > 0) {
         const candidate = try std.fs.path.join(arena, &.{ walk, dir_name });
-        if (exists(io, candidate)) try dirs.append(arena, candidate);
+        if (try registered(arena, io, env, candidate)) try dirs.append(arena, candidate);
         const parent = std.fs.path.dirname(walk) orelse break;
         if (parent.len == walk.len) break;
         walk = parent;
@@ -70,8 +76,7 @@ pub fn userDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const 
     return null;
 }
 
-/// Every `core/` there could be, nearest first. Where a provider command
-/// written as a relative name is looked for.
+/// Every `core/` directory, nearest first, for relative provider commands.
 pub fn coreDirs(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const []const u8 {
     const dirs = try discover(arena, io, env);
     const out = try arena.alloc([]const u8, dirs.len);
@@ -105,6 +110,120 @@ pub fn core(
     for (try coreFiles(arena, io, env, name)) |path|
         return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file)) catch continue;
     return null;
+}
+
+/// The trust registry lives in the user's private config tree. Entries contain
+/// canonical paths; the hash in the name is only an index, never authority.
+pub const registry_dir_name = "registry";
+
+pub fn registryDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const u8 {
+    const home = (try userDir(arena, env)) orelse return null;
+    return try std.fs.path.join(arena, &.{ home, "core", registry_dir_name });
+}
+
+fn registrationFile(arena: Allocator, env: *const std.process.Environ.Map, canonical: []const u8) !?[]const u8 {
+    const root = (try registryDir(arena, env)) orelse return null;
+
+    var name: std.ArrayList(u8) = .empty;
+    try name.appendSlice(arena, "st8");
+    for (canonical) |ch| {
+        // Bound the readable portion so the complete filename fits NAME_MAX.
+        if (name.items.len >= 200) break;
+        if (ch == '/') {
+            try name.appendSlice(arena, "--");
+        } else {
+            try name.append(arena, if (std.ascii.isAlphanumeric(ch) or ch == '.' or ch == '-' or ch == '_') ch else '-');
+        }
+    }
+    var suffix: [18]u8 = undefined;
+    try name.appendSlice(arena, try std.fmt.bufPrint(&suffix, "--{x:0>16}", .{std.hash.Wyhash.hash(0, canonical)}));
+    return try std.fs.path.join(arena, &.{ root, name.items });
+}
+
+pub fn isChild(env: *const std.process.Environ.Map) bool {
+    return env.get("M8_CALL_ID") != null;
+}
+
+/// Test a registration, cleaning stale entries only in normal invocations.
+pub fn registered(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map, path: []const u8) !bool {
+    const maintain = !isChild(env);
+    if (!try directoryExists(io, path)) {
+        if (maintain) try deregisterContents(arena, io, env, path);
+        return false;
+    }
+    const canonical = std.Io.Dir.cwd().realPathFileAlloc(io, path, arena) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => {
+            if (maintain) try deregisterContents(arena, io, env, path);
+            return false;
+        },
+        else => return err,
+    };
+    const entry = (try registrationFile(arena, env, canonical)) orelse return false;
+    const contents = std.Io.Dir.cwd().readFileAlloc(io, entry, arena, .limited(std.fs.max_path_bytes)) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    return std.mem.eql(u8, contents, canonical);
+}
+
+pub fn registerPath(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map, path: []const u8) !void {
+    const canonical = try std.Io.Dir.cwd().realPathFileAlloc(io, path, arena);
+    const entry = (try registrationFile(arena, env, canonical)) orelse return error.NoHomeConfig;
+    const parent = std.fs.path.dirname(entry).?;
+    try std.Io.Dir.cwd().createDirPath(io, parent);
+    const existing = std.Io.Dir.cwd().readFileAlloc(io, entry, arena, .limited(std.fs.max_path_bytes)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (existing) |contents| {
+        if (std.mem.eql(u8, contents, canonical)) return;
+        return error.RegistryHashCollision;
+    }
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = entry, .data = canonical });
+}
+
+fn deregisterContents(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map, path: []const u8) !void {
+    const root = (try registryDir(arena, env)) orelse return;
+    var dir = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        const full = try std.fs.path.join(arena, &.{ root, entry.name });
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, full, arena, .limited(std.fs.max_path_bytes)) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        if (std.mem.eql(u8, contents, path)) try std.Io.Dir.cwd().deleteFile(io, full);
+    }
+}
+
+/// Existing .m8-st8 directories from cwd upward, never descendants.
+pub fn candidates(arena: Allocator, io: std.Io, cwd: []const u8) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    var walk = cwd;
+    while (walk.len > 0) {
+        const candidate = try std.fs.path.join(arena, &.{ walk, dir_name });
+        if (try directoryExists(io, candidate)) {
+            try out.append(arena, try std.Io.Dir.cwd().realPathFileAlloc(io, candidate, arena));
+        }
+        const parent = std.fs.path.dirname(walk) orelse break;
+        if (parent.len == walk.len) break;
+        walk = parent;
+    }
+    return out.toOwnedSlice(arena);
+}
+
+fn directoryExists(io: std.Io, path: []const u8) !bool {
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return false,
+        else => return err,
+    };
+    dir.close(io);
+    return true;
 }
 
 fn exists(io: std.Io, path: []const u8) bool {
@@ -321,6 +440,74 @@ pub fn highlights(
 const testing = std.testing;
 const test_tmp = @import("test_tmp.zig");
 
+test "registry filenames use st8 and double-dash path separators" {
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("XDG_CONFIG_HOME", "/config");
+    const file = (try registrationFile(arena, &env, "/Users/jvl/dev/m8/.m8-st8")).?;
+    try testing.expectEqualStrings("/config/m8-st8/core/registry/st8--Users--jvl--dev--m8--.m8-st8--74f65428bd20454e", file);
+}
+
+test "config trust entries are canonical path contents indexed by wyhash" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const t = try Tree.init(arena, &threaded, "m8-register-test");
+    defer t.deinit(arena);
+    const st8 = try t.join(arena, "work/.m8-st8");
+    try std.Io.Dir.cwd().createDirPath(t.io, st8);
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("XDG_CONFIG_HOME", t.root);
+    try testing.expect(!(try registered(arena, t.io, &env, st8)));
+    try registerPath(arena, t.io, &env, st8);
+    try testing.expect(try registered(arena, t.io, &env, st8));
+    // A copied entry name cannot authorize a different canonical path because
+    // the stored contents are checked as well as the hash-derived filename.
+    const sibling = try t.join(arena, "else/.m8-st8");
+    try std.Io.Dir.cwd().createDirPath(t.io, sibling);
+    try testing.expect(!(try registered(arena, t.io, &env, sibling)));
+    try std.Io.Dir.cwd().deleteTree(t.io, st8);
+    try testing.expect(!(try registered(arena, t.io, &env, st8)));
+    const root = (try registryDir(arena, &env)).?;
+    var registry = try std.Io.Dir.cwd().openDir(t.io, root, .{ .iterate = true });
+    defer registry.close(t.io);
+    var entries = registry.iterate();
+    try testing.expect((try entries.next(t.io)) == null);
+}
+
+test "inherited configs retain only registered directories and user/system roots" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    const t = try Tree.init(arena, &threaded, "m8-trusted-discovery");
+    defer t.deinit(arena);
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("XDG_CONFIG_HOME", t.root);
+    const home = (try userDir(arena, &env)).?;
+    _ = try std.Io.Dir.cwd().createDirPathStatus(t.io, home, .fromMode(0o700));
+    if (@import("builtin").os.tag != .windows) {
+        const stat = try std.Io.Dir.cwd().statFile(t.io, home, .{});
+        try testing.expectEqual(@as(std.posix.mode_t, 0o700), stat.permissions.toMode() & 0o777);
+    }
+    const trusted = try t.join(arena, "work/.m8-st8");
+    const untrusted = try t.join(arena, "other/.m8-st8");
+    try std.Io.Dir.cwd().createDirPath(t.io, trusted);
+    try std.Io.Dir.cwd().createDirPath(t.io, untrusted);
+    try registerPath(arena, t.io, &env, trusted);
+    try env.put(dirs_var, try std.mem.join(arena, ":", &.{ untrusted, trusted, home, system_dir }));
+    const dirs = try discover(arena, t.io, &env);
+    try testing.expectEqual(@as(usize, 3), dirs.len);
+    try testing.expectEqualStrings(trusted, dirs[0]);
+    try testing.expectEqualStrings(home, dirs[1]);
+    try testing.expectEqualStrings(system_dir, dirs[2]);
+}
+
 test "definitions and generated state have separate roots" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
@@ -431,17 +618,17 @@ test "core is read from the user's directory and nowhere else" {
     try testing.expect((try core(arena, t.io, &none, "mac-sandbox.sb")) == null);
 }
 
-test "directories a parent told are taken as told" {
+test "unregistered config paths in inherited M8_ST8_DIRS are filtered" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
 
     var env: std.process.Environ.Map = .init(arena);
     try env.put(dirs_var, "/p/.m8-st8:/u/m8-st8");
-    const dirs = try discover(arena, undefined, &env);
-    try testing.expectEqual(@as(usize, 2), dirs.len);
-    try testing.expectEqualStrings("/p/.m8-st8", dirs[0]);
-    try testing.expectEqualStrings("/u/m8-st8", dirs[1]);
+    const dirs = try discover(arena, threaded.io(), &env);
+    try testing.expectEqual(@as(usize, 0), dirs.len);
 }
 
 test "the user directory follows XDG, then HOME" {
@@ -472,7 +659,12 @@ test "highlight config falls through absent keys and takes nearest override" {
     try t.write(arena, "near/core/config.json", "{}");
     try t.write(arena, "far/core/config.json", "{\"highlights\":\"quote:fg4\"}");
     var env: std.process.Environ.Map = .init(arena);
-    try env.put(dirs_var, try std.mem.join(arena, ":", &.{ try t.join(arena, "near"), try t.join(arena, "far") }));
+    try env.put("XDG_CONFIG_HOME", t.root);
+    const near = try t.join(arena, "near");
+    const far = try t.join(arena, "far");
+    try registerPath(arena, t.io, &env, near);
+    try registerPath(arena, t.io, &env, far);
+    try env.put(dirs_var, try std.mem.join(arena, ":", &.{ near, far }));
 
     var p = try highlights(arena, t.io, &env);
     try testing.expectEqual(@as(?u16, 4), p.quote.fg);
@@ -491,6 +683,8 @@ test "highlight config rejects wrong value types and invalid style specs" {
     const t = try Tree.init(arena, &threaded, "m8-config-bad-highlights");
     defer t.deinit(arena);
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("XDG_CONFIG_HOME", t.root);
+    try registerPath(arena, t.io, &env, t.root);
     try env.put(dirs_var, t.root);
 
     try t.write(arena, "core/config.json", "{\"highlights\":[]}");
@@ -510,4 +704,69 @@ test "the system's directory is never where anything is kept" {
     try testing.expect(saveDir(&.{system_dir}) == null);
     try testing.expectEqualStrings("/u", saveDir(&.{ "/u", system_dir }).?);
     try testing.expect((try mobTmp(arena, threaded.io(), &.{system_dir}, "")) == null);
+}
+
+test "child validation preserves stale registrations and normal validation cleans them" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const root = try test_tmp.make(arena, io, "m8-child-registry");
+    defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("XDG_CONFIG_HOME", root);
+    const project = try std.fs.path.join(arena, &.{ root, "project" });
+    try std.Io.Dir.cwd().createDir(io, project, .default_dir);
+    try registerPath(arena, io, &env, project);
+    const entry = (try registrationFile(arena, &env, project)).?;
+    try std.Io.Dir.cwd().deleteTree(io, project);
+    try env.put("M8_CALL_ID", "c1");
+    try testing.expect(!try registered(arena, io, &env, project));
+    try testing.expectEqualStrings(project, try std.Io.Dir.cwd().readFileAlloc(io, entry, arena, .limited(max_file)));
+    _ = env.swapRemove("M8_CALL_ID");
+    try testing.expect(!try registered(arena, io, &env, project));
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().readFileAlloc(io, entry, arena, .limited(max_file)));
+}
+
+test "children use the validated inherited list without a registry" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const root = try test_tmp.make(arena, io, "m8-inherited-dirs");
+    defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+    var parent: std.process.Environ.Map = .init(arena);
+    try parent.put("XDG_CONFIG_HOME", root);
+    const trusted = try std.fs.path.join(arena, &.{ root, "trusted" });
+    const untrusted = try std.fs.path.join(arena, &.{ root, "untrusted" });
+    try std.Io.Dir.cwd().createDir(io, trusted, .default_dir);
+    try std.Io.Dir.cwd().createDir(io, untrusted, .default_dir);
+    try registerPath(arena, io, &parent, trusted);
+    const original = try std.mem.join(arena, ":", &.{ trusted, untrusted });
+    try parent.put(dirs_var, original);
+    const validated = try discover(arena, io, &parent);
+    try testing.expectEqual(@as(usize, 1), validated.len);
+    try testing.expectEqualStrings(trusted, validated[0]);
+
+    var child = try parent.clone(arena);
+    try child.put(dirs_var, try std.mem.join(arena, ":", validated));
+    try child.put("M8_CALL_ID", "c1");
+    // Neither the inherited roots nor the registry need to remain accessible.
+    try std.Io.Dir.cwd().deleteTree(io, trusted);
+    try child.put("XDG_CONFIG_HOME", "/dev/null");
+    const inherited = try discover(arena, io, &child);
+    try testing.expectEqual(@as(usize, 1), inherited.len);
+    try testing.expectEqualStrings(trusted, inherited[0]);
+    try testing.expectEqualStrings(original, parent.get(dirs_var).?);
+    try child.put(dirs_var, "");
+    try testing.expectEqual(@as(usize, 0), (try discover(arena, io, &child)).len);
+
+    // A normal invocation still validates, rather than trusting the input list.
+    try parent.put("XDG_CONFIG_HOME", "/dev/null");
+    try parent.put(dirs_var, untrusted);
+    try testing.expectError(error.NotDir, discover(arena, io, &parent));
 }

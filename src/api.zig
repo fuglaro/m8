@@ -75,7 +75,13 @@ pub fn childEnvironment(arena: Allocator, ctx: Ctx, overlays: []const EnvVar) !*
     var verbosity_buf: [3]u8 = undefined;
     const verbosity = try std.fmt.bufPrint(&verbosity_buf, "{}", .{ctx.verbosity});
     try m.put("M8_VERBOSITY", verbosity);
-    try m.put(config.dirs_var, try std.mem.join(arena, ":", try config.discover(arena, ctx.io, ctx.env)));
+    // Preserve the parent's config context; process launch neither discovers
+    // config nor revalidates the list, and overlays cannot replace it.
+    if (ctx.env.get(config.dirs_var)) |dirs| {
+        try m.put(config.dirs_var, dirs);
+    } else {
+        _ = m.swapRemove(config.dirs_var);
+    }
     const out = try arena.create(std.process.Environ.Map);
     out.* = m;
     return out;
@@ -179,9 +185,11 @@ test "a child environment adds process state without changing its base" {
     try base.put("M8", "/wrong");
     try base.put(config.dirs_var, "/p/.m8-st8:/u/m8-st8");
     var out: std.Io.Writer.Allocating = .init(arena);
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
     const ctx: Ctx = .{
         .arena = arena,
-        .io = undefined,
+        .io = threaded.io(),
         .mode = .md,
         .env = &base,
         .self = "/right/m8",
@@ -198,7 +206,19 @@ test "a child environment adds process state without changing its base" {
     try std.testing.expectEqualStrings("2", child.get("M8_VERBOSITY").?);
     try std.testing.expectEqualStrings("yes", child.get("KEPT").?);
     try std.testing.expectEqualStrings("one", child.get("EXTRA").?);
-    try std.testing.expectEqualStrings("/p/.m8-st8:/u/m8-st8", child.get(config.dirs_var).?);
+    try std.testing.expectEqualStrings(base.get(config.dirs_var).?, child.get(config.dirs_var).?);
+    // Even a bad registry location must not be inspected during child launch.
+    try base.put("XDG_CONFIG_HOME", "/dev/null");
+    const inherited = try childEnvironment(arena, ctx, &.{.{ .key = config.dirs_var, .value = "/wrong" }});
+    try std.testing.expectEqualStrings(base.get(config.dirs_var).?, inherited.get(config.dirs_var).?);
+
+    // No inherited context means no eager discovery, even with an overlay.
+    _ = base.swapRemove(config.dirs_var);
+    const unset = try childEnvironment(arena, ctx, &.{.{ .key = config.dirs_var, .value = "/wrong" }});
+    try std.testing.expect(unset.get(config.dirs_var) == null);
+    try base.put(config.dirs_var, "");
+    const empty = try childEnvironment(arena, ctx, &.{});
+    try std.testing.expectEqualStrings("", empty.get(config.dirs_var).?);
 }
 
 test "only a leading long help option asks for help" {

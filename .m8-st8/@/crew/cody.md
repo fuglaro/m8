@@ -149,7 +149,7 @@
   >      exit 1 ;;
   > esac
   > hash=$(shasum -a 256 -- "$part" | cut -c1-64)
-  > printf '#### :link:%s\n> <%s (%s)\n' "$M8_CALL_ID" "$part" "$hash"
+  > printf '* :link::%s\n  > <%s (%s)\n' "$M8_CALL_ID" "$part" "$hash"
   > ```
   > * file string
   >   Path of the image or PDF (relative or absolute).

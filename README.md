@@ -2460,26 +2460,32 @@ config, and neither can become the other.
 * A mob you include can define tools and shields. That
   is the point of a mob. Your floor is what makes it
   safe to include one you have not read.
-* `no-edit-m8-st8` is what stops a tool rewriting the
-  agent that constrains it. Without it, every other
-  restriction is advisory as of the next run.
-* `core/` is denied to every secured process, always
-  and untagged, so a tool cannot rewrite what a
-  restriction means.
-* Running m8 in a directory trusts the config found from
-  it.
-  * It arrives with a `git clone` like anything else.
-  * It defines what runs, what a shield means, and which
-    command a provider is.
-  * Read it first.
+* `no-edit-m8-st8` protects the user's config and applicable registered config
+  directories from tool writes. Unregistered configs are not trusted
+  or included in the sandbox's config protection set.
+* Config files can define what runs, what a shield means, and which command a
+  provider is; register only config directories you trust.
+* Running m8 in a directory uses only `.m8-st8` directories that have
+  been explicitly registered with `m8 register`.
+  * It arrives with a `git clone` like anything else, but does not become trusted
+    merely by being present.
+  * Registration is not a human-only gate; an agent with command permissions
+    may run it.
+  * Read a config directory before registering it.
 
 ## Configs
 
 Configs merge nearest first, searching up from the
 working directory and searching outwards:
 
-* `./.m8-st8/` and every `.m8-st8/` above it
-* `$XDG_CONFIG_HOME/m8-st8/` else `~/.config/m8-st8/`
+* Only registered `.m8-st8/` directories from cwd and its ancestors
+  * `m8 register -l` lists candidates and their registration status.
+  * `m8 register` trusts the existing candidates; registration is machine-local
+    and records canonical real paths under the user's private config registry.
+  * Child directories are never searched. Unregistered configs are omitted from
+    `M8_ST8_DIRS` and do not participate in lookup.
+* `$XDG_CONFIG_HOME/m8-st8/` else `~/.config/m8-st8/`, created privately
+  (mode 0700) when m8 starts
 * `/etc/m8-st8/`, for what an administrator puts beneath
   everyone
   * Its `core/` and `@/` are read like any other.

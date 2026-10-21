@@ -143,3 +143,25 @@ test "a 🔗's files are handed over as the entry's upload says" {
     );
     try testing.expectError(error.UploadFailed, testHand(arena, io, "echo file-1", "<a.jpeg"));
 }
+
+test "image tool records use list headers and indented content" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(
+        arena,
+        "* :link::see-c1\n  > </tmp/shot.jpeg (sha256)\n\n* :green_circle::see-c1\n",
+        &diag,
+    );
+    try testing.expectEqual(@as(usize, 2), records.len);
+    try testing.expectEqual(doc.Sigil.link, records[0].sigil);
+    try testing.expectEqualStrings("see-c1", records[0].value);
+    try testing.expectEqualStrings("</tmp/shot.jpeg (sha256)", records[0].content.?);
+    // The old heading spelling is not an m8 record.
+    try testing.expectError(error.NotADocument, doc.parse(
+        arena,
+        "#### :link:see-c1\n> </tmp/shot.jpeg (sha256)\n",
+        &diag,
+    ));
+}
