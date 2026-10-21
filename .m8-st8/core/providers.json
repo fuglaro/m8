@@ -10,6 +10,30 @@
       "--models"
     ]
   },
+  "local-omlx": {
+    "cmd": [
+      "m8",
+      "url-provider"
+    ],
+    "encode": [
+      "m8",
+      "encode",
+      "openai-responses"
+    ],
+    "parse": [
+      "m8",
+      "parse",
+      "openai-responses"
+    ],
+    "url": "http://127.0.0.1:8000/v1/responses",
+    "models-url": "http://127.0.0.1:8000/v1/models",
+    "models": [
+      "sh",
+      "-c",
+      "\"$M8\" url-provider --get \"$M8_PROVIDER_MODELS_URL\" | tr ',' '\\n' | sed -n 's/.*\"id\" *: *\"\\([^\"]*\\)\".*/\\1/p'"
+    ],
+    "header-authorization": "echo Bearer $(sed -n 's/.*\"api_key\" *: *\"\\([^\"]*\\)\".*/\\1/p' ~/.omlx/settings.json)"
+  },
   "codex": {
     "cmd": [
       "m8",

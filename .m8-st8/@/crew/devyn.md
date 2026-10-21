@@ -1,6 +1,6 @@
 * :brain::crew/cody
 
-* :brain::/codex/gpt-6.1-sol,reasoning:{"summary":"auto","effort":"medium"}
+* :brain::big-medium
 
 * :compass::
   > Delegate independent tasks to Cody (who has similar tool access),
