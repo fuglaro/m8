@@ -49,6 +49,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\The editor is one row, grows with the message to at most half the
         \\terminal, and is one row again once the message is sent.
+        \\If CMD fails without stdout, its input returns to the editor before
+        \\anything typed while it ran. Stderr does not prevent this recovery.
         \\
         \\  Enter    send, and a message sent mid-run waits its turn
         \\  Ctrl-j   a new line, and so is Alt-Enter
@@ -228,6 +230,9 @@ const Riff = struct {
     drawn: std.ArrayList(std.ArrayList(u8)) = .empty,
     line: std.Io.Writer.Allocating = .init(std.heap.page_allocator),
     queue: std.ArrayList([]const u8) = .empty,
+    /// Input kept until this run produces stdout, for recovery on failure.
+    input: std.ArrayList(u8) = .empty,
+    output_seen: bool = false,
     /// The last line the command wrote to stderr.
     status: [512]u8 = undefined,
     status_len: usize = 0,
@@ -345,7 +350,7 @@ const Riff = struct {
                 try r.render();
                 if (r.child == null) try r.spawn(r.queue.orderedRemove(0));
                 // A run already listening is handed whatever else is waiting.
-                if (r.continuous) while (r.queue.items.len > 0) r.hand(r.queue.orderedRemove(0));
+                if (r.continuous) while (r.queue.items.len > 0) try r.hand(r.queue.orderedRemove(0));
             }
 
             var fds = [3]posix.pollfd{
@@ -379,6 +384,8 @@ const Riff = struct {
                 r.clear = false;
                 const got = posix.read(fds[1].fd, &chunk) catch 0;
                 if (got == 0) r.streams[0] = null else {
+                    r.output_seen = true;
+                    r.input.clearRetainingCapacity();
                     try r.scan.feed(r.out, chunk[0..got]);
                     r.asked = false;
                     r.spot = null;
@@ -399,6 +406,15 @@ const Riff = struct {
                     .signal, .stopped => |signal| @intFromEnum(signal),
                     else => null,
                 };
+                // A failed, silent run has not consumed the draft from the
+                // user's point of view. Restore it before newer typing,
+                // keeping that typing's cursor.
+                if (r.stopped != null and !r.output_seen and r.input.items.len > 0) {
+                    try r.buf.insertSlice(r.ctx.arena, 0, r.input.items);
+                    r.at += r.input.items.len;
+                    r.sent = false;
+                }
+                r.input.clearRetainingCapacity();
                 r.child = null;
                 // Whatever it left half said is not owed an ending.
                 r.scan.state = .text;
@@ -444,14 +460,22 @@ const Riff = struct {
         });
         r.streams = .{ child.stdout.?.handle, child.stderr.?.handle };
         r.child = child;
-        r.hand(message);
+        r.input.clearRetainingCapacity();
+        r.output_seen = false;
+        try r.hand(message);
     }
 
     /// Write the command a message. One run a message has then been told
     /// everything; a continuous one is told a message and left listening.
-    fn hand(r: *Riff, message: []const u8) void {
+    fn hand(r: *Riff, message: []const u8) !void {
         const in = if (r.child) |*c| &c.stdin else return;
         const to = in.* orelse return;
+        if (!r.output_seen) {
+            // Continuous messages become separate editor lines on recovery,
+            // even when the wire delimiter is a NUL rather than a newline.
+            if (r.input.items.len > 0) try r.input.append(r.ctx.arena, '\n');
+            try r.input.appendSlice(r.ctx.arena, message);
+        }
         var buf: [4096]u8 = undefined;
         var w = to.writerStreaming(r.ctx.io, &buf);
         w.interface.writeAll(message) catch {};

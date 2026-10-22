@@ -33,6 +33,7 @@ const address = @import("address.zig");
 const harness = @import("harness.zig");
 const launch = @import("launch.zig");
 const config = @import("config.zig");
+const test_tmp = @import("test_tmp.zig");
 
 /// What `m8 --help` says. This belongs to the launcher rather than command
 /// help: it describes the process syntax that the launcher itself owns.
@@ -138,6 +139,19 @@ pub fn main(init: std.process.Init) !u8 {
         if (line.len <= 1 and !std.mem.endsWith(u8, word, "-") and
             try std.Io.File.stdin().isTty(io) and try std.Io.File.stdout().isTty(io))
         tui: {
+            // Check the address before a configured tui or riff can take over
+            // the process. In particular, those interactive paths otherwise
+            // bypass `at`'s normal ref validation.
+            const checked: anyerror![]const u8 = preflight: {
+                const dirs = try config.discover(arena, io, init.environ_map);
+                const a = address.typed(arena, io, dirs, word, err) catch |e| break :preflight e;
+                break :preflight address.found(arena, io, dirs, a, err);
+            };
+            _ = checked catch |e| {
+                if (e != error.Said) return e;
+                try err.flush();
+                return 1;
+            };
             // An `m8` first is this m8, so a tui needs nothing on a PATH.
             if (config.tui(arena, io, init.environ_map) catch |e| {
                 try harness.explain(err, "", e);
@@ -244,6 +258,36 @@ fn siblings(
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+
+test "interactive preflight rejects unknown agents and missing turns, but permits new chats" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const io = threaded.io();
+    const dir = try test_tmp.make(arena, io, "m8-main-preflight");
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    const agent_path = try std.fs.path.join(arena, &.{ dir, try config.nameFile(arena, "mob/agent") });
+    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(agent_path).?);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = agent_path, .data = "* :brain::/local/tiny\n" });
+    const dirs = [_][]const u8{dir};
+    var err: std.Io.Writer.Allocating = .init(arena);
+
+    try testing.expectError(error.Said, address.typed(arena, io, &dirs, "@nobody", &err.writer));
+    try testing.expect(std.mem.indexOf(u8, err.written(), "no agent named 'nobody'") != null);
+
+    err.clearRetainingCapacity();
+    const missing = try address.typed(arena, io, &dirs, "@mob/agent/+/missing", &err.writer);
+    try testing.expectError(error.Said, address.found(arena, io, &dirs, missing, &err.writer));
+    try testing.expect(std.mem.indexOf(u8, err.written(), "no turn named 'mob/agent/+/missing'") != null);
+
+    err.clearRetainingCapacity();
+    const chat = try address.typed(arena, io, &dirs, "@mob/agent/new-chat", &err.writer);
+    _ = try address.found(arena, io, &dirs, chat, &err.writer);
+    try testing.expectEqualStrings("", err.written());
+}
 
 test "the overview lists every command" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);

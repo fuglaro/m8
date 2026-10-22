@@ -798,11 +798,17 @@ m8 riff -c -s 2 python3 -i -u -q    with its last error above its prompt
 ```
 
 `riff` is a conversation at a terminal, made of the command
-line rather than beside it.
+line rather than beside it. The `m8 @...` shorthand checks the
+address before opening the UI, so an unknown agent or missing
+turn is reported before you write a message.
 
 * Every message sent is a run of CMD.
   * The message is its stdin.
   * A message sent mid-run waits its turn.
+  * If CMD fails without writing any stdout, its stdin is put
+    back in the editor before anything typed while it ran.
+    Stderr does not prevent recovery. In continuous mode,
+    recovered messages are separated by newlines.
 * CMD's stdout is ordinary terminal scrollback.
   * Only CMD writes there, so it scrolls, selects and copies
     as any output does.
