@@ -19,7 +19,57 @@ fuglaro@localhost> m8 :demo/pagey -- 'Throw me a quick one please.'
 fuglaro@localhost>
 ```
 
+Or with a TUI:
+```
+>>> m8 :crew/devyn
+▐ 🙋:
+│ hi!
 
+▐ 🤖:
+│ Hi! What can I help you build or fix?
+
+▐ 🧠:crew/devyn/+/qjzzhmybjf
+▐ 🙋:
+│ can you write a haiku to scratch/haiku.md about having good mates?
+
+▐ 📲:edit,call_354d69588f1c4cd090828705078c4dca
+│ * path `scratch/haiku.md`
+│ * new_string
+│   ```
+│   Good mates share the road
+│   Laughter warms the evening air
+│   Home is where we meet
+│
+│   ```
+│ * old_string
+│ * pages
+▐ 📜:call_354d69588f1c4cd090828705078c4dca
+│ ```diff
+│ +Good mates share the road
+│ +Laughter warms the evening air
+│ +Home is where we meet
+│ ```
+│ [scratch/haiku.md: Created a new file with 1 page, changing lines 1-3.]
+▐ 🟢:call_354d69588f1c4cd090828705078c4dca
+
+▐ 🤖:
+│ Written to `scratch/haiku.md`:
+│
+│ > Good mates share the road
+│ > Laughter warms the evening air
+│ > Home is where we meet
+
+▐ 🧠:crew/devyn/+/fqwurujpru
+
+   ▂▟📲edit(path=scratch/haiku.md,new_string=Good mates share the road Laughter warms the evening …✥35_937▙▂
+   ██Waiting (enter:dispatch,alt-enter/ctrl-j:newline)...                                                 ██
+   ▏Thanks! That's awes...
+```
+
+An entire harness only common CLI dependencies like bash, sed, and curl, in under one megabyte!
+The truly lightweight harness.
+
+Note: This is still in pre-release mode but is open for comment. the below documentation is evolving and is not yet honed.
 
 This framework brings the power of agents to the shell,
 rather than being limited to the other way around,
@@ -47,7 +97,7 @@ The mission:
 * Small enough for a distribution to carry for thirty
   years.
 
-The implementation keeps the same discipline. Keep detail where it
+DEV-STYLE-GUIDE: The implementation keeps the same discipline. Keep detail where it
 happens; stream or write it in place when it has one use. A helper earns
 its distance by naming a real boundary, not by making a unit test easy.
 When testing simple code needs awkward setup, put that complexity in the
