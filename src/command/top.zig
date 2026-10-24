@@ -29,8 +29,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\file's top — what sits between its two 🔝 — so that is what joins
         \\a ledger it is written into.
         \\
-        \\  m8 top @tight-docs | m8 @mathy -- "tidy the README"
-        \\  { m8 top @tight-docs; m8 ref @mathy "tidy the README"; } | m8 send
+        \\  m8 top :demo/tight-docs | m8 :demo/mathy -- "tidy the README"
+        \\  { m8 top :demo/tight-docs; m8 ref :demo/mathy "tidy the README"; } | m8 send
         \\
         \\It goes straight to the agent's own file. A chat has no top, and
         \\neither has a model.

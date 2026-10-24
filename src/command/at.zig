@@ -1,18 +1,16 @@
 //! `at` — the pipeline written once.
 //!
-//!     m8 at [-p] [-v] @ADDRESS [PROMPT]
+//!     m8 at [-p] [-v] :MOB/AGENT [PROMPT]
 //!
-//!     m8 ref --piped @ADDRESS WORDS | m8 send | m8 tag @ADDRESS
-//!     m8 reset --to @ADDRESS @
+//!     m8 ref --piped :MOB/AGENT WORDS | m8 send | m8 tag :MOB/AGENT
 //!
 //! is what this does, and it is kept exactly that: the same assembly, the
-//! same run, the same tag, and the main chat left following what was talked
-//! to. The one difference is that it is one process, so the reply is shown
+//! same run and the same tag. The one difference is that it is one process, so the reply is shown
 //! as it arrives and tagged as it goes — a turn for every model call and
 //! every tool call, each naming the one before — rather than once there is a
 //! whole run to keep.
 //!
-//! This is the only place the main chat follows along. A trailing `:` is
+//! A trailing `:` is
 //! `--no-advance`, a trailing `-` is `m8 reset`, and a trailing `--` is
 //! `m8 reset --new`; a document piped in follows the address as it is.
 //!
@@ -55,7 +53,7 @@ fn run(given: Ctx) !u8 {
     while (args.len > 0) : (args = args[1..]) {
         if (std.mem.eql(u8, args[0], "-p")) pretty = true else if (std.mem.eql(u8, args[0], "-v")) verbosity = 1 else if (std.mem.eql(u8, args[0], "-vv")) verbosity = 2 else break;
     }
-    var word: []const u8 = "@";
+    var word: []const u8 = "";
     if (args.len > 0 and address.isAddress(args[0])) {
         word = args[0];
         args = args[1..];
@@ -90,7 +88,6 @@ fn run(given: Ctx) !u8 {
             try address.renew(arena, io, dirs, a)
         else
             try address.reset(arena, io, dirs, a);
-        try address.follow(arena, io, dirs, .{ .kind = .main }, a);
         return 0;
     }
 
@@ -137,10 +134,9 @@ fn run(given: Ctx) !u8 {
         .io = io,
         .dirs = dirs,
         .a = a,
-        .moving = .{ .mover = .prompt },
         .home = try address.home(arena, io, dirs, a, lead[0].value),
     };
-    const turn = try converse.run(inner, .{ .keep = keeping.keeper(), .verbosity = verbosity });
+    const turn = try converse.run(inner, .{ .owner = a.name, .keep = keeping.keeper(), .verbosity = verbosity });
     const kept = try keeping.finish(turn);
 
     try ctx.out.writeByte('\n');
@@ -204,15 +200,15 @@ fn readTerminalPrompt(
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 at [-p] [-v] @AGENT[:|-|--] ["PROMPT"]
+        \\  m8 at [-p] [-v] :MOB/AGENT[:|-|--] ["PROMPT"]
         \\
         \\Sends PROMPT, one argument taken as it is, or stdin. `-p` renders and
         \\streams the reply even when stdout is not a terminal. `-v` says on
         \\stderr what the run is doing: a thought opening, a tool called.
         \\
-        \\@mathy talks to mathy's own chat, and moves it on. A plain @ carries
-        \\on whichever chat was talked to last. A chat under an agent is a fork
-        \\of it, `:` asks without moving anything, `-` resets to its parent,
+        \\:demo/mathy talks to mathy's own chat and moves only that chat.
+        \\A subchat is a fork; `:` asks without advancing it, `-` resets it
+        \\to its parent,
         \\and `--` starts from its agent instead.
         \\
     );

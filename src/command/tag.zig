@@ -6,9 +6,7 @@
 //! out is the 🧠 of the turn now pointed at, and nothing else — it is a ref
 //! being written, and the line is its receipt.
 //!
-//! It moves what it names. The main chat is moved by naming it, and by the
-//! `@` prompt, and by nothing else — so an agent run from a tool keeps its
-//! own chats without taking over whoever is at the terminal.
+//! Only the explicitly addressed chat moves.
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
@@ -28,27 +26,21 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 tag [--no-advance] @ADDRESS
+        \\  m8 tag [--no-advance] :MOB/AGENT
         \\
         \\A document that is one 🧠 names a turn already, so the address is
         \\pointed at it and nothing is written. Anything else is kept as a new
         \\turn and pointed at. What comes out is the 🧠 now pointed at.
         \\
-        \\  m8 ref @mathy "hi" | m8 send | m8 tag @mathy    carry mathy on
-        \\  m8 ref @mathy | m8 tag @mathy/aside             fork a chat
-        \\  m8 ref @ "hi" | m8 send | m8 tag @mathy/other   keep a run elsewhere
+        \\  m8 ref :demo/mathy "hi" | m8 send | m8 tag :demo/mathy    carry mathy on
+        \\  m8 ref :demo/mathy | m8 tag :demo/mathy//aside             fork a chat
+        \\  m8 ref :demo/mathy "hi" | m8 send | m8 tag :demo/mathy//other   keep a run elsewhere
         \\
-        \\  @chat     the turn goes in the chat's +/, and the chat points at it
-        \\  @         the chat the main chat follows, as above; or, when it
-        \\            names a turn, the main chat itself
-        \\  @turn     the turn goes beside its parent, and nothing is pointed
-        \\  @/model   at it
+        \\  :demo/agent//chat  the turn goes in the chat, and its pointer advances
+        \\  :MOB/AGENT/+/TURN   a turn goes beside its parent
         \\
         \\`--no-advance` keeps the turn where it would have gone and moves
         \\nothing, which is what a side question is.
-        \\
-        \\Only `@` moves the main chat. `m8 reset --to @chat @` puts it on a
-        \\chat, which is what `m8 @chat` does as it goes.
         \\
     );
 }
@@ -61,7 +53,7 @@ fn run(ctx: Ctx) !u8 {
         args = args[1..];
     }
     if (args.len != 1 or !address.isAddress(args[0])) {
-        try ctx.err.writeAll("m8 tag: name one @ADDRESS to point, after `--no-advance` if nothing is to move\n");
+        try ctx.err.writeAll("m8 tag: name one :MOB/AGENT to point, after `--no-advance` if nothing is to move\n");
         return 1;
     }
     const dirs = try config.discover(ctx.arena, ctx.io, ctx.env);

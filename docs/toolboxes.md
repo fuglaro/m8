@@ -60,7 +60,9 @@ parameters.
 ## Returning image and file records
 
 A `bash records` tool returns m8 records. For example, after preparing a JPEG
-for the selected provider's upload command:
+for the selected provider's upload command, keep it under
+`$M8_MOB_DIR/.uploads/`. Tools share the mob's persistent `TMPDIR`
+workspace (`.mob-space/`) across calls:
 
 ```bash
 printf '* :link::%s\n  > <%s (%s)\n' "$M8_CALL_ID" "$part" "$hash"

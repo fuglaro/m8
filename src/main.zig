@@ -1,16 +1,14 @@
 //! m8 — a composable shell harness.
 //!
-//!     m8 [@ADDRESS[:|-|--] [-p] [-v] [-- PROMPT]]
+//!     m8 [:MOB/AGENT[:|-|--] [-p] [-v] [-- PROMPT]]
 //!     m8 COMMAND [ARGS]
 //!
-//! `@` is how the command line names an address, and it sits where a command
-//! would: `m8 @x -p -- hi there` is `m8 at -p @x "hi there"`, and a bare `m8`
-//! is `m8 at @`, the main
-//! chat. A prompt follows `--`, its words joined into the one argument `at`
-//! takes, so nothing has to arbitrate between m8's arguments and yours.
+//! `:MOB/AGENT` sits where a command would. Address shorthand supplies `at`
+//! with one prompt argument after `--`; a bare `m8` shows the overview.
+//! There is no implicit/global chat selection.
 //!
 //! Every command is `m8 COMMAND ARGS` with stdin, and resolves whatever it
-//! names itself: `m8 ref @mathy`. So there is one kind of command, and `at`
+//! names itself: `m8 ref :demo/mathy`. So there is one kind of command, and `at`
 //! is the pipeline of them written once.
 //!
 //! `--help` is a process-level option: `m8 --help` is the overview and
@@ -41,38 +39,38 @@ fn overview(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 - the composable agentic shell harness
         \\
-        \\  m8 @AGENT[:|-|--] [-p] [-v] [-- REQUEST_MESSAGE]
+        \\  m8 :MOB/AGENT[:|-|--] [-p] [-v] [-- REQUEST_MESSAGE]
         \\  m8 COMMAND [ARGS]
         \\
-        \\@AGENT sends a REQUEST_MESSAGE or stdin, and is short for `m8 at`.
+        \\:MOB/AGENT sends a REQUEST_MESSAGE or stdin, and is short for `m8 at`.
         \\Put `--` before a request supplied as command-line arguments. `-p`
         \\renders and streams the reply even when stdout is not a terminal.
         \\`-v` says on stderr what the run is doing: a thought opening, a tool
         \\called.
         \\
-        \\@mathy talks to mathy's own chat, and moves it on. A plain m8 carries
-        \\on whichever chat was talked to last. A chat under an agent is a fork
-        \\of it, `:` asks without moving anything, `-` resets to its parent, and
-        \\`--` starts from its agent instead. The prompt separator is a separate
-        \\`--` after the address.
+        \\:demo/mathy talks to that agent's own chat and moves it on.
+        \\An address is always explicit: bare m8 shows this page, not a chat.
+        \\A subchat forks from its parent; `:` asks without advancing it,
+        \\`-` resets to its parent, and `--` resets to its authored agent.
+        \\The prompt separator is a separate `--` after the address.
         \\
         \\An address alone at a terminal opens the `tui` core/config.json names,
         \\with the address after it. With none named it is riff, sending each
-        \\message with `m8 at -p -v @AGENT`.
+        \\message with `m8 at -p -v :MOB/AGENT`.
         \\
-        \\  m8 @mathy -- "Tell me about the Riemann Sphere."
-        \\  m8 @ -- "Tell me more."
-        \\  m8 @mathy/aside -- "A different thought."
+        \\  m8 :demo/mathy -- "Tell me about the Riemann Sphere."
+        \\  m8 :demo/mathy -- "Tell me more."
+        \\  m8 :demo/mathy//aside -- "A different thought."
         \\
         \\Every command reads stdin and writes stdout, so the same thing is a
         \\pipeline too. A command writes markdown whatever stdout is, and takes
-        \\options where `@` takes marks:
+        \\options where address shorthand takes marks:
         \\
-        \\  m8 ref @ "And in one sentence?" | m8 send | m8 tag @
-        \\  m8 ref @mathy | m8 encode openai-completions >request.json
-        \\  m8 query @mathy "And in one sentence?"
+        \\  m8 ref :demo/mathy "And in one sentence?" | m8 send | m8 tag :demo/mathy
+        \\  m8 ref :demo/mathy | m8 encode openai-completions >request.json
+        \\  m8 query :demo/mathy "And in one sentence?"
         \\
-        \\A provider is an entry in core/providers.json. Its `cmd`, `encode`,
+        \\A provider is a file core/providers/NAME.json. Its `cmd`, `encode`,
         \\`parse` and `models` are commands, and every other string in it
         \\reaches them as M8_PROVIDER_*: `url` as M8_PROVIDER_URL.
         \\
@@ -131,11 +129,23 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
 
-    // An address, or nothing at all, is shorthand for `at`. Its grammar is
+    // An explicit address is shorthand for `at`. Its grammar is
     // resolved here so that `at` stays one plain form.
     var line: []const []const u8 = @ptrCast(args);
-    if (line.len == 0 or address.isAddress(line[0])) {
-        const word: []const u8 = if (line.len > 0) line[0] else "@";
+    if (line.len == 0) {
+        try overview(out);
+        try siblings(io, arena, init.environ_map, self, out);
+        try out.flush();
+        return 0;
+    }
+    if (address.isAddress(line[0])) {
+        const word: []const u8 = line[0];
+        const body = address.body(word) orelse "";
+        if (body.len == 0 or std.mem.eql(u8, body, ":") or std.mem.eql(u8, body, "-") or std.mem.eql(u8, body, "--")) {
+            try err.writeAll("m8: address must name a mob/agent; there is no main chat\n");
+            try err.flush();
+            return 1;
+        }
         if (line.len <= 1 and !std.mem.endsWith(u8, word, "-") and
             try std.Io.File.stdin().isTty(io) and try std.Io.File.stdout().isTty(io))
         tui: {
@@ -275,17 +285,17 @@ test "interactive preflight rejects unknown agents and missing turns, but permit
     const dirs = [_][]const u8{dir};
     var err: std.Io.Writer.Allocating = .init(arena);
 
-    try testing.expectError(error.Said, address.typed(arena, io, &dirs, "@nobody", &err.writer));
-    try testing.expect(std.mem.indexOf(u8, err.written(), "no agent named 'nobody'") != null);
+    try testing.expectError(error.Said, address.typed(arena, io, config.Dirs{ .roots = &dirs }, ":mob/nobody", &err.writer));
+    try testing.expect(std.mem.indexOf(u8, err.written(), "no agent named 'mob/nobody'") != null);
 
     err.clearRetainingCapacity();
-    const missing = try address.typed(arena, io, &dirs, "@mob/agent/+/missing", &err.writer);
-    try testing.expectError(error.Said, address.found(arena, io, &dirs, missing, &err.writer));
+    const missing = try address.typed(arena, io, config.Dirs{ .roots = &dirs }, ":mob/agent/+/missing", &err.writer);
+    try testing.expectError(error.Said, address.found(arena, io, config.Dirs{ .roots = &dirs }, missing, &err.writer));
     try testing.expect(std.mem.indexOf(u8, err.written(), "no turn named 'mob/agent/+/missing'") != null);
 
     err.clearRetainingCapacity();
-    const chat = try address.typed(arena, io, &dirs, "@mob/agent/new-chat", &err.writer);
-    _ = try address.found(arena, io, &dirs, chat, &err.writer);
+    const chat = try address.typed(arena, io, config.Dirs{ .roots = &dirs }, ":mob/agent//new-chat", &err.writer);
+    _ = try address.found(arena, io, config.Dirs{ .roots = &dirs }, chat, &err.writer);
     try testing.expectEqualStrings("", err.written());
 }
 

@@ -1,0 +1,30 @@
+{
+  "cmd": [
+    "m8",
+    "url-provider"
+  ],
+  "encode": [
+    "m8",
+    "encode",
+    "openai-responses"
+  ],
+  "parse": [
+    "m8",
+    "parse",
+    "openai-responses"
+  ],
+  "url": "https://chatgpt.com/backend-api/codex/responses",
+  "upload": "# Emit MIME data:MIME;base64,BYTES NAME \np=${1% (*} h=${1##* (} h=${h%)}; n=${p##*/}\ncase $n in\n  *.jpeg|*.jpg) m=image/jpeg ;; *.png) m=image/png ;; *.gif) m=image/gif ;;\n  *.webp) m=image/webp ;; *.pdf) m=application/pdf ;;\n  *) echo \"upload: no type for $n\" >&2; exit 1 ;;\nesac\ncase $p in /*) f=$p ;; *) f=$M8_MOB_ST8_DIR/$p ;; esac\nbefore=$(stat -f '%d:%i:%z:%m:%c' -- \"$f\") || exit\n[ \"$(shasum -a 256 <\"$f\" | cut -c1-64)\" = \"$h\" ] || { echo \"upload: $p is not the file linked\" >&2; exit 1; }\nprintf '%s data:%s;base64,' $m $m; base64 <\"$f\" | tr -d '\\n'; printf ' %s' \"$n\"\nafter=$(stat -f '%d:%i:%z:%m:%c' -- \"$f\") || exit\n[ \"$before\" = \"$after\" ] || { echo \"upload: $p changed while encoding\" >&2; exit 1; }",
+  "models-url": "https://chatgpt.com/backend-api/codex/models?client_version=999.0.0",
+  "models": [
+    "sh",
+    "-c",
+    "\"$M8\" url-provider --get \"$M8_PROVIDER_MODELS_URL\" | tr ',' '\\n' | sed -n 's/.*\"slug\" *: *\"\\([^\"]*\\)\".*/\\1/p'"
+  ],
+  "header-authorization": "a=$HOME/.codex/auth.json\ng() { sed -n \"s/.*\\\"$1\\\" *: *\\\"\\([^\\\"]*\\)\\\".*/\\1/p\"; }\n[ -r \"$a\" ] || { echo \"codex: no $a - run 'codex login' first\" >&2; exit 1; }\nif [ -n \"$(find \"$a\" -mmin +40)\" ]; then\n  p=$(g access_token <\"$a\" | cut -d. -f2 | tr -- '-_' '+/')\n  while [ $((${#p} % 4)) -ne 0 ]; do p=\"$p=\"; done\n  c=$(printf %s \"$p\" | base64 --decode 2>/dev/null | g client_id)\n  r=$(curl -s --max-time 10 https://auth.openai.com/oauth/token -H content-type:application/json -d \"{\\\"client_id\\\":\\\"$c\\\",\\\"grant_type\\\":\\\"refresh_token\\\",\\\"refresh_token\\\":\\\"$(g refresh_token <\"$a\")\\\"}\")\n  t=$(printf %s \"$r\" | g access_token)\n  if [ -n \"$t\" ]; then\n    (umask 077; sed -e \"s|\\\"access_token\\\": \\\"[^\\\"]*\\\"|\\\"access_token\\\": \\\"$t\\\"|\" -e \"s|\\\"id_token\\\": \\\"[^\\\"]*\\\"|\\\"id_token\\\": \\\"$(printf %s \"$r\" | g id_token)\\\"|\" -e \"s|\\\"refresh_token\\\": \\\"[^\\\"]*\\\"|\\\"refresh_token\\\": \\\"$(printf %s \"$r\" | g refresh_token)\\\"|\" \"$a\" >\"$a.m8\") && mv \"$a.m8\" \"$a\"\n  else\n    echo \"codex: could not refresh the token - run 'codex login' again\" >&2\n  fi\nfi\nt=$(g access_token <\"$a\")\n[ -n \"$t\" ] || { echo \"codex: no access token in $a - run 'codex login'\" >&2; exit 1; }\necho \"Bearer $t\"",
+  "header-chatgpt-account-id": "sed -n 's/.*\"account_id\" *: *\"\\([^\"]*\\)\".*/\\1/p' \"$HOME/.codex/auth.json\" 2>/dev/null",
+  "header-session-id": "d=$PWD; while [ \"$d\" != / ] && [ ! -d \"$d/.m8-st8\" ]; do d=$(dirname \"$d\"); done\nprintf %s \"$d\" | { shasum 2>/dev/null || sha1sum; } | sed 's/^\\(.\\{8\\}\\)\\(.\\{4\\}\\)\\(.\\{4\\}\\)\\(.\\{4\\}\\)\\(.\\{12\\}\\).*/\\1-\\2-\\3-\\4-\\5/'",
+  "header-originator": "echo m8",
+  "header-openai-beta": "echo responses=experimental",
+  "header-accept": "echo text/event-stream"
+}

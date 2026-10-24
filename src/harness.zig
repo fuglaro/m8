@@ -177,16 +177,18 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
         error.TopUnclosed => try err.writeAll(
             "m8: a top was opened and nothing closed it\n",
         ),
-        error.UnknownProvider => try err.writeAll("m8: no provider in providers.json by that name\n"),
+        error.UnknownProvider => try err.writeAll("m8: no core/providers/NAME.json for that provider\n"),
         error.NoModel => try err.writeAll("m8: nothing in that ledger names a model\n"),
         error.BadSignature => try err.writeAll("m8: a 🔏 is followed by its signature as one code span\n"),
         error.NoProvider => try err.writeAll(
             "m8: that ledger names a model but not whose; write it /PROVIDER/MODEL\n",
         ),
-        error.NoMainChat => try err.writeAll("m8: pick an agent with `m8 @agent`\n"),
+        error.InvalidName => try err.writeAll("m8: name an explicit mob/agent path; components cannot be empty or start with a period; use mob/agent//chat for subchats and /+/TURN for turns\n"),
+        error.CrossMobReference => try err.writeAll("m8: document references must stay inside their activated mob\n"),
+        error.NoDataHome => try err.writeAll("m8: set HOME or XDG_DATA_HOME for writable user/system mob state\n"),
         error.BadTui => try err.writeAll("m8: tui in core/config.json is a list of words, the command first\n"),
         error.NothingToReset => try err.writeAll(
-            "m8: only a chat resets; the main chat, a turn and a model have no parent to go back to\n",
+            "m8: only an explicitly addressed chat can be reset\n",
         ),
         error.FollowLoops => try err.writeAll(
             "m8: that would have a chat follow something that leads back to it\n",

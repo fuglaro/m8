@@ -33,13 +33,13 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 watch [--unsnip] @CHAT
+        \\  m8 watch [--unsnip] :MOB/AGENT//CHAT
         \\
         \\Writes what the chat holds, and then whatever is added to it, until
         \\it is interrupted. It is how to look on at a chat something else is
         \\running, such as one an agent hands its work to.
         \\
-        \\  m8 watch @crew/cody/delegated
+        \\  m8 watch :crew/cody//delegated
         \\
         \\Each piece opens with the 🧠 it continues: the turn before it, or
         \\the agent when the chat starts afresh. A chat that is reset starts
@@ -64,7 +64,7 @@ fn run(ctx: Ctx) !u8 {
     const unsnip = args.len > 0 and std.mem.eql(u8, args[0], "--unsnip");
     if (unsnip) args = args[1..];
     if (args.len != 1 or !address.isAddress(args[0])) {
-        try ctx.err.writeAll("m8 watch: name one @CHAT\n");
+        try ctx.err.writeAll("m8 watch: name one :MOB/AGENT//CHAT\n");
         return 1;
     }
     const dirs = try config.discover(ctx.arena, ctx.io, ctx.env);

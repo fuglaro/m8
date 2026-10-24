@@ -39,7 +39,7 @@ pub const Error = error{
 pub fn handOver(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     env: *const std.process.Environ.Map,
     records: []const doc.Record,
 ) ![]const doc.Record {
@@ -67,13 +67,13 @@ pub fn handOver(
 fn upload(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     env: *const std.process.Environ.Map,
     cmd: []const u8,
     named: []const u8,
 ) ![]const u8 {
     var child = try std.process.spawn(io, .{
-        .argv = &.{ "sh", "-c", cmd, "m8 upload", named, config.saveDir(dirs) orelse "" },
+        .argv = &.{ "sh", "-c", cmd, "m8 upload", named, env.get("M8_MOB_ST8_DIR") orelse config.saveDir(dirs) orelse "" },
         .environ_map = env,
         .stdin = .ignore,
         .stdout = .pipe,
@@ -105,7 +105,7 @@ test "an upload inherits the selected provider name" {
     try env.put(upload_var, "printf 'image/jpeg %s' \"$M8_PROVIDER_NAME\"");
     try env.put("M8_PROVIDER_NAME", "local");
     const records = [_]doc.Record{.{ .sigil = .link, .value = "c1", .content = "<file.jpg" }};
-    const got = try handOver(arena, threaded.io(), &.{"/kept"}, &env, &records);
+    const got = try handOver(arena, threaded.io(), config.Dirs{ .roots = &.{"/kept"} }, &env, &records);
     try testing.expectEqualStrings(">image/jpeg local", got[0].content.?);
 }
 
@@ -114,7 +114,7 @@ fn testHand(arena: Allocator, io: std.Io, cmd: ?[]const u8, content: []const u8)
     var env: std.process.Environ.Map = .init(arena);
     if (cmd) |c| try env.put(upload_var, c);
     const records = [_]doc.Record{.{ .sigil = .link, .value = "c1", .content = content }};
-    const got = try handOver(arena, io, &.{"/kept"}, &env, &records);
+    const got = try handOver(arena, io, config.Dirs{ .roots = &.{"/kept"} }, &env, &records);
     return got[0].content.?;
 }
 

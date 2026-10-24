@@ -1,0 +1,11 @@
+{
+  "cmd": [
+    "m8",
+    "toy-provider"
+  ],
+  "models": [
+    "m8",
+    "toy-provider",
+    "--models"
+  ]
+}

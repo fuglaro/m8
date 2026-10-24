@@ -1,7 +1,7 @@
 //! What an api is.
 //!
 //! A codec is a name, the path it lives at, and the two directions between a
-//! ledger and a wire format. The name is the one written in `providers.json`
+//! ledger and a wire format. The name is the one written in `core/providers/NAME.json`
 //! and the one typed at `m8 encode`, because they are the same thing — there
 //! is no second table mapping one to the other.
 //!

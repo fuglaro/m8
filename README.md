@@ -4,18 +4,18 @@
 The command-line-first agentic harness - fully embracing the shell.
 
 ```
-fuglaro@localhost> m8 @pagey -- 'One word -> do you like Haiku?'
+fuglaro@localhost> m8 :demo/pagey -- 'One word -> do you like Haiku?'
 ▐ 🤖:
 │ Yes.
 
-▐ 🧠:pagey/+/swlyayqtjk
-fuglaro@localhost> m8 @ -- 'Throw me a quick one please.'
+▐ 🧠:demo/pagey/+/swlyayqtjk
+fuglaro@localhost> m8 :demo/pagey -- 'Throw me a quick one please.'
 ▐ 🤖:
 │ Moonlight on still ponds
 │ Crickets stitch the dark with song
 │ Dawn waits behind hills
 
-▐ 🧠:pagey/+/psbarddrym
+▐ 🧠:demo/pagey/+/psbarddrym
 fuglaro@localhost>
 ```
 
@@ -208,7 +208,7 @@ still opens.
 Provider abstraction is the most rebuilt code in the
 field, so m8 does not have one. A provider is a command
 that reads a request and writes a response.
-`core/providers.json` is the whole of the configuration,
+`core/providers/NAME.json` is the whole of the configuration,
 and reaching a url is one such command rather than the
 privileged path.
 
@@ -223,8 +223,7 @@ a program that reads a request and writes a response. So
 what m8 can do is what your machine can run, and that
 was true on the first day.
 
-The proof is already in the tree. `m8
-@/toy/Z-Machine/zork1` holds a conversation with a
+The proof is already in the tree. `m8 :games/zork` holds a conversation with a
 1979 Infocom story file, through the same ledger, the
 same records and the same forking as any model. m8 needs
 no concept of a game. The chat is the save file and
@@ -464,34 +463,34 @@ relitigating them.
 ## Commands
 
 ```bash
-m8 [@ADDRESS[:|-|--] [-p] [-v] [-- PROMPT]]
+m8 [:MOB/AGENT[:|-|--] [-p] [-v] [-- PROMPT]]
 m8 COMMAND [ARGS]
 ```
 
 ```bash
-m8 @mathy -- "Tell me about the Riemann Sphere\nin detail."
-m8 @ -- "Tell me more."
-m8 @mathy/aside -- "And what about the Möbius strip?"
+m8 :demo/mathy -- "Tell me about the Riemann Sphere\nin detail."
+m8 :demo/pagey -- "Tell me more."
+m8 :demo/mathy//aside -- "And what about the Möbius strip?"
 ```
 
 ```bash
-echo "Tell me about the Riemann Sphere\nin detail." | m8 @mathy
+echo "Tell me about the Riemann Sphere\nin detail." | m8 :demo/mathy
 ```
 ```
 ▐ 🤖:
 │ The Riemann Sphere is a ...
 
-▐ 🧠:mathy/+/tduyxbutjb
+▐ 🧠:demo/mathy/+/tduyxbutjb
 ```
 
 The reply went to a tty, so it is rendered. The turn
 it saved is a file, so it is markdown:
 
 ```bash
-cat ".m8-st8/+/mathy/+/tduyxbutjb.md"
+cat ".m8-st8/mobs/demo/.chats/mathy/+/tduyxbutjb.md"
 ```
 ```
-* :brain::mathy
+* :brain::demo/mathy
 
 * :raising_hand::
   > Tell me about the Riemann Sphere
@@ -502,105 +501,56 @@ cat ".m8-st8/+/mathy/+/tduyxbutjb.md"
 ```
 
 ```bash
-m8 @mathy/+/tduyxbutjb -- "Tell me more."
+m8 :demo/mathy/+/tduyxbutjb -- "Tell me more."
 ```
 ```
 ▐ 🤖:
 │ Additionally,
 │ ...
 
-▐ 🧠:mathy/+/ypfpkuimzg
+▐ 🧠:demo/mathy/+/ypfpkuimzg
 ```
 
-* `@` sits where a command would, and is short for one.
-  A prompt supplied as arguments follows `--`, and its
-  words are joined with a space, so nothing has to
-  arbitrate between m8's arguments and yours.
-  `m8 @mathy -p -- tell me` is `m8 at -p @mathy "tell me"`:
-  `at` takes its options before the address and the
-  prompt as one argument.
-* A bare `m8` is `m8 @`, the main chat — whichever chat
-  was talked to last.
-* An address is a chat, a turn or a model:
+* `:MOB/AGENT` sits where a command would and is shorthand for `at`.
+  A prompt supplied as arguments follows `--`; its words are joined with a
+  space. `m8 :demo/mathy -p -- tell me` is
+  `m8 at -p :demo/mathy "tell me"`.
+* A bare `m8` shows help. There is no global/default chat and no `@` address.
+* An address explicitly names an agent's chat, a subchat, or an immutable turn:
   ```
-  @                   the main chat
-  @mathy              mathy's own chat
-  @mathy/aside        a chat under it, as deep as chats go
-  @mathy/+/tduyxbutjb a turn
-  @/local/tiny        a model
+  :demo/mathy                         that agent's own chat
+  :demo/utils/mathy                   a nested authored agent's own chat
+  :demo/mathy//aside                  a subchat
+  :demo/mathy/+/tduyxbutjb             a turn in the agent's own chat
+  :demo/mathy//aside/+/tduyxbutjb      a turn in the subchat
   ```
-* `:brain:` and 🧠 mark an address as well as `@` does,
-  so a 🧠 line pasted back in names what it printed.
-* A trailing `:` asks without moving anything, which is
-  what a side question is. A trailing `-` resets a chat,
-  makes that fresh chat the main chat, and reads as its
-  parent again; only a chat has a parent to go back to.
-  A trailing `--` is the `reset --new` form: it resets the
-  chat to its agent, whatever its parent chat has got to,
-  and makes that chat the main chat. The suffix is attached
-  to the address, as in `m8 @mathy/aside--`; the separate
-  `--` after an address remains the prompt separator.
-* It is a pipeline written once. `m8 @mathy -- hi` is
-  `m8 ref @mathy hi | m8 send | m8 tag @mathy` and then
-  `m8 reset --to @mathy @`, except that the reply is
-  shown as it arrives and tagged as it goes. See
-  Composing and Turns and chats.
-* It is the shorthand, and every part of it has a plain
-  form underneath.
-  * `:`, `-` and an address-attached `--` are marks a person types;
-    a separate `--` is the prompt separator.
-  * A command takes a message as one argument, `--no-advance`
-    for `:`, and `m8 reset` (with `--new` for address-attached `--`)
-    for the reset forms.
-  * So a tool calling an agent passes parameters, and
-    carries no mark through one.
-* What an address reads as is appended as the 🧠 it
-  settles on — the turn a chat has got to, never the
-  chat — so a saved turn names its parent instead of
-  copying it, and never names something that moves.
-  Expanding happens in whichever command needs it.
-* 🧠 names an agent, and naming one is how you use it.
-  Agents are identified by their file under `@/`, so
-  nothing declares its own name. `@` is how the command
-  line names one; it is not part of the language.
-* Names are paths and the folder part is the mob. See
-  Mobs.
-* 🧠 names an agent, unless it is written with a leading `/`,
-  which names a model: `/local/Bonsai-8B,max_output_tokens:8192`.
-  The mark is the whole of the distinction — nothing is looked
-  up to decide it — so a name that is missing is a missing
-  agent rather than a model nobody configured. On the command
-  line that is `m8 @/local/Bonsai-8B`. See Models.
-* Saving is to the nearest existing m8 config folder.
-* If a tty is connected, interactive mode is activated,
-  which renders the reply. Everything else is written as
-  markdown.
-  * Either way the reply is written as it arrives, so
-    `m8 @x | m8 render` is as live as a terminal.
-* `-p` after the address is pretty: the reply is rendered and
-  streamed whatever stdout is, under the 🙋 it answers.
-  * It is for whatever stands between m8 and a terminal.
-  * `m8 riff` is one. See Riffing.
-* Only `m8 @` asks what stdout is.
-  * Every command writes markdown to a terminal and a pipe
-    alike, so it is one command and not two.
-  * `m8 render` is the rendered spelling for any document:
-    `m8 ref @mathy | m8 encode | m8 render | less -R`.
-* A rendered 📜, 🤖, 💭 or 📲 is highlighted as markdown.
-  * A provider handing over text that is not markdown indents
-    it four spaces, and it is shown as it is.
-  * A line wider than the terminal is broken, carrying its
-    quote and indent.
-  * Nothing is left out, so it is a highlighter rather
-    than a renderer.
-* `-v` after the address is verbose: a line on stderr for
-  what the run is doing.
-  * `💭 ` and the opening of a thought, said once.
-  * `📲` and a call, as `name(argument=value,…)`.
-  * Each is one line, cut where it gets long, and stays
-    the last thing said until the next.
-  * A thought kept aside as a snip is not said.
-* A first word that is not an address names a command.
+* `:brain:` and 🧠 also mark an address, so a printed reference can be pasted back.
+* A trailing `:` asks without advancing the chat. `-` resets it to its parent;
+  `--` resets it to its authored agent, regardless of its parent's head.
+  The separate `--` after an address remains the prompt separator.
+* `m8 :demo/mathy -- hi` is the one-process form of
+  `m8 ref :demo/mathy hi | m8 send | m8 tag :demo/mathy`, with replies
+  streamed and progress kept incrementally. No other chat is implicitly moved.
+* Every agent belongs to one mob: `mobs/demo/mathy.md`. Agent definitions may
+  nest, for example `mobs/demo/utils/mathy.md`, and path components cannot start
+  with a period. `//` separates an authored agent path from a subchat path;
+  `/+/TURN` names an immutable turn within either the main chat or a subchat.
+  References inside a document stay in that mob at its selected storage layer.
+* A 🧠 with a leading `/` names a model rather than an agent, for example
+  `/local/Bonsai-8B,max_output_tokens:8192`. Put it in an agent definition
+  to give it an address and a chat. See Models.
+* State is written to the selected mob's storage, not the nearest arbitrary
+  config folder. See Configs.
+* At a terminal, an address alone opens the configured UI. `-p` renders and
+  streams a single submission even through a pipe. Ordinary filters always
+  write markdown; `m8 render` gives any document its rendered spelling.
+  * Rendered 📜, 🤖, 💭 and 📲 text is highlighted as markdown, without
+    leaving anything out. Non-markdown text indented four spaces is shown as is.
+    Wide lines wrap with their quote and indent carried along.
+* `-v` reports progress on stderr; `-vv` reports more detail.
+  * `💭` shows the opening of a thought once; `📲` shows a tool call as
+    `name(argument=value,…)`. Each is one line, cut where it gets long,
+    and stays the last thing said until the next. Snipped thoughts are omitted.
 
 Every command has a page:
 
@@ -613,7 +563,7 @@ m8 munge --help            one tool and all its operations
 A leading `--help` is m8's rather than any command's, so no
 command has to parse it and no two answer it differently.
 It is the only help option; `-h` remains an ordinary argument.
-The words after an `@` are prose after the required `--`, so a
+The words after an address are prose after the required `--`, so a
 `--help` among them is said rather than read.
 
 A page you asked for is written to stdout, where it can
@@ -623,7 +573,7 @@ of a document.
 
 ### Assembling
 
-`m8 @ADDRESS` builds a ledger from three things: what
+`m8 :MOB/AGENT` builds a ledger from three things: what
 the address reads as, whatever was piped in, and the
 prompt, in that order.
 
@@ -643,15 +593,15 @@ somebody would have typed after the address — so it
 joins the prompt.
 
 ```bash
-cat notes.txt | m8 @ -- "Summarize:"               # one 🙋, prompt first
-echo "* :brain::/local/tiny" | m8 @mathy -- "Quickly?"
-m8 top @tight-docs | m8 @mathy -- "Tidy the README."
+cat notes.txt | m8 :demo/pagey -- "Summarize:"               # one 🙋, prompt first
+echo "* :brain::/local/tiny" | m8 :demo/mathy -- "Quickly?"
+m8 top :demo/tight-docs | m8 :demo/mathy -- "Tidy the README."
 ```
 
 Piping is not required, and neither is a prompt when
 something was piped. With neither, at a terminal, the
-address alone opens a conversation with it: `m8 @mathy`
-is `m8 riff m8 at -p -v @mathy`. See Riffing.
+address alone opens a conversation with it: `m8 :demo/mathy`
+is `m8 riff m8 at -p -v :demo/mathy`. See Riffing.
 
 What opens is the `tui` in `core/config.json`:
 
@@ -679,20 +629,20 @@ an error rather than a prompt.
 
 Every command reads stdin and writes stdout, and the
 ones that take an address resolve it themselves. So
-what `m8 @` does is a pipeline too, and each step can be
+what `m8 :MOB/AGENT` does is a pipeline too, and each step can be
 had on its own:
 
 ```bash
-m8 ref @mathy hi | m8 send | m8 tag @mathy      what m8 @mathy -- hi does
-m8 ref @mathy | m8 tag @mathy/aside             fork, with nothing said
-m8 ref @ hi | m8 send | m8 tag @mathy/other     keep a run somewhere else
-m8 ref @ | m8 encode >.m8-st8/@/notes.md        a chat, flattened into an agent
-m8 ref @mathy | m8 encode | m8 render           a chat, as a person reads it
-m8 query @critic/job "Review that."             the reply alone, as text
-m8 watch @crew/cody/delegated                   a chat, as it moves
+m8 ref :demo/mathy hi | m8 send | m8 tag :demo/mathy      what m8 :demo/mathy -- hi does
+m8 ref :demo/mathy | m8 tag :demo/mathy//aside             fork, with nothing said
+m8 ref :demo/mathy hi | m8 send | m8 tag :demo/mathy//other     keep a run somewhere else
+m8 ref :demo/mathy | m8 encode >.m8-st8/mobs/demo/notes.md        a chat, flattened into an agent
+m8 ref :demo/mathy | m8 encode | m8 render           a chat, as a person reads it
+m8 query :demo/critic//job "Review that."             the reply alone, as text
+m8 watch :crew/cody//delegated                   a chat, as it moves
 ```
 
-* `ref @X` writes the 🧠 that X reads as now.
+* `ref :MOB/AGENT` writes the 🧠 that X reads as now.
   * It names the turn rather than the chat, so it is a
     snapshot that stays put when the chat moves on.
   * It is a reference and not a copy, which is what lets
@@ -708,19 +658,19 @@ m8 watch @crew/cody/delegated                   a chat, as it moves
   as it arrived and whatever the run added. It keeps
   nothing, so one run can be kept wherever it is
   tagged, or nowhere.
-* `tag @X` keeps a turn and points X at it.
+* `tag :MOB/AGENT` keeps a turn and points X at it.
   * A document that is one 🧠 already names a turn and is
     pointed at without writing anything.
   * Anything else is kept as a new turn.
   * Its output is the 🧠 now pointed at, and nothing
     else — a ref was written, and that is its receipt.
   * `--no-advance` keeps the turn and moves nothing.
-* `reset @X` takes a chat's pointer away, so it reads as
+* `reset :MOB/AGENT` takes a chat's pointer away, so it reads as
   its parent again.
   * `--new` starts it from the agent it is under, whatever
     the chats above it have got to.
-  * `--to @Y` has it follow Y as named, unsettled:
-    `m8 reset --to @mathy @` puts the main chat on mathy.
+  * `--to :MOB/AGENT//CHAT` has it follow Y as named, unsettled:
+    `m8 reset --to :demo/mathy :demo/mathy//aside` has aside follow mathy.
   * Something that would lead back to itself is refused.
 * `tail` writes the last record of a document, or with
   `--sigil` the last of some kind.
@@ -738,7 +688,7 @@ m8 watch @crew/cody/delegated                   a chat, as it moves
   * `--no-highlight` writes no colour.
   * It writes as it reads, so it can sit at the end of
     anything still talking.
-* `query @X MESSAGE` is the pipeline written once more,
+* `query :MOB/AGENT MESSAGE` is the pipeline written once more,
   for whatever has parameters rather than a command line.
   * It says the message, runs, keeps the run, and writes
     the reply or the question as text.
@@ -748,7 +698,7 @@ m8 watch @crew/cody/delegated                   a chat, as it moves
     starts and whether anything moves.
   * `--no-store` keeps nothing, so nothing moves either.
   * `--piped` reads stdin as prose, as it does for `ref`.
-* `watch @X` writes a chat out as it moves, which is how to
+* `watch :MOB/AGENT` writes a chat out as it moves, which is how to
   look on at one something else is running.
   * Each piece opens with the 🧠 it continues.
   * A chat that is reset starts over under its agent's 🧠.
@@ -757,48 +707,41 @@ m8 watch @crew/cody/delegated                   a chat, as it moves
   * Only the chat's own pointer is read, so a chat with none
     is waited on rather than shown as the chat above it.
   * A snip stays the 🧠 that names it.
-* `top @X` is `ref`'s twin for 📚: it names a file for
+* `top :MOB/AGENT` is `ref`'s twin for 📚: it names a file for
   what it says about itself, and nothing else. See Tops.
 
 A document follows an address by being written after it,
 which is all a document needs:
 
 ```bash
-{ m8 ref @mathy hi; echo "* :brain::/local/tiny"; } | m8 send
-{ m8 top @tight-docs; m8 ref @mathy "Tidy the README."; } | m8 send
+{ m8 ref :demo/mathy hi; echo "* :brain::/local/tiny"; } | m8 send
+{ m8 top :demo/tight-docs; m8 ref :demo/mathy "Tidy the README."; } | m8 send
 ```
 
-What `m8 @X` writes ends on the 🧠 of the turn it kept,
+What `m8 :MOB/AGENT` writes ends on the 🧠 of the turn it kept,
 and `tail` is how that becomes what the next command is
 handed:
 
 ```bash
-m8 ref "@$(m8 @mathy -- hi | m8 tail --value)" "Review that." | m8 send
+m8 ref ":$(m8 :demo/mathy -- hi | m8 tail --value)" "Review that." | m8 send
 ```
 
 A turn `send` wrote was never kept and ends on no 🧠, so
 `tail --value` has nothing to hand on until it is tagged.
 
-The main chat follows the `@` prompt and nothing else. A
-command moves the chat it names, and moves the main chat
-only when `@` is what it names — so an agent run from a
-tool keeps its own chats and never takes over the
-conversation of whoever is at the terminal.
-
-Forking a chat is naming somewhere else to tag, and
-nothing more.
+Only the explicitly addressed chat moves. To resume it, name it again.
 
 ### Riffing
 
 ```bash
 m8 riff CMD [ARGS]         an editor pinned under CMD's output
-m8 @mathy                  at a terminal: m8 riff m8 at -p -v @mathy
+m8 :demo/mathy                  at a terminal: m8 riff m8 at -p -v :demo/mathy
 m8 riff -c python3 -i -u -q    one Python, a message at a time
 m8 riff -c -s 2 python3 -i -u -q    with its last error above its prompt
 ```
 
 `riff` is a conversation at a terminal, made of the command
-line rather than beside it. The `m8 @...` shorthand checks the
+line rather than beside it. The `m8 :MOB/AGENT` shorthand checks the
 address before opening the UI, so an unknown agent or missing
 turn is reported before you write a message.
 
@@ -888,12 +831,12 @@ name any of them. With no format named, `m8 encode` uses
 how a chat becomes one flat document.
 
 ```bash
-m8 ref @mathy | m8 encode m8
-m8 ref @mathy | m8 encode m8 >full-ledger-copy.md
+m8 ref :demo/mathy | m8 encode m8
+m8 ref :demo/mathy | m8 encode m8 >full-ledger-copy.md
 ```
 
 ```bash
-m8 ref @mathy | m8 encode openai-completions
+m8 ref :demo/mathy | m8 encode openai-completions
 m8 encode openai-completions <full-ledger-copy.md >openai.json
 ```
 
@@ -902,8 +845,8 @@ rather than expanding it, so what comes out is the ledger
 from there on.
 
 ```bash
-m8 ref @mathy | m8 encode --break mathy/+/tduyxbutjb
-m8 ref @mathy | m8 encode --break mathy     # the chat, without its agent
+m8 ref :demo/mathy | m8 encode --break mathy/+/tduyxbutjb
+m8 ref :demo/mathy | m8 encode --break mathy     # the chat, without its agent
 ```
 
 * NAME is what a 🧠 says: a turn, or an agent.
@@ -971,7 +914,7 @@ one. With it, the whole loop is something you can watch
 happen:
 
 ```bash
-m8 ref @mathy "Say hi." \
+m8 ref :demo/mathy "Say hi." \
   | m8 encode openai-responses \
   | M8_PROVIDER_URL=http://127.0.0.1:8000/v1/responses m8 url-provider \
   | m8 parse openai-responses
@@ -1524,13 +1467,13 @@ compact one-line thought "snip".
 ▐ 💭:snip
 │ 🔏`c2lnbmF0dXJl`
 
-▐ 🧠:mathy/+/snip-oniwhbxumk
+▐ 🧠:demo/mathy/+/snip-oniwhbxumk
 ```
 
 > * :thought_balloon::snip
 >   > :lock_with_ink_pen:`c2lnbmF0dXJl`
 >
-> * :brain::mathy/+/snip-oniwhbxumk
+> * :brain::demo/mathy/+/snip-oniwhbxumk
 
 A compact thought keeps its text on the header:
 
@@ -1553,7 +1496,7 @@ possible, and must interpret a value-only 💭 as thought text when reading it.
   * Reading a ledger gives a codec exactly what it wrote.
   * Keeping what was read keeps it aside again.
 * A snip goes beside the turn that names it, in its `+/`.
-* `m8 @` keeps one as it arrives.
+* `m8 :MOB/AGENT` keeps one as it arrives.
   * The 🧠 shown is the file written.
 * `m8 send` keeps nothing, so what it writes carries the `💭snip` whole.
   * `tag` writes the snip with the turn.
@@ -1596,7 +1539,7 @@ A 🔗 hands files to the model beside what a tool said.
   * An `upload` that skips the check trusts every tool's
     links, whatever they name.
 * Where a file lives, and whether it stays, is the tool's.
-  * `see` writes directly into `$M8_MOB_DIR/^/` as
+  * `see` writes directly into `$M8_MOB_DIR/.uploads/` as
     `see-STEM-CALL_ID.jpeg` (or `.pdf`), with the input's
     final extension removed from its filename to form `STEM`.
 * A tool writes its 🔗 itself, through `m8 call --no-wrap`.
@@ -1744,7 +1687,7 @@ about itself, rather than what it says.
 Two sigils reach into another file and the mark decides
 which half comes back. 🧠 wants what the file says; 📚
 wants what it says about itself. On the command line
-those are `m8 ref @` and `m8 top @`.
+those are `m8 ref :MOB/AGENT` and `m8 top :MOB/AGENT`.
 
 A file with no 🔝 is all body and has no top at all, so
 📚 naming one yields nothing rather than the whole of
@@ -2238,9 +2181,9 @@ invoked.
 m8 defines no shield. A name means what an agent, or
 something it includes, says it means.
 
-* `@/utils/shields.md` is an ordinary document holding
+* `mobs/demo/shields.md` is an ordinary document holding
   definitions and activating none of them.
-* An agent that wants them includes it with `🧠utils/shields`.
+* An agent that wants them includes it with `🧠demo/shields`.
 * A name nothing defines is refused, so a tool under one
   does not run.
 
@@ -2394,24 +2337,24 @@ One that cannot widen, whatever it includes or is asked
 to do:
 
 ```m8
-▐ 🧠:utils/shields
+▐ 🧠:demo/shields
 
 ▐ 🛡️:jail
 
-▐ 🧠:team/helpers
+▐ 🧠:demo/helpers
 
 ▐ 🧠:/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 ```
 
-> * :brain::utils/shields
+> * :brain::demo/shields
 >
 > * :shield::jail
 >
-> * :brain::team/helpers
+> * :brain::demo/helpers
 >
 > * :brain::/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 
-`team/helpers` may define whatever tools and shields it
+`demo/helpers` may define whatever tools and shields it
 likes, and whatever model: the one named last is the one
 that answers. They all run jailed, because activating adds and
 defining stacks, and neither can subtract. Nothing this
@@ -2463,9 +2406,9 @@ config, and neither can become the other.
   If something has to hold three processes deep, it
   needs to be one of those rather than a wrapper the
   tool could simply not call.
-* A mob you include can define tools and shields. That
-  is the point of a mob. Your floor is what makes it
-  safe to include one you have not read.
+* A definition included within your mob can define tools and shields.
+  Your floor is what makes that inclusion safe. Cross-mob document
+  references are not permitted; copy shared definitions into the mob.
 * `no-edit-m8-st8` protects the user's config and applicable registered config
   directories from tool writes. Unregistered configs are not trusted
   or included in the sandbox's config protection set.
@@ -2481,236 +2424,151 @@ config, and neither can become the other.
 
 ## Configs
 
-Configs merge nearest first, searching up from the
-working directory and searching outwards:
+There are three layers, ordered project → user → system:
 
-* Only registered `.m8-st8/` directories from cwd and its ancestors
-  * `m8 register -l` lists candidates and their registration status.
-  * `m8 register` trusts the existing candidates; registration is machine-local
-    and records canonical real paths under the user's private config registry.
-  * Child directories are never searched. Unregistered configs are omitted from
-    `M8_ST8_DIRS` and do not participate in lookup.
-* `$XDG_CONFIG_HOME/m8-st8/` else `~/.config/m8-st8/`, created privately
-  (mode 0700) when m8 starts
-* `/etc/m8-st8/`, for what an administrator puts beneath
-  everyone
-  * Its `core/` and `@/` are read like any other.
-  * It holds no `+/`. State belongs to whoever made it, so
-    nothing is read from or written there, and an agent it
-    defines keeps its chats and scratch in the nearest
-    config.
-* An m8 a provider or a call starts is told the list as
-  `M8_ST8_DIRS`, and searches no further.
-  * Unset it to search afresh, as from another project.
+* The **nearest** `.m8-st8/` from the working directory upward. It participates
+  only when registered with `m8 register`; ancestor projects are not additional
+  overlay layers. `m8 register -l` lists candidates and their trust status.
+* `$XDG_CONFIG_HOME/m8-st8/`, defaulting to `~/.config/m8-st8/`.
+* `/etc/m8-st8/`.
 
-`core/` holds what a restriction *means* and what a provider
-*is*, and is searched the same way.
+Registration is machine-local and records canonical paths in the user's
+private config registry. A cloned project does not become trusted merely by
+existing. Children inherit the validated roots through `M8_ST8_DIRS`; unset it
+for fresh discovery. An explicit list still contains at most one project.
 
-* `providers.json` composes through the stack: every file
-  adds its entries, and the nearest entry of a name stands.
-* `mac-sandbox.sb` is taken whole from the nearest directory
-  that has one, else from the copy m8 carries.
-* m8 carries no providers.
+### Core resources
 
-`core/config.json` may also set `highlights`, a compact string for markdown
-highlighting. The nearest file that contains the key wins; a file without it
-falls through. Unspecified styles keep their defaults, while each supplied
-style replaces that style. Duplicate entries are applied left to right, so
-the last wins:
+`core/` resolves **per file**, nearest first. A selected file is taken whole;
+missing keys do not fall through to another layer.
+
+* `core/providers/NAME.json` holds one provider object, named by its filename.
+  Different names may come from different layers; the same name is never merged.
+* `core/config.json` holds optional `tui` and `highlights` settings.
+* `core/mac-sandbox.sb` supplies the native sandbox profile, with the built-in
+  profile used when no file exists.
+* m8 carries no provider configuration.
+
+For example:
 
 ```json
 { "highlights": "quote:fgt4bg255+i_!/,list:fg244,table:pipe:fgt8" }
 ```
 
-Entries are comma-separated `name:style` pairs. Names are `quote`, `list`,
-`hash`, `heading`, `strong`, `em`, `strike`, `code`, `link`, `rule`,
+Highlight entries are comma-separated `name:style` pairs. Names include `quote`,
+`list`, `hash`, `heading`, `strong`, `em`, `strike`, `code`, `link`, `rule`,
 `table:pipe`, `table:head`, `fence`, `block`, `diff:add`, `diff:remove`,
-`diff:hunk`, `diff:context`, and `indent`. Styles concatenate `fgN` or `bgN`
-for 256-colour indices `N` (0–255), or `fgtN` / `bgtN` for terminal palette
-indices `N` (0–15). Modifiers are `+` bold, `-` faint, `i` italic, `_`
-underline, `!` inverse, and `/` strike. They are read left to right; `+` and
-`-` are mutually exclusive, with the last one taking effect.
+`diff:hunk`, `diff:context`, and `indent`. Styles combine `fgN`/`bgN` (0–255),
+`fgtN`/`bgtN` terminal palette indices (0–15), and modifiers `+` (bold),
+`-` (faint), `i` (italic), `_` (underline), `!` (inverse), `/` (strike).
+Styles are read left to right; bold and faint are mutually exclusive, with
+the last taking effect. Duplicate entries also use the last value. Each
+supplied style replaces that style; unspecified styles retain defaults.
 
-Authored names live under `@/`, so `@mathy` on the command
-line is `@/mathy.md` on disk. Generated state lives in the
-sibling `+/`, mirroring the same logical paths. The rest of a
-config directory is nothing a name can reach.
+### Mobs
+
+A mob is the unit of document resolution and state ownership. The **first
+`mobs/NAME/` directory** in the eligible stack selects that entire mob. An empty
+directory deliberately blocks lower layers. Missing agents, chats or turns
+never cause per-file fallback into another copy of the mob.
 
 ```
 .m8-st8/
   core/
-    mac-sandbox.sb
-    providers.json
-  models/
-  @/
-    mathy.md                  mathy, the agent
-    team/reviewer.md          @team/reviewer
-  +/
-    +.md                      @, the main chat
-    mathy/+.md                @mathy, its own chat
-    mathy/+/tduyxbutjb.md     @mathy/+/tduyxbutjb
-    mathy/aside/+.md          @mathy/aside
-    team/.tmpdir/             the team mob's scratch
-    team/^/a_9f86d081b8.jpeg  a file the team mob handed over
-    +/psbarddrym.md           a turn a model answered
+    providers/local.json
+    config.json
+  mobs/
+    demo/
+      mathy.md                     :demo/mathy
+      tight-docs.md                :demo/tight-docs
+      .chats/
+        mathy/+.md                 mathy's movable chat pointer
+        mathy/+/tduyxbutjb.md       an immutable turn
+        mathy/_/aside/+.md         a subchat pointer
+        mathy/_/aside/+/qgivwhgxnh.md  an immutable subchat turn
+        .uploads/                  files prepared for provider upload
+      .mob-space/                  persistent workspace shared by mob tools
 ```
 
-In folder chat state can be omited with `echo "+/" >> .m8-st8/.gitignore`
+There are no top-level agents or nested mobs. Agent definitions may nest within
+one mob, for example `mobs/demo/utils/shields.md` is `:demo/utils/shields`.
+Path components cannot begin with `.`; authored-agent components also cannot
+begin with `_`, at any depth. Logical `//` starts a subchat path and maps to a
+reserved `_/` directory beneath the agent's generated state, keeping it
+separate from nested authored agents. `/+/TURN` names a turn in that chat.
+The movable pointer is still stored as `+.md`; chat addresses need no trailing `/+`.
 
-### Mobs
+Once a mob is selected, document references are pinned to that mob and layer.
+Cross-mob 🧠/📚 references are forbidden. Copy a shared definition into each mob
+that needs it. A tool can explicitly invoke another mob using a new command,
+such as `m8 query :other/reviewer MESSAGE`; that activation operates in its own
+mob. This is command composition, not a document inclusion.
 
-Mobs compose entire collections of agents, skills,
-and starting scripts, as bundled packages.
+An agent needs no special way to spawn another: a 🧰 whose command invokes
+an agent is a subagent, running inside that tool's shields.
 
-A name is a path, so the folder part is the mob
-it belongs to. Mobs bundle the agents, skills and
-starting scripts that travel together, and each
-mob's agents share its mirrored `+/<mob>/.tmpdir/`
-for scratch. Tools and the provider pipeline (including
-encode and upload) receive:
+* `m8 query --new :team/reviewer//job MESSAGE` starts fresh from the authored
+  agent. Without `--new`, it carries that chat on, including answering a
+  question the agent asked.
+* `--no-advance` asks without advancing the chat.
+* The caller receives the reply as text, not a ledger. Only the explicitly
+  addressed chat moves; the caller's conversation is not taken over.
 
-* `M8_MOB_ST8_DIR`: the absolute owning config root, such
-  as `/project/.m8-st8`.
-* `M8_MOB_DIR`: the absolute mob state directory, such
-  as `/project/.m8-st8/+/team`.
-* `TMPDIR`: its pre-created `.tmpdir/` scratch directory.
+### State and workspace locations
 
-The configured Codex upload resolves relative links against
-`M8_MOB_ST8_DIR`; absolute links are used directly.
+Project mobs keep writable state beside their definitions. User and system
+mobs keep it under `$XDG_DATA_HOME/m8-st8/`, defaulting to
+`~/.local/share/m8-st8/`:
 
-Walking down a name, the first agent file met is
-the agent and every word after it is a chat. So
-`x.md` beside `x/` is an agent and its chats, and
-`x/` alone is a mob. A chat named like an agent in
-that same folder would hide the agent without
-anyone saying so, so that is an error naming both.
+```
+<project>/.m8-st8/mobs/demo/.chats/
+<project>/.m8-st8/mobs/demo/.mob-space/
+<data>/m8-st8/user/mobs/demo/.chats/
+<data>/m8-st8/user/mobs/demo/.mob-space/
+<data>/m8-st8/system/mobs/demo/.chats/
+<data>/m8-st8/system/mobs/demo/.mob-space/
+```
 
-An agent needs no way to spawn another. Calling one is
-already a command, so a 🧰 whose command is that *is* a
-subagent, standing inside whatever shields that 🧰 does.
+Here `<data>` is `XDG_DATA_HOME` or `~/.local/share`. The authored mob's source
+layer selects its state location; relocated state is never searched as an
+independent overlay. A user mob shadowing a system mob has separate state.
 
-* `m8 query --new @team/reviewer/job MESSAGE` starts one
-  fresh, from the agent as it is written.
-* The same without `--new` carries that chat on, which
-  is also how a question it asked is answered.
-* `--no-advance` asks and keeps no chat to carry on.
-* What comes back is the reply as text, so the caller is
-  handed an answer and not a ledger.
-* The main chat is not moved, so the conversation at the
-  terminal stays where it was.
+Tools and provider stages receive:
+
+* `M8_MOB_ST8_DIR`: absolute owning **definition config root**.
+* `M8_MOB_DIR`: absolute `.chats` state directory. Uploads go in
+  `$M8_MOB_DIR/.uploads/`.
+* `TMPDIR`: the pre-created, persistent sibling `.mob-space/` workspace.
+
+Nothing automatically deletes the workspace. Ignore generated project state
+with `mobs/*/.chats/` and `mobs/*/.mob-space/` in `.m8-st8/.gitignore`.
 
 ### Turns and chats
 
-Turns and chats are generated rather than authored,
-and they are git's objects and refs.
+Explicit agent and subchat behavior is unchanged:
 
-* A turn is a file in a `+/` folder, named with ten
-  lowercase letters and never rewritten. It holds
-  only what it continues and the exchange.
-* A chat is a `+.md`: a single 🧠 naming the turn
-  it has got to, rewritten every time it moves.
-* The main chat is `+/+.md` on disk. Attached, it names a
-  chat, and talking to it moves that chat. Detached,
-  it names a turn — after `m8 @/local/tiny` or
-  `m8 @mathy/+/tduyxbutjb` — and moves itself.
+* A chat is a `+.md` pointer. A turn is an immutable file in that chat's `+/`
+  history directory; logical names remain `MOB/AGENT/+/ID`.
+* A chat with no pointer inherits its parent's head. The parent of an agent's
+  own chat is its authored agent.
+* `reset` removes the pointer; `reset --new` starts from the agent.
+  `reset --to` follows another chat in the same mob and rejects cycles.
+* A side question advances nothing. Forks share parent turns without copying
+  transcripts. Snips remain alongside the turns that refer to them.
+* `at` and `query` keep progress incrementally; only the explicitly addressed
+  chat moves. A model call is saved as a turn, and a tool call as two: the 📲
+  as it is made, then its answer. An interrupted run keeps what happened so far.
+  * A tool call left unanswered when a run died is closed on continuation with
+    a 🚫, never automatically rerun: it may already have had side effects.
+    The model decides what to do next.
+  * Ctrl-C lets the tool stop however it stops, records the outcome, closes
+    calls that will not now run, and ends the run. A second Ctrl-C stops
+    immediately where it stands.
+* There is no global/main pointer. Bare `m8` shows help; to resume a chat,
+  explicitly name it with `m8 :MOB/AGENT` (or its subchat address).
 
-```m8
-▐ 🧠:mathy/+/tduyxbutjb
-
-▐ 🙋:
-│ Tell me more.
-
-▐ 🤖:
-│ Additionally, ...
-```
-
-> * :brain::mathy/+/tduyxbutjb
->
-> * :raising_hand::
->   > Tell me more.
->
-> * :robot::
->   > Additionally, ...
-
-`m8 @` tags a run as it goes rather than once it is
-over, so a run is a chain of turns and the chat moves
-with each.
-
-* A model call is a turn: what it said, under the turn
-  it continues.
-* A tool call is two: the 📲 as it is made, and then its
-  answer.
-* A run that dies keeps everything up to where it died,
-  and the chat reads as that.
-* A 📲 left with nothing under it and no ❓ after it was
-  running when its run died. Whoever carries on closes it
-  with a 🚫 saying so, and never runs it again: how far
-  it got nobody can say, so it is the model's to decide.
-* Ctrl-C lets the tool stop however it stops, writes down
-  how, closes the calls it will not now run, and ends
-  the run. A second Ctrl-C ends it where it stands.
-
-A turn goes in the `+/` of the chat it advances. One
-that advances no chat — a side question, or a turn
-talked to directly — goes beside the turn it
-continues, and a model's go in the top `+/`.
-
-A chat with no `+.md` of its own reads as its
-parent's head. That is the whole of forking and
-resetting: a new chat starts wherever its parent
-is, and a reset one goes back to following it. The
-parent of an agent's own chat is the agent.
-
-A chat's `+.md` usually names a turn, and may name two
-other things.
-
-* The agent itself, which is what `m8 reset --new` writes
-  when a chat above has moved on: the chat reads as the
-  agent all the same. Where taking the `+.md` away already
-  reads as the agent, that is all `--new` does.
-* Another chat, which is what `m8 reset --to` writes: it
-  is followed, and reads as wherever that chat gets to
-  until it is itself moved on.
-* The main chat on a chat is the second of those.
-* A chat following something that leads back to it is
-  the one loop a pointer could make, and is refused when
-  it is asked for.
-
-The 🧠 printed after a reply is not part of the
-turn. It is the line you would write to continue
-from it, which is also what you paste after `m8`.
-
-Because chats move, a turn's 🧠 names the turn it
-continues and never a chat, or it would become
-its own ancestor.
-
-A saved turn is an agent like any other, so
-nothing resolves it specially — 🧠 walks back
-through parents until it reaches an agent, and
-that agent's 🧠 reaches a model. Forking is two
-turns naming one parent, and copies nothing.
-
-Two different things are written 🧠. An agent
-naming an agent is a mob reaching into a mob; a
-name through `+` is lineage, the turn this one
-continues. Both are as deep as they are — nine
-mobs is nine mobs, a thousand turns is a thousand
-turns, and neither is a fault.
-
-The one fault either can have is a loop, and a
-loop is not a depth: it is a name met twice on the
-way to itself. So that is what is looked for, and
-what m8 says when it finds one.
-
-```
-m8: an agent includes one that leads back to it
-m8: a turn in that chat names one that leads back to it
-```
-
-There is no length or depth either may not reach.
-Expanding is a loop over a stack rather than a
-call per link, so what it costs is the memory to
-hold the ledger it built.
+Inclusion and lineage are still expanded in record order with loop detection,
+not an arbitrary depth limit. Their references must remain inside one mob.
 
 ### Models
 
@@ -2738,10 +2596,14 @@ Writing a file is how it comes to have one, like everything
 else, and that is also how a model is configured once and
 used everywhere:
 
+A model can also be used without stored state, for example
+`m8 query --no-store :/toy/echo hello`. Stored chats always belong to an agent
+in a mob; there is no global storage fallback for a bare model.
+
 ```
 .m8-st8/
-  local/Ternary-Bonsai-8B-mlx-2bit.md   @local/Ternary-Bonsai-8B-mlx-2bit
-  tiny.md                               @tiny
+  mobs/local/Ternary-Bonsai-8B-mlx-2bit.md   :local/Ternary-Bonsai-8B-mlx-2bit
+  mobs/demo/tiny.md                               :demo/tiny
 ```
 
 ```m8
@@ -2756,11 +2618,11 @@ model wins, since the last model named is the one that
 answers — the same rule as a tool's last definition.
 
 ```m8
-▐ 🧠:mathy
+▐ 🧠:demo/mathy
 ▐ 🧠:/local/Ternary-Bonsai-27B-mlx-2bit,max_output_tokens:16384
 ```
 
-> * :brain::mathy
+> * :brain::demo/mathy
 > * :brain::/local/Ternary-Bonsai-27B-mlx-2bit,max_output_tokens:16384
 
 A chat is the same: a model piped in after one runs it, and
@@ -2775,31 +2637,72 @@ filter that stays in a pipeline. Reaching a url is one such
 command rather than the privileged path, so anything you can
 write a program for is a provider.
 
-`core/providers.json`:
+`core/providers/toy.json`:
 
 ```json
 {
-  "toy": {
-    "cmd": ["m8", "toy-provider"],
-    "models": ["m8", "toy-provider", "--models"]
-  },
-  "local": {
-    "cmd": ["m8", "url-provider"],
-    "encode": ["m8", "encode", "openai-responses"],
-    "parse": ["m8", "parse", "openai-responses"],
-    "url": "http://127.0.0.1:8000/v1/responses",
-    "models-url": "http://127.0.0.1:8000/v1/models",
-    "models": ["sh", "-c", "\"$M8\" url-provider --get \"$M8_PROVIDER_MODELS_URL\" | tr ',' '\\n' | sed -n 's/.*\"id\" *: *\"\\([^\"]*\\)\".*/\\1/p'"],
-    "header-authorization": "echo Bearer $(cat ~/.omlx/key)"
-  },
-  "anthropic": {
-    "cmd": ["m8", "url-provider"],
-    "encode": ["m8", "encode", "anthropic-messages"],
-    "parse": ["m8", "parse", "anthropic-messages"],
-    "url": "https://api.anthropic.com/v1/messages",
-    "header-anthropic-version": "echo 2023-06-01",
-    "header-x-api-key": "security find-generic-password -s anthropic-api-key -w"
-  }
+  "cmd": [
+    "m8",
+    "toy-provider"
+  ],
+  "models": [
+    "m8",
+    "toy-provider",
+    "--models"
+  ]
+}
+```
+
+`core/providers/local.json`:
+
+```json
+{
+  "cmd": [
+    "m8",
+    "url-provider"
+  ],
+  "encode": [
+    "m8",
+    "encode",
+    "openai-responses"
+  ],
+  "parse": [
+    "m8",
+    "parse",
+    "openai-responses"
+  ],
+  "url": "http://127.0.0.1:8000/v1/responses",
+  "models-url": "http://127.0.0.1:8000/v1/models",
+  "models": [
+    "sh",
+    "-c",
+    "\"$M8\" url-provider --get \"$M8_PROVIDER_MODELS_URL\" | tr ',' '\\n' | sed -n 's/.*\"id\" *: *\"\\([^\"]*\\)\".*/\\1/p'"
+  ],
+  "header-authorization": "echo Bearer $(cat ~/.omlx/key)"
+}
+```
+
+`core/providers/anthropic.json`:
+
+```json
+{
+  "cmd": [
+    "m8",
+    "url-provider"
+  ],
+  "encode": [
+    "m8",
+    "encode",
+    "anthropic-messages"
+  ],
+  "parse": [
+    "m8",
+    "parse",
+    "anthropic-messages"
+  ],
+  "url": "https://api.anthropic.com/v1/messages",
+  "header-anthropic-version": "echo 2023-06-01",
+  "header-x-api-key": "security find-generic-password -s anthropic-api-key -w"
 }
 ```
 
@@ -2968,17 +2871,19 @@ m8 toy-provider --models     its models, one name a line
     a provider offers.
   * `m8 models` asks each provider instead.
 
-`toy` is configured like any other, with the first entry of
-the `core/providers.json` above. It speaks m8 and answers
+`toy` is configured like any other, in `core/providers/toy.json` above. It speaks m8 and answers
 without a network, which is
 what makes the loop, tool calling, and picking up a call that
-was never answered testable rather than only demonstrable:
+was never answered testable rather than only demonstrable. Create
+`mobs/demo/echo.md`, `runner.md`, and `eliza.md` with the respective
+model records `/toy/echo`, `/toy/runner`, and `/toy/eliza`;
+`mobs/games/zork.md` contains `/toy/Z-Machine/zork1`:
 
 ```bash
-m8 @/toy/echo -- hello     # says the last thing said
-m8 @/toy/runner -- 'RUN;;;say;;;text=hi'
-m8 @/toy/eliza -- "I am not sleeping well."
-m8 @/toy/Z-Machine/zork1 -- "I would like to play"
+m8 :demo/echo -- hello     # says the last thing said
+m8 :demo/runner -- 'RUN;;;say;;;text=hi'
+m8 :demo/eliza -- "I am not sleeping well."
+m8 :games/zork -- "I would like to play"
 ```
 
 `eliza` is Weizenbaum's doctor of 1966: a keyword found in
@@ -3005,8 +2910,8 @@ is replayed through it. Nothing is kept between calls because
 there is nowhere to keep it — so the chat is the save file,
 forking a chat forks the world, and two runs of the same words
 cannot differ. Saving is not implemented and does not need to
-be: `m8 ref @ | m8 encode m8 >save.md` already is one, and
-`m8 tag @zork <save.md` is the restore.
+be: `m8 ref :games/zork | m8 encode m8 >save.md` already is one, and
+`m8 tag :games/zork <save.md` restores that mob's conversation.
 
 The first thing you say is not played. It is hashed, and the
 hash is the seed the world is built from, so "hello" and
@@ -3044,8 +2949,7 @@ HOME              that, when XDG_CONFIG_HOME says nothing:
                   ~/.config/m8-st8
 PATH              where a provider or tool named as a bare
                   word is looked for, and where m8 finds itself
-TMPDIR            where a shielded tool's own directory is made;
-                  /tmp when unset
+TMPDIR            the selected mob's persistent .mob-space workspace
 ```
 
 What m8 adds when launching a provider or a call:
@@ -3056,8 +2960,9 @@ M8               absolute path of the m8 launcher running it;
 M8_VERBOSITY      1 under -v, 2 under -vv; a tool is handed
                   it too, and an m8 started with it set says
                   as much without being asked
-M8_ST8_DIRS       the config directories found, nearest
-                  first, : between
+M8_ST8_DIRS       validated project/user/system roots, : between
+M8_ST8_USER_ROOT  the user config root associated with that list
+M8_ST8_DATA_ROOT  the resolved XDG data root, including /m8-st8
 ```
 
 And what a provider's commands are handed as well:

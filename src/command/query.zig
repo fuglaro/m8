@@ -1,18 +1,18 @@
 //! `query` — say something to a chat, and answer with what it said back.
 //!
-//!     m8 ref @CHAT MESSAGE | m8 send | m8 tag @CHAT |
+//!     m8 ref :MOB/AGENT//CHAT MESSAGE | m8 send | m8 tag :MOB/AGENT//CHAT |
 //!         m8 encode | m8 tail --sigil robot --sigil question --block
 //!
 //! is what this does, written once. It is one process, so the run is tagged
 //! as it goes and a run that dies keeps everything up to where it died.
 //!
-//! It is the form of the `@` prompt that something with parameters calls: an
+//! It is the form of the address prompt that something with parameters calls: an
 //! address, then the message as one argument, and options in front where a
 //! message can never be mistaken for one. What comes back is text, with the ledger kept out of
 //! the way, which is what a 🧰 running an agent wants to hand its caller.
 //!
-//! The main chat is left where it is, so an agent run this way from a tool
-//! never takes over the conversation of whoever is at the terminal.
+//! Only the explicitly addressed chat is advanced. Another mob can be
+//! activated by a new command invocation, with its own resolution scope.
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
@@ -39,14 +39,14 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 query [-v | -vv] [--no-advance | --no-store] [--new | --parent] [--piped] @ADDRESS [MESSAGE]
+        \\  m8 query [-v | -vv] [--no-advance | --no-store] [--new | --parent] [--piped] :MOB/AGENT [MESSAGE]
         \\
         \\Says MESSAGE to the address, runs until it replies or asks, keeps
         \\the run, and writes the reply as the text it is. The ledger is not
         \\written: stdout is the reply and nothing else.
         \\
-        \\  m8 query @mathy "What is a Riemann sphere?"
-        \\  m8 query @critic/job-1 "Review that."        a chat of its own
+        \\  m8 query :demo/mathy "What is a Riemann sphere?"
+        \\  m8 query :demo/critic//job-1 "Review that."        a chat of its own
         \\
         \\MESSAGE is the one argument after the address, so one that opens
         \\with a dash is still the message. Options go before the address.
@@ -63,13 +63,13 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\the chat next answers the question, so the caller carries on by
         \\calling this again.
         \\
-        \\A chat moves on to the run; the main chat does not, unless `@` is
-        \\the address. A run that ends on neither a reply nor a question is
+        \\Only the explicitly addressed chat advances. A run that ends on
+        \\neither a reply nor a question is
         \\an error, and says so on stderr.
         \\
         \\It is a pipeline written once:
         \\
-        \\  m8 ref @mathy "hi" | m8 send | m8 tag @mathy |
+        \\  m8 ref :demo/mathy "hi" | m8 send | m8 tag :demo/mathy |
         \\      m8 encode | m8 tail --sigil robot --sigil question --block
         \\
     );
@@ -110,7 +110,7 @@ fn run(ctx: Ctx) !u8 {
         }
     }
     if (i == ctx.args.len or ctx.args.len > i + 2) {
-        try ctx.err.writeAll("m8 query: name one @ADDRESS, and then one MESSAGE to say to it\n");
+        try ctx.err.writeAll("m8 query: name one :MOB/AGENT, and then one MESSAGE to say to it\n");
         return 1;
     }
 
@@ -159,9 +159,10 @@ fn run(ctx: Ctx) !u8 {
         .dirs = dirs,
         .a = a,
         .moving = moving,
-        .home = try address.home(arena, io, dirs, a, name),
+        .home = if (store) try address.home(arena, io, dirs, a, name) else "",
     };
     const turn = try converse.run(inner, .{
+        .owner = a.name,
         .keep = if (store) keeping.keeper() else null,
         .echo_given = whole,
         // The whole turn already says what the lines would.

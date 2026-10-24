@@ -8,7 +8,7 @@
   > `m8` `secure-shield`
 
 * :shield::check
-  > `bash` `-e` `-c` `said=$("$M8" query --no-advance "@$__checks__" "$*"); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"`
+  > `bash` `-e` `-c` `said=$("$M8" query --no-advance ":$__checks__" "$*"); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"`
 
 * :shield::contain-reads
   > :shield:secure secures contain-reads

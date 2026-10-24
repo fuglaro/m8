@@ -45,8 +45,11 @@ const stopped = "Not run: the run was interrupted.";
 const died = "Interrupted: the run stopped while this was running, so it may or may not have finished.";
 
 pub const Options = struct {
+    /// Explicit addressed owner, retained even if its chat currently points
+    /// directly to a model and expansion therefore has no authored origin.
+    owner: []const u8 = "",
     /// Write the ledger that arrived ahead of what the run adds, so what goes
-    /// out is the whole turn. What `send` does; the `@` prompt shows only
+    /// out is the whole turn. What `send` does; the address prompt shows only
     /// what the run adds.
     echo_given: bool = false,
     /// Keep the run as it goes rather than once it is over. What a provider
@@ -112,12 +115,16 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     var diag: doc.Diagnostic = .{};
     const given = try doc.parse(arena, ctx.in, &diag);
 
-    const dirs = try config.discover(arena, io, ctx.env);
+    const full_dirs = try config.discover(arena, io, ctx.env);
+    const dirs = if (config.mobName(opts.owner) != null)
+        try config.pin(arena, io, full_dirs, opts.owner)
+    else
+        full_dirs;
     // Tool children inherit the parent's validated config context, not the
     // original environment's possibly unvalidated list.
     const inherited = try arena.create(std.process.Environ.Map);
     inherited.* = try ctx.env.clone(arena);
-    try inherited.put(config.dirs_var, try std.mem.join(arena, ":", dirs));
+    try config.inherit(arena, full_dirs, inherited);
     ctx.env = inherited;
     const expanded = try ledger.expandRecords(
         arena,
@@ -130,9 +137,10 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // A mob's own scratch, made before any tool runs. Worked out once: it
     // belongs to the mob rather than to a call, which is what lets a tool
     // write a file and answer with a path the next call can open.
-    const mob_dir = (try config.mobDir(arena, io, dirs, expanded.origin)) orelse "";
-    const mob_st8_dir = (try config.mobSt8Dir(arena, io, dirs, expanded.origin)) orelse "";
-    const scratch = (try config.mobTmp(arena, io, dirs, expanded.origin)) orelse "";
+    const owner = if (config.mobName(opts.owner) != null) opts.owner else expanded.origin;
+    const mob_dir = (try config.mobDir(arena, io, dirs, owner)) orelse "";
+    const mob_st8_dir = (try config.mobSt8Dir(arena, io, dirs, owner)) orelse "";
+    const scratch = (try config.mobTmp(arena, io, dirs, owner)) orelse "";
 
     var records: std.ArrayList(doc.Record) = .empty;
     try records.appendSlice(arena, expanded.records);
@@ -787,7 +795,7 @@ const Status = struct {
 const LiveReply = struct {
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8 = &.{},
+    dirs: config.Dirs = .{},
     /// Where a `💭snip` is kept as it arrives, or null to hand it on whole.
     snips: ?[]const u8 = null,
     out: *std.Io.Writer,

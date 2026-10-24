@@ -54,7 +54,7 @@ pub const Definition = struct {
 pub fn load(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     name: []const u8,
 ) LoadError!Definition {
     const l = try ledger.expand(arena, io, dirs, name);
@@ -189,7 +189,7 @@ test "a definition yields its model, shields and tools" {
 
     const f = try Fixture.init(arena, &threaded, "m8-agent-basic");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md",
+    try f.agent(arena, "test/mathy.md",
         \\* :brain::/local/tiny
         \\
         \\* :shield::jail
@@ -206,10 +206,10 @@ test "a definition yields its model, shields and tools" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const d = try load(arena, f.io, &dirs, "mathy");
+    const d = try load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy");
     try testing.expectEqualStrings("local", d.provider);
     try testing.expectEqualStrings("tiny", d.model);
-    try testing.expectEqualStrings("mathy", d.origin);
+    try testing.expectEqualStrings("test/mathy", d.origin);
     try testing.expect(hasShield(d, "jail"));
     try testing.expectEqual(@as(usize, 1), d.tools.len);
     try testing.expectEqualStrings("say", d.tools[0].name);
@@ -225,7 +225,7 @@ test "tool variables use separate headers and accumulate" {
 
     const f = try Fixture.init(arena, &threaded, "m8-agent-tool-vars");
     defer f.deinit(arena);
-    try f.agent(arena, "pagey.md",
+    try f.agent(arena, "test/pagey.md",
         \\* :brain::/local/tiny
         \\
         \\* :toolbox::read
@@ -240,7 +240,7 @@ test "tool variables use separate headers and accumulate" {
         \\* :toolbox::read
     );
 
-    const d = try load(arena, f.io, &.{f.dir}, "pagey");
+    const d = try load(arena, f.io, config.Dirs{ .roots = &.{f.dir} }, "test/pagey");
     const offered = try offer(arena, d);
     try testing.expectEqual(@as(usize, 1), offered.len);
     try testing.expectEqual(@as(usize, 3), offered[0].env_vars.len);
@@ -259,17 +259,17 @@ test "shields accumulate over the lineage, so including cannot widen" {
     defer f.deinit(arena);
     // The included agent activates one and is named last, which is where an
     // override would put it if activation replaced rather than accumulated.
-    try f.agent(arena, "helper.md", "* :brain::/local/tiny\n\n* :shield::airgap\n");
-    try f.agent(arena, "outer.md",
+    try f.agent(arena, "test/helper.md", "* :brain::/local/tiny\n\n* :shield::airgap\n");
+    try f.agent(arena, "test/outer.md",
         \\* :brain::/local/tiny
         \\
         \\* :shield::no-edit-git
         \\
-        \\* :brain::helper
+        \\* :brain::test/helper
     );
 
     const dirs = [_][]const u8{f.dir};
-    const d = try load(arena, f.io, &dirs, "outer");
+    const d = try load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer");
     try testing.expect(hasShield(d, "no-edit-git"));
     try testing.expect(hasShield(d, "airgap"));
     // Activation order is wrapping order, and the outer one is further out.
@@ -286,7 +286,7 @@ test "a later definition of a tool name is the one offered" {
 
     const f = try Fixture.init(arena, &threaded, "m8-agent-override");
     defer f.deinit(arena);
-    try f.agent(arena, "base.md",
+    try f.agent(arena, "test/base.md",
         \\* :brain::/local/tiny
         \\
         \\* :toolbox::say
@@ -294,15 +294,15 @@ test "a later definition of a tool name is the one offered" {
         \\
         \\* :toolbox::say
     );
-    try f.agent(arena, "outer.md",
-        \\* :brain::base
+    try f.agent(arena, "test/outer.md",
+        \\* :brain::test/base
         \\
         \\* :toolbox::say
         \\  > `echo` `outer`
     );
 
     const dirs = [_][]const u8{f.dir};
-    const d = try load(arena, f.io, &dirs, "outer");
+    const d = try load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer");
     const offered = try offer(arena, d);
     try testing.expectEqual(@as(usize, 1), offered.len);
     try testing.expectEqualStrings("outer", offered[0].command.argv[1]);
@@ -317,9 +317,9 @@ test "an unknown agent and a missing model are told apart" {
 
     const f = try Fixture.init(arena, &threaded, "m8-agent-errors");
     defer f.deinit(arena);
-    try f.agent(arena, "bare.md", "* :compass::\n  > No model here.\n");
+    try f.agent(arena, "test/bare.md", "* :compass::\n  > No model here.\n");
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(ledger.Error.UnknownAgent, load(arena, f.io, &dirs, "nosuch"));
-    try testing.expectError(Error.NoModel, load(arena, f.io, &dirs, "bare"));
+    try testing.expectError(ledger.Error.UnknownAgent, load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/nosuch"));
+    try testing.expectError(Error.NoModel, load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/bare"));
 }

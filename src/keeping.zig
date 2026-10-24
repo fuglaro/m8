@@ -5,9 +5,10 @@
 //! naming the one before it, which is all a chat ever was — and a run that
 //! dies keeps everything up to where it died.
 //!
-//! Shared by the `@` prompt and `m8 query`, which are the two things that run
-//! and keep in one process. What differs between them is only what moves.
+//! Shared by address shorthand and `m8 query`, which run and keep in one
+//! process. Only their explicitly addressed chat is advanced.
 
+const config = @import("config.zig");
 const std = @import("std");
 const doc = @import("m8/doc.zig");
 const address = @import("address.zig");
@@ -16,9 +17,9 @@ const converse = @import("converse.zig");
 pub const Keeping = struct {
     arena: std.mem.Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     a: address.Address,
-    moving: address.Moving,
+    moving: address.Moving = .{},
     /// Where every piece of this run is kept: each continues the one before
     /// it, so the folder the first goes in is the folder they all do.
     home: []const u8,

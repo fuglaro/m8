@@ -38,7 +38,7 @@ pub const Error = error{
     ProviderFailed,
 };
 
-/// One entry from providers.json, as far as m8 reads it.
+/// One object from core/providers/NAME.json, as far as m8 reads it.
 pub const Provider = struct {
     name: []const u8,
     /// What to run, before any path has been resolved.

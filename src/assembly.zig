@@ -1,5 +1,5 @@
 //! Assembling a ledger: what an address reads as, whatever was piped in, and
-//! the prompt, in that order. This is the `@` prompt's; `m8 ref` is the same
+//! the prompt, in that order. This is the address prompt's; `m8 ref` is the same
 //! with nothing piped but prose.
 //!
 //!   nothing piped   LEAD → prompt

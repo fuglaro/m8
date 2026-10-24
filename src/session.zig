@@ -1,23 +1,8 @@
-//! Chats, and the turns they point at.
-//!
-//! Authored names live under `@/` in a config directory. Three kinds of file
-//! are generated in the sibling `+/`, whose tree mirrors their logical names:
-//!
-//!   `+/X/+/id.md`  a turn, named by chance and never rewritten
-//!   `+/X/+.md`     a chat: a single 🧠 naming the turn it has got to
-//!   `+/+.md`       the main chat: a 🧠 naming a chat, or a turn outright
-//!
-//! It is git's objects and refs. A turn is an object, a chat is a ref, and
-//! the main chat is `HEAD` — attached when it names a chat, so it is the chat
-//! that moves, and detached when it names a turn, so it moves itself.
-//!
-//! All of them are ordinary names, so nothing here knows how to load one —
-//! `ledger` already does, and a 🧠 walks from a chat to a turn to its parent
-//! without noticing the difference.
-//!
-//! A turn holds only its own exchange. The conversation is the chain of 🧠
-//! behind it, so forking costs nothing: two turns may name one parent and
-//! neither copies anything.
+//! Chat pointers and immutable linked turns within one selected mob layer.
+//! Authored definitions are `mobs/MOB/AGENT/PATH.md`; generated state lives
+//! under `mobs/MOB/.chats/AGENT/_/CHAT/...`. Logical `AGENT//CHAT` names
+//! a chat; `/+/TURN` names its history. User/system state is relocated by
+//! config. Subchats inherit their parent's head until their own pointer exists.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -51,11 +36,10 @@ pub fn newSnip(arena: Allocator, io: std.Io) ![]const u8 {
 pub fn keepSnip(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     folder: []const u8,
     content: []const u8,
 ) ![]const u8 {
-    if (config.saveDir(dirs) == null) return Error.NoConfigDir;
     const name = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, try newSnip(arena, io) });
     try writeFile(arena, io, dirs, name, &.{.{ .sigil = .thought, .value = snip, .content = content }});
     return name;
@@ -73,41 +57,48 @@ pub fn namesSnip(name: []const u8) bool {
     return std.mem.startsWith(u8, std.fs.path.basename(name), snip_prefix);
 }
 
-/// The main chat. A pointer with no chat folder around it, so on disk it sits
-/// at `+/+.md`.
-pub const main = pointer;
-
 pub const Error = error{
     NoConfigDir,
-    /// Nothing has been said yet, so the main chat names nothing.
-    NoMainChat,
 };
 
 /// What reading where a chat has got to can run into.
-pub const ReadError = Error || error{UnknownAgent} || doc.ParseError || Allocator.Error;
+pub const ReadError = Error || error{ UnknownAgent, InvalidName, CrossMobReference, NoDataHome } || doc.ParseError || Allocator.Error;
 
 /// True for a name m8 generated rather than a person authored: a turn, a
-/// chat, or the main chat. Used to find the agent a conversation is really
+/// chat. Used to find the agent a conversation is really
 /// with — the first authored name in the lineage.
 pub fn isGenerated(name: []const u8) bool {
-    return isTurn(name) or isPointer(name);
+    return isTurn(name) or isPointer(name) or isChat(name);
+}
+
+/// A named subchat; the authored agent's own chat has no // suffix.
+pub fn isChat(name: []const u8) bool {
+    return config.mobName(name) != null and std.mem.indexOf(u8, name, "//") != null and !isTurn(name) and !isPointer(name);
 }
 
 /// Whether a name is a turn: anything inside a `+` folder.
 pub fn isTurn(name: []const u8) bool {
-    return std.mem.startsWith(u8, name, history ++ "/") or
-        std.mem.indexOf(u8, name, "/" ++ history ++ "/") != null;
+    return config.mobName(name) != null and !isPointer(name) and std.mem.indexOf(u8, name, "/+/") != null;
 }
 
-/// Whether a name is a pointer that moves: a chat, or the main chat.
+/// Whether a name is a pointer that moves: a chat.
 pub fn isPointer(name: []const u8) bool {
-    return std.mem.eql(u8, name, main) or std.mem.endsWith(u8, name, "/" ++ pointer);
+    return config.mobName(name) != null and std.mem.endsWith(u8, name, "/" ++ pointer);
 }
 
-/// The chat a pointer belongs to. Empty for the main chat.
+/// The chat a pointer belongs to.
 pub fn chatOf(ptr: []const u8) []const u8 {
-    if (std.mem.eql(u8, ptr, main)) return "";
     return ptr[0 .. ptr.len - pointer.len - 1];
+}
+
+/// A subchat inherits from its enclosing chat, stopping at its authored agent.
+pub fn parentChat(arena: Allocator, chat: []const u8) ![]const u8 {
+    _ = arena;
+    const marker = std.mem.indexOf(u8, chat, "//") orelse return error.InvalidName;
+    const tail = chat[marker + 2 ..];
+    if (std.mem.lastIndexOfScalar(u8, tail, '/')) |slash|
+        return chat[0 .. marker + 2 + slash];
+    return chat[0..marker];
 }
 
 /// A chat's pointer.
@@ -117,37 +108,44 @@ pub fn pointerOf(arena: Allocator, chat: []const u8) ![]const u8 {
 
 /// Where a turn goes when it continues `parent` without advancing any chat:
 /// beside it. A turn's parent is in some chat's `+`; an agent's is the agent
-/// itself; a model, or nothing at all, has no folder and so takes the top one.
+/// itself. Models and empty names have no mob-owned storage folder.
 pub fn besideParent(arena: Allocator, parent: []const u8) ![]const u8 {
-    if (parent.len == 0 or model.is(parent)) return history;
+    if (config.mobName(parent) == null) return error.InvalidName;
     if (isTurn(parent)) return std.fs.path.dirname(parent) orelse history;
     return std.fmt.allocPrint(arena, "{s}/{s}", .{ parent, history });
 }
 
 /// Where a turn goes that advances `chat`.
 pub fn inChat(arena: Allocator, chat: []const u8) ![]const u8 {
-    if (chat.len == 0) return history;
+    if (config.mobName(chat) == null) return error.InvalidName;
     return std.fmt.allocPrint(arena, "{s}/{s}", .{ chat, history });
 }
 
 /// What a pointer names, or null when there is no such pointer yet.
-pub fn deref(arena: Allocator, io: std.Io, dirs: []const []const u8, ptr: []const u8) ReadError!?[]const u8 {
+pub fn deref(arena: Allocator, io: std.Io, dirs: config.Dirs, ptr: []const u8) ReadError!?[]const u8 {
     const src = (try config.read(arena, io, dirs, try config.nameFile(arena, ptr))) orelse return null;
+    const scope = config.mobName(ptr) orelse return error.InvalidName;
     var diag: doc.Diagnostic = .{};
     for (try doc.parse(arena, src, &diag)) |r| {
-        if (r.sigil == .agent) return r.value;
+        if (r.sigil == .agent) {
+            if (!model.is(r.value)) {
+                const mob = config.mobName(r.value) orelse return error.InvalidName;
+                if (!std.mem.eql(u8, scope, mob)) return error.CrossMobReference;
+            }
+            return r.value;
+        }
     }
     return null;
 }
 
 /// Whether an authored agent file exists by this name.
-pub fn isAgent(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []const u8) Allocator.Error!bool {
-    if (name.len == 0 or isGenerated(name) or model.is(name)) return false;
+pub fn isAgent(arena: Allocator, io: std.Io, dirs: config.Dirs, name: []const u8) ReadError!bool {
+    if (!config.authored(name) or isGenerated(name) or model.is(name)) return false;
     return (try config.where(arena, io, dirs, try config.nameFile(arena, name))) != null;
 }
 
 /// Whether a turn, a chat's pointer or an agent is a file that is there.
-pub fn exists(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []const u8) !bool {
+pub fn exists(arena: Allocator, io: std.Io, dirs: config.Dirs, name: []const u8) !bool {
     return (try config.where(arena, io, dirs, try config.nameFile(arena, name))) != null;
 }
 
@@ -161,7 +159,7 @@ pub fn exists(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []co
 pub fn leadsTo(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     from: []const u8,
     ptr: []const u8,
 ) ReadError!bool {
@@ -170,19 +168,17 @@ pub fn leadsTo(
     // loop that was written by hand.
     var steps: usize = 0;
     while (steps < 4096) : (steps += 1) {
+        if (isChat(at)) at = try pointerOf(arena, at);
         if (!isPointer(at)) return false;
         if (std.mem.eql(u8, at, ptr)) return true;
-        if (std.mem.eql(u8, at, main)) {
-            at = (try deref(arena, io, dirs, main)) orelse return false;
-            continue;
-        }
         var chat = chatOf(at);
         at = while (true) {
             const p = try pointerOf(arena, chat);
             if (std.mem.eql(u8, p, ptr)) return true;
             if (try deref(arena, io, dirs, p)) |got| break got;
             if (try isAgent(arena, io, dirs, chat)) return false;
-            chat = std.fs.path.dirname(chat) orelse return false;
+            if (std.mem.indexOf(u8, chat, "//") == null) return false;
+            chat = try parentChat(arena, chat);
         };
     }
     return true;
@@ -194,12 +190,14 @@ pub fn leadsTo(
 /// whole of what forking and resetting are: a new chat starts from wherever
 /// its parent is, and a reset one goes back to following it. The parent of an
 /// agent's own chat is the agent.
-pub fn head(arena: Allocator, io: std.Io, dirs: []const []const u8, chat: []const u8) ReadError![]const u8 {
+pub fn head(arena: Allocator, io: std.Io, dirs: config.Dirs, chat: []const u8) ReadError![]const u8 {
+    const scoped = try config.pin(arena, io, dirs, chat);
     var at = chat;
     while (true) {
-        if (try deref(arena, io, dirs, try pointerOf(arena, at))) |got| return settle(arena, io, dirs, got);
-        if (try isAgent(arena, io, dirs, at)) return at;
-        at = std.fs.path.dirname(at) orelse return error.UnknownAgent;
+        if (try deref(arena, io, scoped, try pointerOf(arena, at))) |got| return settle(arena, io, scoped, got);
+        if (try isAgent(arena, io, scoped, at)) return at;
+        if (std.mem.indexOf(u8, at, "//") == null) return error.UnknownAgent;
+        at = try parentChat(arena, at);
     }
 }
 
@@ -207,13 +205,11 @@ pub fn head(arena: Allocator, io: std.Io, dirs: []const []const u8, chat: []cons
 ///
 /// A turn records what it continues, and a pointer moves — so lineage must
 /// name what the pointer names rather than the pointer. Recording `🧠+` would
-/// make the turn its own ancestor as soon as the main chat moved on.
-pub fn settle(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []const u8) ReadError![]const u8 {
-    if (std.mem.eql(u8, name, main)) {
-        const got = (try deref(arena, io, dirs, main)) orelse return Error.NoMainChat;
-        return settle(arena, io, dirs, got);
-    }
+/// make the turn its own ancestor as soon as the chat moved on.
+pub fn settle(arena: Allocator, io: std.Io, dirs: config.Dirs, name: []const u8) ReadError![]const u8 {
+    if (!model.is(name) and config.mobName(name) == null) return error.InvalidName;
     if (isPointer(name)) return head(arena, io, dirs, chatOf(name));
+    if (isChat(name)) return head(arena, io, dirs, name);
     return name;
 }
 
@@ -221,11 +217,15 @@ pub fn settle(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []co
 pub fn settleAll(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     records: []const doc.Record,
 ) ![]const doc.Record {
     var out: std.ArrayList(doc.Record) = .empty;
     for (records) |r| {
+        if ((r.sigil == .agent or r.sigil == .skill) and !model.is(r.value)) {
+            const mob = config.mobName(r.value) orelse return error.InvalidName;
+            if (dirs.mob) |scope| if (!std.mem.eql(u8, scope, mob)) return error.CrossMobReference;
+        }
         var one = r;
         if (r.sigil == .agent) one.value = try settle(arena, io, dirs, r.value);
         try out.append(arena, one);
@@ -237,17 +237,19 @@ pub fn settleAll(
 pub fn point(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     ptr: []const u8,
     target: []const u8,
 ) !void {
-    try write(arena, io, dirs, ptr, &.{.{ .sigil = .agent, .value = target }});
+    const scoped = try config.pin(arena, io, dirs, ptr);
+    try validateReferences(scoped, &.{.{ .sigil = .agent, .value = target }});
+    try write(arena, io, scoped, ptr, &.{.{ .sigil = .agent, .value = target }});
 }
 
 /// Take a pointer away, from the nearest directory that has one. Nothing it
 /// named is touched: a turn is never rewritten, and a chat reset is a chat
 /// that goes back to reading as its parent.
-pub fn unpoint(arena: Allocator, io: std.Io, dirs: []const []const u8, ptr: []const u8) !void {
+pub fn unpoint(arena: Allocator, io: std.Io, dirs: config.Dirs, ptr: []const u8) !void {
     const rel = try config.nameFile(arena, ptr);
     const dir = (try config.where(arena, io, dirs, rel)) orelse return;
     try std.Io.Dir.cwd().deleteFile(io, try std.fs.path.join(arena, &.{ dir, rel }));
@@ -292,13 +294,23 @@ fn newId(io: std.Io) [id_len]u8 {
 pub fn write(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     name: []const u8,
     records: []const doc.Record,
 ) !void {
-    if (config.saveDir(dirs) == null) return Error.NoConfigDir;
-    const kept = if (isTurn(name)) try keepAside(arena, io, dirs, name, records) else records;
-    return writeFile(arena, io, dirs, name, kept);
+    const scoped = try config.pin(arena, io, dirs, name);
+    try validateReferences(scoped, records);
+    const kept = if (isTurn(name)) try keepAside(arena, io, scoped, name, records) else records;
+    return writeFile(arena, io, scoped, name, kept);
+}
+
+fn validateReferences(dirs: config.Dirs, records: []const doc.Record) !void {
+    for (records) |r| {
+        if ((r.sigil == .agent or r.sigil == .skill) and !model.is(r.value)) {
+            const mob = config.mobName(r.value) orelse return error.InvalidName;
+            if (dirs.mob) |scope| if (!std.mem.eql(u8, scope, mob)) return error.CrossMobReference;
+        }
+    }
 }
 
 /// The records with every `💭snip` written to a snip, and the 🧠 naming it
@@ -306,7 +318,7 @@ pub fn write(
 fn keepAside(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     turn: []const u8,
     records: []const doc.Record,
 ) ![]const doc.Record {
@@ -322,12 +334,11 @@ fn keepAside(
 fn writeFile(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     name: []const u8,
     records: []const doc.Record,
 ) !void {
-    const base = config.saveDir(dirs) orelse return Error.NoConfigDir;
-    const path = try std.fs.path.join(arena, &.{ base, try config.nameFile(arena, name) });
+    const path = try config.filePath(arena, io, dirs, name);
 
     // A file is markdown. The rendered spelling is only ever for a terminal.
     var buf: std.Io.Writer.Allocating = .init(arena);
@@ -385,25 +396,25 @@ test "a snip is a fresh short reference" {
 }
 
 test "a name says what kind it is by its shape alone" {
-    try testing.expect(isTurn("+/abc"));
-    try testing.expect(isTurn("mob/agent/chat1/+/abc"));
+    try testing.expect(!isTurn("+/abc"));
+    try testing.expect(isTurn("mob/agent//chat1/+/abc"));
     try testing.expect(!isTurn("mob/agent"));
-    try testing.expect(isPointer("+"));
-    try testing.expect(isPointer("mob/agent/+"));
+    try testing.expect(!isPointer("+"));
+    try testing.expect(isPointer("mob/agent//chat1/+"));
+    try testing.expect(!isTurn("mob/agent//chat1/+"));
     try testing.expect(!isPointer("mob/agent"));
     try testing.expectEqualStrings("mob/agent", chatOf("mob/agent/+"));
-    try testing.expectEqualStrings("", chatOf("+"));
 }
 
 test "a turn that advances nothing goes beside its parent" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    try testing.expectEqualStrings("mob/agent/c/+", try besideParent(arena, "mob/agent/c/+/abc"));
+    try testing.expectEqualStrings("mob/agent//c/+", try besideParent(arena, "mob/agent//c/+/abc"));
     try testing.expectEqualStrings("mob/agent/+", try besideParent(arena, "mob/agent"));
-    try testing.expectEqualStrings("+", try besideParent(arena, "/local/tiny"));
-    try testing.expectEqualStrings("+", try besideParent(arena, "+/abc"));
-    try testing.expectEqualStrings("+", try besideParent(arena, ""));
+    try testing.expectError(error.InvalidName, besideParent(arena, "/local/tiny"));
+    try testing.expectError(error.InvalidName, besideParent(arena, "+/abc"));
+    try testing.expectError(error.InvalidName, besideParent(arena, ""));
 }
 
 const test_tmp = @import("test_tmp.zig");
@@ -442,28 +453,33 @@ test "a chat with no pointer reads as its parent's head" {
     const dirs = [_][]const u8{f.dir};
 
     // Nothing said yet: the agent's chat is the agent, and so is a sub chat.
-    try testing.expectEqualStrings("mob/agent", try head(arena, f.io, &dirs, "mob/agent"));
-    try testing.expectEqualStrings("mob/agent", try head(arena, f.io, &dirs, "mob/agent/c1/sub"));
+    try testing.expectEqualStrings("mob/agent", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent"));
+    try testing.expectEqualStrings("mob/agent", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent//c1/sub"));
 
     // The agent's chat moves, and a chat forked from it follows until it
     // has a pointer of its own.
     try f.write(arena, "mob/agent/+.md", "* :brain::mob/agent/+/one\n");
-    try testing.expectEqualStrings("mob/agent/+/one", try head(arena, f.io, &dirs, "mob/agent/c1"));
-    try f.write(arena, "mob/agent/c1/+.md", "* :brain::mob/agent/c1/+/two\n");
-    try testing.expectEqualStrings("mob/agent/c1/+/two", try head(arena, f.io, &dirs, "mob/agent/c1/sub"));
+    try testing.expectEqualStrings("mob/agent/+/one", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent//c1"));
 
-    // The main chat attached to a chat reads as that chat.
-    try f.write(arena, "+.md", "* :brain::mob/agent/c1/+\n");
-    try testing.expectEqualStrings("mob/agent/c1/+/two", try settle(arena, f.io, &dirs, main));
+    // A nested authored agent is its own inheritance root, not a chat below
+    // the ancestor agent, even when that ancestor has a moved head.
+    try f.write(arena, "mob/agent/nested", "* :brain::/local/tiny\n");
+    try testing.expectEqualStrings("mob/agent/nested", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent/nested"));
+    try testing.expectEqualStrings("mob/agent/nested", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent/nested//forked"));
+    try testing.expectError(error.UnknownAgent, head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent/missing"));
+    try testing.expect(!try leadsTo(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent/missing/+", "mob/agent/+"));
+
+    try f.write(arena, "mob/agent//c1/+.md", "* :brain::mob/agent//c1/+/two\n");
+    try testing.expectEqualStrings("mob/agent//c1/+/two", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent//c1/sub"));
 
     // Unpointing goes back to the parent, and never removes a turn.
-    try unpoint(arena, f.io, &dirs, "mob/agent/c1/+");
-    try testing.expectEqualStrings("mob/agent/+/one", try head(arena, f.io, &dirs, "mob/agent/c1"));
+    try unpoint(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent//c1/+");
+    try testing.expectEqualStrings("mob/agent/+/one", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent//c1"));
 
-    try testing.expectError(error.UnknownAgent, head(arena, f.io, &dirs, "nobody/c"));
+    try testing.expectError(error.UnknownAgent, head(arena, f.io, config.Dirs{ .roots = &dirs }, "nobody/c"));
 }
 
-test "no main chat is said rather than guessed at" {
+test "a global pointer is not a valid storage name" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -473,5 +489,5 @@ test "no main chat is said rather than guessed at" {
     const f = try Fixture.init(arena, &threaded, "m8-session-main");
     defer f.deinit();
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.NoMainChat, settle(arena, f.io, &dirs, main));
+    try testing.expectError(error.InvalidName, settle(arena, f.io, config.Dirs{ .roots = &dirs }, "+"));
 }

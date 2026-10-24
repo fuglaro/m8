@@ -18,7 +18,7 @@ pub const Ctx = struct {
     io: std.Io,
     /// The spelling to write in. Markdown for every command, whatever stdout
     /// is, so a command says the same thing to a terminal as to a pipe. Only
-    /// the `@` prompt and a command marked `terminal` are handed the rendered
+    /// the address prompt and a command marked `terminal` are handed the rendered
     /// spelling when stdout is one.
     mode: doc.Mode,
     /// The environment inherited at startup, or a narrower copy with values
@@ -77,10 +77,12 @@ pub fn childEnvironment(arena: Allocator, ctx: Ctx, overlays: []const EnvVar) !*
     try m.put("M8_VERBOSITY", verbosity);
     // Preserve the parent's config context; process launch neither discovers
     // config nor revalidates the list, and overlays cannot replace it.
-    if (ctx.env.get(config.dirs_var)) |dirs| {
-        try m.put(config.dirs_var, dirs);
-    } else {
-        _ = m.swapRemove(config.dirs_var);
+    for ([_][]const u8{ config.dirs_var, config.user_root_var, config.data_root_var }) |key| {
+        if (ctx.env.get(key)) |value| {
+            try m.put(key, value);
+        } else {
+            _ = m.swapRemove(key);
+        }
     }
     const out = try arena.create(std.process.Environ.Map);
     out.* = m;
@@ -121,7 +123,7 @@ pub const Tty = struct {
 ///
 /// Every command is `m8 CMD ARGS` with stdin, and none of them is handed a
 /// name the command line resolved for it: a command that wants one takes it
-/// as an argument and resolves it itself, which is how `m8 ref @mathy` works.
+/// as an argument and resolves it itself, which is how `m8 ref :demo/mathy` works.
 ///
 /// So the one question is whether stdin is the command's to read. Most read
 /// it whole. `call` and anything else that hands stdin to a child must not,
@@ -159,7 +161,7 @@ pub const Command = struct {
 ///
 /// Asked once, here, so no command has to remember to answer `--help` and no
 /// two answer it differently. m8 reads it before a command sees its arguments;
-/// prompt words after an `@` are prose only after their `--` separator.
+/// prompt words after an address are prose only after their `--` separator.
 /// A command's page as `--help` answers it: its name and summary on the first
 /// line, the way a manual's NAME line reads, and then whatever the command
 /// has to say for itself. The line is written here and nowhere else, so what
@@ -211,6 +213,14 @@ test "a child environment adds process state without changing its base" {
     try base.put("XDG_CONFIG_HOME", "/dev/null");
     const inherited = try childEnvironment(arena, ctx, &.{.{ .key = config.dirs_var, .value = "/wrong" }});
     try std.testing.expectEqualStrings(base.get(config.dirs_var).?, inherited.get(config.dirs_var).?);
+    try base.put(config.user_root_var, "/u/m8-st8");
+    try base.put(config.data_root_var, "/data/m8-st8");
+    const layered = try childEnvironment(arena, ctx, &.{
+        .{ .key = config.user_root_var, .value = "/wrong" },
+        .{ .key = config.data_root_var, .value = "/wrong" },
+    });
+    try std.testing.expectEqualStrings("/u/m8-st8", layered.get(config.user_root_var).?);
+    try std.testing.expectEqualStrings("/data/m8-st8", layered.get(config.data_root_var).?);
 
     // No inherited context means no eager discovery, even with an overlay.
     _ = base.swapRemove(config.dirs_var);

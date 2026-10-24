@@ -1,6 +1,6 @@
 //! `tail` — the last record of a document.
 //!
-//! What `m8 @x` writes ends on the 🧠 of the turn it kept, and what a run
+//! What `m8 :demo/x` writes ends on the 🧠 of the turn it kept, and what a run
 //! says ends on its reply. Both are the last record of something, and this
 //! is how either is taken out: whole, as its value, or as its block with the
 //! m8 around it gone.
@@ -42,9 +42,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  --value    the rest of its header line, and nothing else
         \\  --block    its block, as the text it holds
         \\
-        \\  m8 @x -- hi | m8 tail                      the 🧠 of the turn kept
-        \\  m8 ref "@$(m8 @x -- hi | m8 tail --value)" the same, as an address
-        \\  m8 ref @x | m8 encode | m8 tail --sigil robot --sigil question --block
+        \\  m8 :demo/x -- hi | m8 tail                      the 🧠 of the turn kept
+        \\  m8 ref ":$(m8 :demo/x -- hi | m8 tail --value)" the same, as an address
+        \\  m8 ref :demo/x | m8 encode | m8 tail --sigil robot --sigil question --block
         \\
         \\A record with no value has none to write, and one with no block has
         \\no block, so either is an error rather than an empty line: what reads
@@ -244,7 +244,7 @@ test "a record with nothing to give is an error, not an empty line" {
     const arena = a.allocator();
 
     // A turn nobody kept ends on its reply, and a reply has no value: handed
-    // on as a name it would read as the main chat.
+    // on as a name it would not identify a chat or turn.
     const sent = "* :brain::x/+/parent\n\n* :raising_hand::\n  > hi\n\n* :robot::\n  > hello\n";
     const value = try call(arena, &.{}, .value, sent);
     try testing.expectEqual(@as(u8, 1), value.status);

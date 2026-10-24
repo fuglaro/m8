@@ -1,6 +1,6 @@
 # Setting up providers
 
-A provider is a command, and `core/providers.json` names it. These are
+A provider is a command, and `core/providers/NAME.json` names it; the filename supplies NAME. These are
 the ones worth having written down; see Providers in the README for what
 the entries mean.
 
@@ -29,8 +29,8 @@ That header is a command, so anywhere else you already keep
 secrets works as well — `pass`, `op read`, `gpg -d`, an
 environment variable, a file only you can read.
 
-Then a model is a 🧠 like any other, and a file is how it comes
-to have a name:
+Then put the model in `mobs/demo/claude.md` to give it the address
+`:demo/claude`:
 
 ```m8
 ▐ 🧠:/anthropic/claude-opus-5,max_tokens:16000,thinking:{"type":"adaptive","display":"summarized"}
@@ -49,8 +49,8 @@ answer. Thinking happens and is billed the same either way;
 the only question is whether the ledger gets to record it.
 
 ```bash
-m8 @claude -- "Tell me about the Riemann Sphere."
-m8 @/anthropic/claude-haiku-4-5,max_tokens:1024 -- "In one line."
+m8 :demo/claude -- "Tell me about the Riemann Sphere."
+m8 :demo/claude -- "In one line."
 ```
 
 ## Codex setup on a ChatGPT plan
@@ -64,10 +64,10 @@ line moved.
 
 `codex login` writes an OAuth token to `~/.codex/auth.json`,
 and requests carrying it reach the responses api billed to the
-plan. So the entry is a url and a command that reads the token:
+plan. So `core/providers/codex.json` is a single object with a url and a command that reads the token:
 
 ```json
-"codex": {
+{
   "cmd": ["m8", "url-provider"],
   "encode": ["m8", "encode", "openai-responses"],
   "parse": ["m8", "parse", "openai-responses"],
@@ -111,10 +111,10 @@ endpoint refuses `max_output_tokens`, so do not put one on a
 * Each model is named by its `slug` there, where the public
   api says `id`.
 
-An api key instead, which reaches the same codec:
+An api key instead, in `core/providers/openai.json`, reaches the same codec:
 
 ```json
-"openai": {
+{
   "cmd": ["m8", "url-provider"],
   "encode": ["m8", "encode", "openai-responses"],
   "parse": ["m8", "parse", "openai-responses"],
@@ -124,8 +124,8 @@ An api key instead, which reaches the same codec:
 ```
 
 ```bash
-m8 @gpt -- "Tell me about the Riemann Sphere."
-m8 @/codex/gpt-5.6-luna -- "In one line."
+m8 :demo/gpt -- "Tell me about the Riemann Sphere."
+m8 :demo/gpt -- "In one line."
 ```
 
 GPT-5.6 is three models rather than one: `sol` is the

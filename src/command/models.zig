@@ -1,7 +1,7 @@
 //! `models` — what each provider says it serves.
 //!
 //! m8 keeps no list of models and knows no api's way of listing them. An
-//! entry in `core/providers.json` may name a `models` command, and what that
+//! entry in `core/providers/NAME.json` may name a `models` command, and what that
 //! prints is the list: one name a line. A url, a file and a constant are all
 //! the same thing here, which is a command that says some names.
 //!
@@ -29,7 +29,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 models [PROVIDER ...]
         \\
-        \\Runs the `models` command of each provider in core/providers.json,
+        \\Runs the `models` command of each provider in core/providers/NAME.json,
         \\or of the ones named, and writes a 🧠 for every line it prints.
         \\What a command says on stderr is passed on.
         \\

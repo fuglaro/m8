@@ -10,9 +10,9 @@
 //! from this, and only such a projection may lose anything.
 //!
 //! Two different things are written that same way. A 🧠 naming an authored
-//! agent is a mob reaching into a mob; a 🧠 naming a generated one is lineage,
-//! the turn this turn continues. Both can be as deep as they are: nine mobs is
-//! nine mobs and a thousand turns is a thousand turns, and neither is a fault.
+//! agent is an inclusion within a mob; a 🧠 naming a generated one is lineage,
+//! the turn this turn continues. Includes and turns can form arbitrarily long
+//! chains within their mob; depth alone is not a fault.
 //!
 //! The one fault either can have is a loop, and a loop is not a depth. It is a
 //! name met twice on the way to itself — so that is what is looked for, and
@@ -34,6 +34,9 @@ const toolbox = @import("toolbox.zig");
 
 pub const Error = error{
     UnknownAgent,
+    InvalidName,
+    CrossMobReference,
+    NoDataHome,
     /// An agent includes one that leads back to it. A mob may include a mob
     /// nobody has read, so this is the one that happens by accident.
     IncludeLoops,
@@ -66,14 +69,15 @@ pub const Ledger = struct {
 fn source(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     name: []const u8,
 ) !?[]const u8 {
+    if (model.is(name)) return null;
     if (try config.read(arena, io, dirs, try config.nameFile(arena, name))) |src| return src;
     // A chat with no pointer of its own reads as its parent's head, so it
     // names a document whether or not its file has been written yet.
-    if (!session.isPointer(name) or std.mem.eql(u8, name, session.main)) return null;
-    const at = session.head(arena, io, dirs, session.chatOf(name)) catch |e| switch (e) {
+    if (!session.isPointer(name) and !session.isChat(name)) return null;
+    const at = session.head(arena, io, dirs, if (session.isPointer(name)) session.chatOf(name) else name) catch |e| switch (e) {
         error.UnknownAgent => return null,
         else => return e,
     };
@@ -87,7 +91,7 @@ fn source(
 pub fn names(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     name: []const u8,
 ) !bool {
     return (try source(arena, io, dirs, name)) != null;
@@ -150,14 +154,15 @@ const Frame = struct {
 pub fn expand(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     name: []const u8,
 ) ExpandError!Ledger {
-    const src = (try source(arena, io, dirs, name)) orelse return Error.UnknownAgent;
+    const scoped = try config.pin(arena, io, dirs, name);
+    const src = (try source(arena, io, scoped, name)) orelse return Error.UnknownAgent;
 
     var diag: doc.Diagnostic = .{};
     const parsed = try doc.parse(arena, src, &diag);
-    return walk(arena, io, dirs, .{
+    return walk(arena, io, scoped, .{
         .records = (try Split.of(parsed)).body,
         .mode = doc.detect(src) orelse .md,
         .name = name,
@@ -173,7 +178,7 @@ pub fn expand(
 pub fn expandRecords(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     records: []const doc.Record,
     mode: doc.Mode,
 ) ExpandError!Ledger {
@@ -199,7 +204,7 @@ pub const Breaks = struct {
 pub fn expandUntil(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     records: []const doc.Record,
     mode: doc.Mode,
     breaks: Breaks,
@@ -223,10 +228,11 @@ pub fn expandUntil(
 fn walk(
     arena: Allocator,
     io: std.Io,
-    dirs: []const []const u8,
+    dirs: config.Dirs,
     root: Frame,
     breaks: Breaks,
 ) ExpandError!Ledger {
+    var scoped = dirs;
     var out: std.ArrayList(doc.Record) = .empty;
     var stack: std.ArrayList(Frame) = .empty;
     // One path per half. A file's top and its body are disjoint, so a body
@@ -280,6 +286,9 @@ fn walk(
         // Anything else names an agent, and only an agent — nothing is looked
         // up to decide which, so a name that is not there is a missing agent
         // rather than a model nobody configured.
+        if ((r.sigil == .agent or r.sigil == .skill) and !model.is(r.value)) {
+            scoped = try config.pin(arena, io, scoped, r.value);
+        }
         const want: Part = switch (r.sigil) {
             .agent => if (model.is(r.value) or breaks.at(r.value)) {
                 try out.append(arena, try canonical(arena, top.mode, r));
@@ -294,14 +303,13 @@ fn walk(
 
         // Already on the way here, so following it would be following it
         // again. Which kind it is decides only what to call it: lineage is
-        // the turn this one continues, and an inclusion is a mob reaching
-        // into a mob.
+        // the turn this one continues, and an inclusion stays inside the same mob.
         if (paths[@intFromEnum(want)].contains(r.value)) return if (session.isGenerated(r.value))
             Error.LineageLoops
         else
             Error.IncludeLoops;
 
-        const src = (try source(arena, io, dirs, r.value)) orelse return Error.UnknownAgent;
+        const src = (try source(arena, io, scoped, r.value)) orelse return Error.UnknownAgent;
         var diag: doc.Diagnostic = .{};
         const parsed = try doc.parse(arena, src, &diag);
         const next: Frame = .{
@@ -466,7 +474,7 @@ pub fn asking(records: []const doc.Record) ?[]const u8 {
 
 /// The same, of whatever a name reads as. A name that reads as nothing is
 /// waiting on nobody, and whoever runs it is the one to say what is wrong.
-pub fn waiting(arena: Allocator, io: std.Io, dirs: []const []const u8, name: []const u8) ?[]const u8 {
+pub fn waiting(arena: Allocator, io: std.Io, dirs: config.Dirs, name: []const u8) ?[]const u8 {
     const l = expand(arena, io, dirs, name) catch return null;
     return asking(l.records);
 }
@@ -507,24 +515,24 @@ test "an inclusion lands where it was written, not at the front" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-order");
     defer f.deinit(arena);
-    try f.agent(arena, "helper.md",
+    try f.agent(arena, "test/helper.md",
         \\* :compass::
         \\  > Helper.
     );
-    try f.agent(arena, "outer.md",
+    try f.agent(arena, "test/outer.md",
         \\* :brain::/local/tiny
         \\
         \\* :compass::
         \\  > First.
         \\
-        \\* :brain::helper
+        \\* :brain::test/helper
         \\
         \\* :compass::
         \\  > Last.
     );
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "outer");
+    const l = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer");
 
     // 🧠local/tiny stays, and the include sits between the two 🧭 it was
     // written between.
@@ -534,7 +542,7 @@ test "an inclusion lands where it was written, not at the front" {
     try testing.expectEqualStrings("First.", l.records[1].content.?);
     try testing.expectEqualStrings("Helper.", l.records[2].content.?);
     try testing.expectEqualStrings("Last.", l.records[3].content.?);
-    try testing.expectEqualStrings("outer", l.origin);
+    try testing.expectEqualStrings("test/outer", l.origin);
 }
 
 test "a chat expands through its turns to the agent it began with" {
@@ -546,18 +554,18 @@ test "a chat expands through its turns to the agent it began with" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-chat");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be brief.\n");
-    try f.agent(arena, "+/one.md", "* :brain::mathy\n\n* :raising_hand::\n  > Hi.\n\n* :robot::\n  > Hello.\n");
-    try f.agent(arena, "+/two.md", "* :brain::+/one\n\n* :raising_hand::\n  > More.\n\n* :robot::\n  > Sure.\n");
-    try f.agent(arena, "mathy/+.md", "* :brain::+/two\n");
+    try f.agent(arena, "test/mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be brief.\n");
+    try f.agent(arena, "test/mathy/+/one.md", "* :brain::test/mathy\n\n* :raising_hand::\n  > Hi.\n\n* :robot::\n  > Hello.\n");
+    try f.agent(arena, "test/mathy/+/two.md", "* :brain::test/mathy/+/one\n\n* :raising_hand::\n  > More.\n\n* :robot::\n  > Sure.\n");
+    try f.agent(arena, "test/mathy/+.md", "* :brain::test/mathy/+/two\n");
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "mathy/+");
+    const l = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy/+");
 
     const want = [_]doc.Sigil{ .agent, .system, .user, .bot, .user, .bot };
     try testing.expectEqual(want.len, l.records.len);
     for (want, l.records) |s, r| try testing.expectEqual(s, r.sigil);
-    try testing.expectEqualStrings("mathy", l.origin);
+    try testing.expectEqualStrings("test/mathy", l.origin);
     try testing.expectEqualStrings("tiny", (try runsOn(arena, l.records)).?.name);
 }
 
@@ -570,38 +578,38 @@ test "a thought kept aside is a snip on disk and whole again when read" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-snip");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n");
+    try f.agent(arena, "test/mathy.md", "* :brain::/local/tiny\n");
 
     const dirs = [_][]const u8{f.dir};
-    const turn = "mathy/+/abcdefghij";
-    try session.write(arena, f.io, &dirs, turn, &.{
-        .{ .sigil = .agent, .value = "mathy" },
+    const turn = "test/mathy/+/abcdefghij";
+    try session.write(arena, f.io, config.Dirs{ .roots = &dirs }, turn, &.{
+        .{ .sigil = .agent, .value = "test/mathy" },
         .{ .sigil = .thought, .content = "weighing it" },
         .{ .sigil = .thought, .value = "snip", .content = ":lock_with_ink_pen:`SIG`" },
         .{ .sigil = .bot, .content = "Hi." },
     });
 
     // The turn names the snip and holds none of it.
-    const saved = (try config.read(arena, f.io, &dirs, try config.nameFile(arena, turn))).?;
+    const saved = (try config.read(arena, f.io, config.Dirs{ .roots = &dirs }, try config.nameFile(arena, turn))).?;
     try testing.expect(std.mem.indexOf(u8, saved, "SIG") == null);
     // A 🧠 like any other, beside the turn that names it.
     var saved_diag: doc.Diagnostic = .{};
     const snip = (try doc.parse(arena, saved, &saved_diag))[2];
     try testing.expectEqual(doc.Sigil.agent, snip.sigil);
-    try testing.expect(std.mem.startsWith(u8, snip.value, "mathy/+/" ++ session.snip_prefix));
-    try testing.expect((try config.read(arena, f.io, &dirs, try config.nameFile(arena, snip.value))) != null);
+    try testing.expect(std.mem.startsWith(u8, snip.value, "test/mathy/+/" ++ session.snip_prefix));
+    try testing.expect((try config.read(arena, f.io, config.Dirs{ .roots = &dirs }, try config.nameFile(arena, snip.value))) != null);
 
     // Read back, everything is where it was, still asking to be kept aside.
-    const l = try expand(arena, f.io, &dirs, turn);
+    const l = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, turn);
     try testing.expectEqual(@as(usize, 4), l.records.len);
     try testing.expectEqualStrings("weighing it", l.records[1].content.?);
     try testing.expectEqualStrings(":lock_with_ink_pen:`SIG`", l.records[2].content.?);
     try testing.expect(session.isSnip(l.records[2]));
-    try testing.expectEqualStrings("mathy", l.origin);
+    try testing.expectEqualStrings("test/mathy", l.origin);
 
     // A snip that is gone is said, not quietly left out.
-    try f.agent(arena, "mathy/+/lost.md", "* :brain::mathy\n\n* :brain::mathy/+/snip-nowherenea\n");
-    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "mathy/+/lost"));
+    try f.agent(arena, "test/mathy/+/lost.md", "* :brain::test/mathy\n\n* :brain::test/mathy/+/snip-nowherenea\n");
+    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy/+/lost"));
 }
 
 test "tool calls stay, and only an unanswered one is still owed" {
@@ -613,7 +621,7 @@ test "tool calls stay, and only an unanswered one is still owed" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-calls");
     defer f.deinit(arena);
-    try f.agent(arena, "+/t.md",
+    try f.agent(arena, "test/mathy/+/t.md",
         \\* :brain::/local/tiny
         \\
         \\* :calling::say,c1
@@ -627,7 +635,7 @@ test "tool calls stay, and only an unanswered one is still owed" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "+/t");
+    const l = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy/+/t");
 
     // Four records, the calls among them.
     try testing.expectEqual(@as(usize, 4), l.records.len);
@@ -649,16 +657,16 @@ test "a conversation is as long as it is, whatever the include cap says" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-long");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be brief.\n");
+    try f.agent(arena, "test/mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be brief.\n");
 
     // Every run writes one link, so a chat this long is a chain this deep.
     // Far past the cap on how far one agent may include another, and far
     // past what a call per link would have left of the stack — which is what
     // this length is for. Anything less would pass either way.
     const turns = 5000;
-    var parent: []const u8 = "mathy";
+    var parent: []const u8 = "test/mathy";
     for (0..turns) |i| {
-        const name = try std.fmt.allocPrint(arena, "+/t{d}", .{i});
+        const name = try std.fmt.allocPrint(arena, "test/mathy/+/t{d}", .{i});
         try f.agent(
             arena,
             try std.fmt.allocPrint(arena, "{s}.md", .{name}),
@@ -670,15 +678,15 @@ test "a conversation is as long as it is, whatever the include cap says" {
         );
         parent = name;
     }
-    try f.agent(arena, "mathy/+.md", try std.fmt.allocPrint(arena, "* :brain::{s}\n", .{parent}));
+    try f.agent(arena, "test/mathy/+.md", try std.fmt.allocPrint(arena, "* :brain::{s}\n", .{parent}));
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "mathy/+");
+    const l = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy/+");
 
     // 🧠 and 🧭 from the agent, then a 🙋 and a 🤖 per turn, in the order they
     // happened — oldest first, since a turn's parent stands where it was named.
     try testing.expectEqual(@as(usize, 2 + turns * 2), l.records.len);
-    try testing.expectEqualStrings("mathy", l.origin);
+    try testing.expectEqualStrings("test/mathy", l.origin);
     try testing.expectEqualStrings("0", l.records[2].content.?);
     try testing.expectEqualStrings(
         try std.fmt.allocPrint(arena, "{d}", .{turns - 1}),
@@ -697,15 +705,15 @@ test "lineage that closes on itself says so, rather than running out of depth" {
     defer f.deinit(arena);
     // m8 never writes this: a turn names one that existed before it did. Only
     // an edited file is shaped like this, and it is still worth naming.
-    try f.agent(arena, "+/a.md", "* :brain::+/b\n\n* :raising_hand::\n  > one\n");
-    try f.agent(arena, "+/b.md", "* :brain::+/a\n\n* :raising_hand::\n  > two\n");
+    try f.agent(arena, "test/mathy/+/a.md", "* :brain::test/mathy/+/b\n\n* :raising_hand::\n  > one\n");
+    try f.agent(arena, "test/mathy/+/b.md", "* :brain::test/mathy/+/a\n\n* :raising_hand::\n  > two\n");
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "+/a"));
+    try testing.expectError(Error.LineageLoops, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy/+/a"));
 
     // A turn naming itself is the same fault, one link shorter.
-    try f.agent(arena, "+/self.md", "* :brain::+/self\n");
-    try testing.expectError(Error.LineageLoops, expand(arena, f.io, &dirs, "+/self"));
+    try f.agent(arena, "test/mathy/+/self.md", "* :brain::test/mathy/+/self\n");
+    try testing.expectError(Error.LineageLoops, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy/+/self"));
 }
 
 test "an agent met twice is not a cycle" {
@@ -717,13 +725,13 @@ test "an agent met twice is not a cycle" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-twice");
     defer f.deinit(arena);
-    try f.agent(arena, "helper.md", "* :compass::\n  > Helper.\n");
-    try f.agent(arena, "outer.md", "* :brain::/local/tiny\n\n* :brain::helper\n\n* :brain::helper\n");
+    try f.agent(arena, "test/helper.md", "* :compass::\n  > Helper.\n");
+    try f.agent(arena, "test/outer.md", "* :brain::/local/tiny\n\n* :brain::test/helper\n\n* :brain::test/helper\n");
 
     // Twice along one path is a cycle; twice side by side is a mob used
     // twice, and both copies stand where they were named.
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, "outer");
+    const l = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer");
     try testing.expectEqual(@as(usize, 3), l.records.len);
     try testing.expectEqualStrings("Helper.", l.records[1].content.?);
     try testing.expectEqualStrings("Helper.", l.records[2].content.?);
@@ -738,17 +746,17 @@ test "an agent that includes one leading back to it says so" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-cycle");
     defer f.deinit(arena);
-    try f.agent(arena, "ping.md", "* :brain::pong\n");
-    try f.agent(arena, "pong.md", "* :brain::ping\n");
-    try f.agent(arena, "selfy.md", "* :brain::selfy\n");
+    try f.agent(arena, "test/ping.md", "* :brain::test/pong\n");
+    try f.agent(arena, "test/pong.md", "* :brain::test/ping\n");
+    try f.agent(arena, "test/selfy.md", "* :brain::test/selfy\n");
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.IncludeLoops, expand(arena, f.io, &dirs, "ping"));
-    try testing.expectError(Error.IncludeLoops, expand(arena, f.io, &dirs, "selfy"));
-    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "nosuch"));
+    try testing.expectError(Error.IncludeLoops, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/ping"));
+    try testing.expectError(Error.IncludeLoops, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/selfy"));
+    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/nosuch"));
 }
 
-test "a mob may be as deep as it is, since depth is not the fault" {
+test "an include chain may be as deep as it is, within one mob" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -758,13 +766,13 @@ test "a mob may be as deep as it is, since depth is not the fault" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-deep-include");
     defer f.deinit(arena);
 
-    // Well past the eight this used to stop at. Nine mobs is nine mobs, and
+    // Well past the eight this used to stop at. Nine includes is nine includes, and
     // the only thing wrong with a chain is the one that closes.
     const links = 100;
-    try f.agent(arena, "tail.md", "* :brain::/local/tiny\n");
-    var below: []const u8 = "tail";
+    try f.agent(arena, "test/tail.md", "* :brain::/local/tiny\n");
+    var below: []const u8 = "test/tail";
     for (0..links) |i| {
-        const name = try std.fmt.allocPrint(arena, "mob{d}", .{i});
+        const name = try std.fmt.allocPrint(arena, "test/agent{d}", .{i});
         try f.agent(
             arena,
             try std.fmt.allocPrint(arena, "{s}.md", .{name}),
@@ -778,7 +786,7 @@ test "a mob may be as deep as it is, since depth is not the fault" {
     }
 
     const dirs = [_][]const u8{f.dir};
-    const l = try expand(arena, f.io, &dirs, below);
+    const l = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, below);
 
     // One 🧭 per link, outermost first, and the model at the bottom.
     try testing.expectEqual(@as(usize, links + 1), l.records.len);
@@ -833,18 +841,18 @@ test "a name with no mark is an agent, and a missing one is missing" {
     const f = try Fixture.init(arena, &threaded, "m8-ledger-naming");
     defer f.deinit(arena);
     // Two links deep, so the failure has somewhere to be swallowed.
-    try f.agent(arena, "outer.md", "* :brain::middle\n");
-    try f.agent(arena, "middle.md", "* :brain::gone\n");
+    try f.agent(arena, "test/outer.md", "* :brain::test/middle\n");
+    try f.agent(arena, "test/middle.md", "* :brain::test/gone\n");
     // A slash no longer makes something a model; only the mark does.
-    try f.agent(arena, "slashed.md", "* :brain::team/gone\n");
-    try f.agent(arena, "marked.md", "* :brain::/team/gone,max_tokens:16\n");
+    try f.agent(arena, "test/slashed.md", "* :brain::test/gone\n");
+    try f.agent(arena, "test/marked.md", "* :brain::/team/gone,max_tokens:16\n");
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "outer"));
-    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, &dirs, "slashed"));
+    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer"));
+    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/slashed"));
 
     // Marked, it is a model, and nothing is looked up at all.
-    const m = (try runsOn(arena, (try expand(arena, f.io, &dirs, "marked")).records)).?;
+    const m = (try runsOn(arena, (try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/marked")).records)).?;
     try testing.expectEqualStrings("team", m.provider);
     try testing.expectEqualStrings("gone", m.name);
     try testing.expectEqualStrings("16", m.get("max_tokens").?);
@@ -859,7 +867,7 @@ test "the fence splits a file, and the mark decides which half comes back" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-top");
     defer f.deinit(arena);
-    try f.agent(arena, "skills/tight-docs.md",
+    try f.agent(arena, "test/tight-docs.md",
         \\* :top::
         \\
         \\* :compass::
@@ -874,13 +882,13 @@ test "the fence splits a file, and the mark decides which half comes back" {
     const dirs = [_][]const u8{f.dir};
 
     // 🧠 wants what the file says.
-    const body = try expand(arena, f.io, &dirs, "skills/tight-docs");
+    const body = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/tight-docs");
     try testing.expectEqual(@as(usize, 1), body.records.len);
     try testing.expectEqualStrings("The skill itself.", body.records[0].content.?);
 
     // 📚 wants what it says about itself, and neither half carries the fence.
-    const top = try expandRecords(arena, f.io, &dirs, &.{
-        .{ .sigil = .skill, .value = "skills/tight-docs" },
+    const top = try expandRecords(arena, f.io, config.Dirs{ .roots = &dirs }, &.{
+        .{ .sigil = .skill, .value = "test/tight-docs" },
     }, .md);
     try testing.expectEqual(@as(usize, 1), top.records.len);
     try testing.expectEqual(doc.Sigil.system, top.records[0].sigil);
@@ -901,16 +909,16 @@ test "a file with no fence is all body, so naming its top yields nothing" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-notop");
     defer f.deinit(arena);
-    try f.agent(arena, "plain.md", "* :compass::\n  > All of it.\n");
+    try f.agent(arena, "test/plain.md", "* :compass::\n  > All of it.\n");
 
     const dirs = [_][]const u8{f.dir};
-    const body = try expand(arena, f.io, &dirs, "plain");
+    const body = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/plain");
     try testing.expectEqual(@as(usize, 1), body.records.len);
 
     // There is no advertisement, so nothing is advertised. Not an error and
     // not the whole file.
-    const top = try expandRecords(arena, f.io, &dirs, &.{
-        .{ .sigil = .skill, .value = "plain" },
+    const top = try expandRecords(arena, f.io, config.Dirs{ .roots = &dirs }, &.{
+        .{ .sigil = .skill, .value = "test/plain" },
     }, .md);
     try testing.expectEqual(@as(usize, 0), top.records.len);
 }
@@ -924,9 +932,9 @@ test "there is one fence at the head of a file, or there is none" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-badtop");
     defer f.deinit(arena);
-    try f.agent(arena, "late.md", "* :compass::\n  > First.\n\n* :top::\n");
-    try f.agent(arena, "unclosed.md", "* :top::\n\n* :compass::\n  > Forever.\n");
-    try f.agent(arena, "thrice.md",
+    try f.agent(arena, "test/late.md", "* :compass::\n  > First.\n\n* :top::\n");
+    try f.agent(arena, "test/unclosed.md", "* :top::\n\n* :compass::\n  > Forever.\n");
+    try f.agent(arena, "test/thrice.md",
         \\* :top::
         \\
         \\* :top::
@@ -938,9 +946,9 @@ test "there is one fence at the head of a file, or there is none" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.TopMisplaced, expand(arena, f.io, &dirs, "late"));
-    try testing.expectError(Error.TopUnclosed, expand(arena, f.io, &dirs, "unclosed"));
-    try testing.expectError(Error.TopMisplaced, expand(arena, f.io, &dirs, "thrice"));
+    try testing.expectError(Error.TopMisplaced, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/late"));
+    try testing.expectError(Error.TopUnclosed, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/unclosed"));
+    try testing.expectError(Error.TopMisplaced, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/thrice"));
 }
 
 test "the mark decides at every reference rather than being inherited" {
@@ -954,7 +962,7 @@ test "the mark decides at every reference rather than being inherited" {
     defer f.deinit(arena);
     // Its top advertises another skill's top; its body includes an agent's
     // body. Reaching one never drags in the other.
-    try f.agent(arena, "inner.md",
+    try f.agent(arena, "test/inner.md",
         \\* :top::
         \\
         \\* :compass::
@@ -965,24 +973,24 @@ test "the mark decides at every reference rather than being inherited" {
         \\* :compass::
         \\  > Inner body.
     );
-    try f.agent(arena, "helper.md", "* :compass::\n  > Helper body.\n");
-    try f.agent(arena, "outer.md",
+    try f.agent(arena, "test/helper.md", "* :compass::\n  > Helper body.\n");
+    try f.agent(arena, "test/outer.md",
         \\* :top::
         \\
-        \\* :books::inner
+        \\* :books::test/inner
         \\
         \\* :top::
         \\
-        \\* :brain::helper
+        \\* :brain::test/helper
     );
 
     const dirs = [_][]const u8{f.dir};
-    const body = try expand(arena, f.io, &dirs, "outer");
+    const body = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer");
     try testing.expectEqual(@as(usize, 1), body.records.len);
     try testing.expectEqualStrings("Helper body.", body.records[0].content.?);
 
-    const top = try expandRecords(arena, f.io, &dirs, &.{
-        .{ .sigil = .skill, .value = "outer" },
+    const top = try expandRecords(arena, f.io, config.Dirs{ .roots = &dirs }, &.{
+        .{ .sigil = .skill, .value = "test/outer" },
     }, .md);
     try testing.expectEqual(@as(usize, 1), top.records.len);
     try testing.expectEqualStrings("Inner advert.", top.records[0].content.?);
@@ -997,10 +1005,10 @@ test "a top that names its own top is a loop; a body naming it is not" {
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-toploop");
     defer f.deinit(arena);
-    try f.agent(arena, "selfish.md",
+    try f.agent(arena, "test/selfish.md",
         \\* :top::
         \\
-        \\* :books::selfish
+        \\* :books::test/selfish
         \\
         \\* :top::
         \\
@@ -1009,7 +1017,7 @@ test "a top that names its own top is a loop; a body naming it is not" {
     );
     // Disjoint halves, so this one terminates: the body reaches the top and
     // the top has no way back down.
-    try f.agent(arena, "advertises-itself.md",
+    try f.agent(arena, "test/advertises-itself.md",
         \\* :top::
         \\
         \\* :compass::
@@ -1017,15 +1025,15 @@ test "a top that names its own top is a loop; a body naming it is not" {
         \\
         \\* :top::
         \\
-        \\* :books::advertises-itself
+        \\* :books::test/advertises-itself
     );
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.IncludeLoops, expandRecords(arena, f.io, &dirs, &.{
-        .{ .sigil = .skill, .value = "selfish" },
+    try testing.expectError(Error.IncludeLoops, expandRecords(arena, f.io, config.Dirs{ .roots = &dirs }, &.{
+        .{ .sigil = .skill, .value = "test/selfish" },
     }, .md));
 
-    const ok = try expand(arena, f.io, &dirs, "advertises-itself");
+    const ok = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/advertises-itself");
     try testing.expectEqual(@as(usize, 1), ok.records.len);
     try testing.expectEqualStrings("What I am for.", ok.records[0].content.?);
 }
@@ -1078,34 +1086,89 @@ test "a break leaves its 🧠 standing, and what follows it is all that is read"
 
     const f = try Fixture.init(arena, &threaded, "m8-ledger-break");
     defer f.deinit(arena);
-    try f.agent(arena, "mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be mathy.\n");
-    try f.agent(arena, "mathy/+/aaaaaaaaaa.md", "* :brain::mathy\n\n* :raising_hand::\n  > one\n");
-    try f.agent(arena, "mathy/+/snip-bbbbbbbbbb.md", "* :thought_balloon::snip\n  > :lock_with_ink_pen:`c2ln`\n");
-    try f.agent(arena, "mathy/+/cccccccccc.md",
-        \\* :brain::mathy/+/aaaaaaaaaa
+    try f.agent(arena, "test/mathy.md", "* :brain::/local/tiny\n\n* :compass::\n  > Be mathy.\n");
+    try f.agent(arena, "test/mathy/+/aaaaaaaaaa.md", "* :brain::test/mathy\n\n* :raising_hand::\n  > one\n");
+    try f.agent(arena, "test/mathy/+/snip-bbbbbbbbbb.md", "* :thought_balloon::snip\n  > :lock_with_ink_pen:`c2ln`\n");
+    try f.agent(arena, "test/mathy/+/cccccccccc.md",
+        \\* :brain::test/mathy/+/aaaaaaaaaa
         \\
-        \\* :brain::mathy/+/snip-bbbbbbbbbb
+        \\* :brain::test/mathy/+/snip-bbbbbbbbbb
         \\
         \\* :robot::
         \\  > two
     );
 
     const dirs = [_][]const u8{f.dir};
-    const head: []const doc.Record = &.{.{ .sigil = .agent, .value = "mathy/+/cccccccccc" }};
+    const head: []const doc.Record = &.{.{ .sigil = .agent, .value = "test/mathy/+/cccccccccc" }};
 
     // From a turn on: the 🧠 naming it, and what was added after.
-    const since = try expandUntil(arena, f.io, &dirs, head, .md, .{
-        .names = &.{"mathy/+/aaaaaaaaaa"},
+    const since = try expandUntil(arena, f.io, config.Dirs{ .roots = &dirs }, head, .md, .{
+        .names = &.{"test/mathy/+/aaaaaaaaaa"},
         .snips = true,
     });
     try testing.expectEqual(@as(usize, 3), since.records.len);
-    try testing.expectEqualStrings("mathy/+/aaaaaaaaaa", since.records[0].value);
-    try testing.expectEqualStrings("mathy/+/snip-bbbbbbbbbb", since.records[1].value);
+    try testing.expectEqualStrings("test/mathy/+/aaaaaaaaaa", since.records[0].value);
+    try testing.expectEqualStrings("test/mathy/+/snip-bbbbbbbbbb", since.records[1].value);
     try testing.expectEqualStrings("two", since.records[2].content.?);
 
     // A name never met breaks nothing, so the agent is the other place to stop.
-    const whole = try expandUntil(arena, f.io, &dirs, head, .md, .{ .names = &.{ "mathy/+/zzzzzzzzzz", "mathy" } });
-    try testing.expectEqualStrings("mathy", whole.records[0].value);
+    const whole = try expandUntil(arena, f.io, config.Dirs{ .roots = &dirs }, head, .md, .{ .names = &.{ "test/mathy/+/zzzzzzzzzz", "test/mathy" } });
+    try testing.expectEqualStrings("test/mathy", whole.records[0].value);
     try testing.expectEqualStrings("one", whole.records[1].content.?);
     try testing.expectEqual(doc.Sigil.thought, whole.records[2].sigil);
+}
+
+test "document expansion stays inside the activated mob, while another activation is independent" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-isolation");
+    defer f.deinit(arena);
+    try f.agent(arena, "first/helper.md", "* :brain::/local/tiny\n");
+    try f.agent(arena, "first/agent.md", "* :brain::first/helper\n");
+    try f.agent(arena, "second/agent.md", "* :brain::/local/tiny\n");
+    const dirs: config.Dirs = .{ .roots = &.{f.dir} };
+    _ = try expand(arena, f.io, dirs, "first/agent");
+    // A separate invocation may activate the other mob normally.
+    _ = try expand(arena, f.io, dirs, "second/agent");
+    try f.agent(arena, "first/agent.md", "* :brain::second/agent\n");
+    try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, "first/agent"));
+    try f.agent(arena, "first/agent.md", "* :books::second/agent\n");
+    try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, "first/agent"));
+    try f.agent(arena, "first/helper/+/turn.md", "* :brain::second/agent\n");
+    try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, "first/helper/+/turn"));
+    try f.agent(arena, "first/helper/+.md", "* :brain::second/agent/+\n");
+    try testing.expectError(error.CrossMobReference, session.head(arena, f.io, dirs, "first/helper"));
+}
+
+test "double-slash chat references expand and settle, keeping turns and snips apart" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-double-slash");
+    defer f.deinit(arena);
+    try f.agent(arena, "crew/cody.md", "* :brain::/local/tiny\n");
+    try f.agent(arena, "crew/cody/delegated.md", "* :brain::/local/other\n");
+    const dirs: config.Dirs = .{ .roots = &.{f.dir} };
+    // An unwritten chat inherits its agent, not the same-spelled namespace.
+    const initial = try expand(arena, f.io, dirs, "crew/cody//delegated");
+    try testing.expectEqualStrings("tiny", (try runsOn(arena, initial.records)).?.name);
+    const turn = "crew/cody//delegated/+/qgivwhgxnh";
+    try session.write(arena, f.io, dirs, turn, &.{
+        .{ .sigil = .agent, .value = "crew/cody" },
+        .{ .sigil = .thought, .value = "snip", .content = "kept aside" },
+        .{ .sigil = .bot, .content = "hello" },
+    });
+    try session.point(arena, f.io, dirs, "crew/cody//delegated/+", turn);
+    try testing.expectEqualStrings(turn, try session.settle(arena, f.io, dirs, "crew/cody//delegated"));
+    const continued = try expandRecords(arena, f.io, dirs, &.{.{ .sigil = .agent, .value = "crew/cody//delegated" }}, .md);
+    try testing.expectEqual(@as(usize, 3), continued.records.len);
+    try testing.expectEqualStrings("kept aside", continued.records[1].content.?);
+    try testing.expectEqualStrings("hello", continued.records[2].content.?);
+    const nested = try expand(arena, f.io, dirs, "crew/cody/delegated");
+    try testing.expectEqualStrings("other", (try runsOn(arena, nested.records)).?.name);
 }

@@ -35,16 +35,16 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 ref [--piped] @ADDRESS [MESSAGE]
+        \\  m8 ref [--piped] :MOB/AGENT [MESSAGE]
         \\
         \\Writes the 🧠 that address reads as now — the turn a chat has got
         \\to, not the chat's name, so it stays put when the chat moves on. A
         \\turn, a model, and an agent nobody has talked to yet read as
         \\themselves. A turn or an agent that is not there is an error.
         \\
-        \\  m8 ref @mathy | m8 send | m8 tag @mathy
-        \\  m8 ref @mathy | m8 tag @mathy/aside        fork, with nothing said
-        \\  m8 ref @mathy | m8 encode                  the whole chat, flat
+        \\  m8 ref :demo/mathy | m8 send | m8 tag :demo/mathy
+        \\  m8 ref :demo/mathy | m8 tag :demo/mathy//aside        fork, with nothing said
+        \\  m8 ref :demo/mathy | m8 encode                  the whole chat, flat
         \\
         \\A MESSAGE follows the 🧠 as a 🙋, or as the ❗ that answers a chat
         \\waiting on a question. It is one argument, and whatever it opens
@@ -53,18 +53,18 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\`--piped` reads stdin as prose and says that too, after the MESSAGE
         \\when there is one. Without it stdin is not touched.
         \\
-        \\  m8 ref @mathy "and in one sentence?" | m8 send | m8 tag @mathy
-        \\  echo "and in one sentence?" | m8 ref --piped @mathy | m8 send
-        \\  m8 ref --piped @mathy "Summarize:" <notes.txt | m8 send
+        \\  m8 ref :demo/mathy "and in one sentence?" | m8 send | m8 tag :demo/mathy
+        \\  echo "and in one sentence?" | m8 ref --piped :demo/mathy | m8 send
+        \\  m8 ref --piped :demo/mathy "Summarize:" <notes.txt | m8 send
         \\
         \\A document follows an address by being written after it:
         \\
-        \\  { m8 ref @mathy; echo "* :brain::/local/tiny"; } | m8 send
+        \\  { m8 ref :demo/mathy; echo "* :brain::/local/tiny"; } | m8 send
         \\
-        \\What `m8 @x` wrote ends on the 🧠 of the turn it kept, and `m8 tail`
+        \\What `m8 :demo/x` wrote ends on the 🧠 of the turn it kept, and `m8 tail`
         \\takes that out:
         \\
-        \\  m8 ref "@$(m8 @x -- hi | m8 tail --value)" "review that" | m8 send
+        \\  m8 ref ":$(m8 :demo/x -- hi | m8 tail --value)" "review that" | m8 send
         \\
     );
 }
@@ -75,7 +75,7 @@ fn run(ctx: Ctx) !u8 {
     if (piped) args = args[1..];
     if (args.len == 0 or args.len > 2 or !address.isAddress(args[0])) {
         try ctx.err.writeAll(
-            "m8 ref: name one @ADDRESS, after `--piped` if stdin is said to it, " ++
+            "m8 ref: name one :MOB/AGENT, after `--piped` if stdin is said to it, " ++
                 "and then one MESSAGE if anything is\n",
         );
         return 1;

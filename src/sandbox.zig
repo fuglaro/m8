@@ -180,7 +180,7 @@ fn injectConfigDenies(arena: Allocator, io: std.Io, env: *const std.process.Envi
         if (try config.userDir(arena, env)) |path| try appendConfigDeny(arena, &rules, io, path);
         // Children protect the parent's validated roots without registry access.
         if (config.isChild(env) and env.get(config.dirs_var) != null) {
-            for (try config.discover(arena, io, env)) |path| {
+            for ((try config.discover(arena, io, env)).roots) |path| {
                 if (!std.mem.eql(u8, path, config.system_dir)) try appendConfigDeny(arena, &rules, io, path);
             }
         } else {
@@ -248,7 +248,7 @@ test "config rules protect home and registered ancestors, not unregistered confi
     const st8 = try std.fs.path.join(arena, &.{ root, "st8", ".m8-st8" });
     const cwd = try std.fs.path.join(arena, &.{ root, "st8", "nested" });
     const untrusted = try std.fs.path.join(arena, &.{ cwd, ".m8-st8" });
-    const tmp = try std.fs.path.join(arena, &.{ st8, "+", ".tmpdir" });
+    const tmp = try std.fs.path.join(arena, &.{ st8, "mobs", "team", ".mob-space" });
     try std.Io.Dir.cwd().createDirPath(io, tmp);
     try std.Io.Dir.cwd().createDirPath(io, untrusted);
     try config.registerPath(arena, io, &env, st8);

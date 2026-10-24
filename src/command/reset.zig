@@ -5,7 +5,7 @@
 //! two other things a chat can be made to follow: the agent it is under, and
 //! anything named.
 //!
-//! It is the plain form of the `@` prompt's trailing `-`, for whatever has
+//! It is the plain form of the address prompt's trailing `-`, for whatever has
 //! parameters rather than a command line to write a suffix on.
 
 const std = @import("std");
@@ -25,7 +25,7 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 reset [--new | --to @TARGET] @CHAT
+        \\  m8 reset [--new | --to :MOB/AGENT//CHAT] :MOB/AGENT//CHAT
         \\
         \\Takes the chat's pointer away, so it reads as its parent again: a
         \\chat under another starts wherever that one has got to, and an
@@ -33,16 +33,15 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  --new          start from the agent the chat is under, whatever
         \\                 the chats above it have got to
-        \\  --to @TARGET   follow TARGET as it is named, unsettled
+        \\  --to :MOB/AGENT//CHAT   follow TARGET as it is named, unsettled
         \\
         \\A chat named as TARGET is followed rather than read: what points at
-        \\it reads as wherever it gets to, until it is itself moved on. That
-        \\is how the main chat is put on a chat, and it is the one thing here
-        \\that takes `@` as what to reset.
+        \\it reads as wherever it gets to, until it is itself moved on.
+        \\The target must belong to the same mob.
         \\
-        \\  m8 reset @mathy/aside               aside reads as mathy again
-        \\  m8 reset --new @critic/job          job reads as critic, untalked to
-        \\  m8 reset --to @mathy/aside @        a plain m8 carries on aside
+        \\  m8 reset :demo/mathy//aside               aside reads as mathy again
+        \\  m8 reset --new :demo/critic//job          job reads as critic, untalked to
+        \\  m8 reset --to :demo/mathy//aside :demo/mathy//other    follow aside
         \\
         \\Something that would lead back to itself is refused.
         \\
@@ -64,7 +63,7 @@ fn run(ctx: Ctx) !u8 {
         } else break;
     }
     if (i + 1 != ctx.args.len or !address.isAddress(ctx.args[i]) or (new and to != null)) {
-        try ctx.err.writeAll("m8 reset: name one @CHAT, after `--new` or `--to @TARGET` if either\n");
+        try ctx.err.writeAll("m8 reset: name one :MOB/AGENT//CHAT, after `--new` or `--to :MOB/AGENT//CHAT` if either\n");
         return 1;
     }
 

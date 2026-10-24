@@ -1,4 +1,4 @@
-* :brain::small-high
+* :brain::crew/small-high
 
 * :compass::
   > You are a helpful coding assistant working alongside the user,
@@ -7,7 +7,7 @@
   > `read` to read files with pagination (~30 lines),
   > and `edit` to edit scoped across read pages.
 
-* :brain::utils/shields
+* :brain::crew/utils/shields
 
 * :shield::freeze-toolbox
 
@@ -131,13 +131,13 @@
   > :shield:workbench
   > :shield:contain-reads
   > ```bash records
-  > # Convert/copy file into m8-st8/+/MOB/^/see-FILE-CALLID.EXT* for uploading, or fail.
+  > # Convert/copy file into m8-st8/mobs/MOB/.+/.uploads/see-FILE-CALLID.EXT* for uploading, or fail.
   > f=$__file__
   > [ -f "$f" ] || { echo "Not a file: $f" >&2; exit 1; }
   > name=$(basename -- "$f")
   > ext=$(printf %s "${name##*.}" | tr A-Z a-z)
-  > mkdir -p "$M8_MOB_DIR/^"
-  > part="$M8_MOB_DIR/^/see-${name%.*}-$M8_CALL_ID"
+  > mkdir -p "$M8_MOB_DIR/.uploads"
+  > part="$M8_MOB_DIR/.uploads/see-${name%.*}-$M8_CALL_ID"
   > case "$ext" in
   >   jpg|jpeg|png|gif|webp|bmp|tif|tiff)
   >     part="$part.jpeg"

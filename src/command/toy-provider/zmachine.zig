@@ -93,7 +93,7 @@ pub fn find(ctx: Ctx, name: []const u8) !Found {
     }
 
     const dirs = try config.discover(ctx.arena, ctx.io, ctx.env);
-    for (dirs) |dir| {
+    for (dirs.roots) |dir| {
         const base = try std.fs.path.join(ctx.arena, &.{ dir, subdir });
         for (extensions) |ext| {
             const path = try std.fmt.allocPrint(ctx.arena, "{s}/{s}{s}", .{ base, name, ext });
@@ -144,7 +144,7 @@ pub fn available(ctx: Ctx) ![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     const dirs = config.discover(ctx.arena, ctx.io, ctx.env) catch return out.items;
 
-    for (dirs) |dir| {
+    for (dirs.roots) |dir| {
         const base = std.fs.path.join(ctx.arena, &.{ dir, subdir }) catch continue;
         var d = std.Io.Dir.cwd().openDir(ctx.io, base, .{ .iterate = true }) catch continue;
         defer d.close(ctx.io);
