@@ -2517,7 +2517,11 @@ For example:
 Highlight entries are comma-separated `name:style` pairs. Names include `quote`,
 `list`, `hash`, `heading`, `strong`, `em`, `strike`, `code`, `link`, `rule`,
 `table:pipe`, `table:head`, `fence`, `block`, `diff:add`, `diff:remove`,
-`diff:hunk`, `diff:context`, and `indent`. Styles combine `fgN`/`bgN` (0–255),
+`diff:hunk`, `diff:context`, `json:string`, `json:key`, `json:atom`, `json:sep`,
+and `indent`. JSON fences get best-effort string, key, atom and separator
+highlighting; `json:sep` styles key delimiters and escape introducers. JSON
+contents are not validated.
+Styles combine `fgN`/`bgN` (0–255),
 `fgtN`/`bgtN` terminal palette indices (0–15), and modifiers `+` (bold),
 `-` (faint), `i` (italic), `_` (underline), `!` (inverse), `/` (strike).
 Styles are read left to right; bold and faint are mutually exclusive, with

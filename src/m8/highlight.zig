@@ -27,7 +27,8 @@
 //!   broken to fit is the same line, and only its quote and indent are plain.
 //! * A fence opens at the start of a line, or at the indent of the list item
 //!   it is in, and holds until it closes or the block ends. `diff` is
-//!   coloured a line at a time.
+//!   coloured a line at a time; `json` gets best-effort key, string, atom and
+//!   separator highlighting, without validating its contents.
 //! * A quote or list marker is coloured, and nothing after it.
 //! * A line that runs past the terminal is broken there, the next carrying
 //!   the line's quote and indent, except inside a code span.
@@ -97,6 +98,10 @@ pub const Palette = struct {
     emphasis: Style = .{ .italic = true },
     strike: Style = .{ .strike = true },
     code: Style = .{ .fg = 180 },
+    json_string: Style = .{ .fg = 2 },
+    json_key: Style = .{ .fg = 180 },
+    json_atom: Style = .{ .bold = true, .fg = 75 },
+    json_sep: Style = .{ .fg = 245 },
     link: Style = .{ .underline = true, .fg = 75 },
     rule: Style = .{ .fg = 245 },
     /// A table's `|`, and the first row it opens with.
@@ -135,8 +140,8 @@ pub fn parsePalette(p: *Palette, text: []const u8) error{BadHighlight}!void {
     while (entries.next()) |entry| {
         const colon = std.mem.lastIndexOfScalar(u8, entry, ':') orelse return error.BadHighlight;
         const name = entry[0..colon];
-        const names = [_][]const u8{ "quote", "list", "hash", "heading", "strong", "em", "strike", "code", "link", "rule", "table:pipe", "table:head", "fence", "block", "diff:add", "diff:remove", "diff:hunk", "diff:context", "indent" };
-        const styles = [_]*Style{ &p.quote, &p.list, &p.hash, &p.heading, &p.strong, &p.emphasis, &p.strike, &p.code, &p.link, &p.rule, &p.pipe, &p.header, &p.fence, &p.block, &p.added, &p.removed, &p.hunk, &p.context, &p.indented };
+        const names = [_][]const u8{ "quote", "list", "hash", "heading", "strong", "em", "strike", "code", "json:string", "json:key", "json:atom", "json:sep", "link", "rule", "table:pipe", "table:head", "fence", "block", "diff:add", "diff:remove", "diff:hunk", "diff:context", "indent" };
+        const styles = [_]*Style{ &p.quote, &p.list, &p.hash, &p.heading, &p.strong, &p.emphasis, &p.strike, &p.code, &p.json_string, &p.json_key, &p.json_atom, &p.json_sep, &p.link, &p.rule, &p.pipe, &p.header, &p.fence, &p.block, &p.added, &p.removed, &p.hunk, &p.context, &p.indented };
         const target = for (names, styles) |key, style| {
             if (std.mem.eql(u8, name, key)) break style;
         } else return error.BadHighlight;
@@ -254,6 +259,13 @@ pub const Highlighter = struct {
     /// How far in the fence opened, which its lines are read from.
     fence_at: usize = 0,
     diff: bool = false,
+    json: bool = false,
+    json_string: bool = false,
+    json_string_key: bool = false,
+    json_escape: bool = false,
+    json_key_expected: bool = false,
+    json_depth: usize = 0,
+    json_objects: [32]bool = undefined,
     lang: [8]u8 = undefined,
     lang_n: usize = 0,
     /// How many columns the table has, once its first line has been seen.
@@ -321,7 +333,7 @@ pub const Highlighter = struct {
                     h.lang_n += 1;
                 }
             },
-            .block => try h.emit(c, h.line),
+            .block => if (h.json and !h.diff) try h.jsonChar(c) else try h.emit(c, h.line),
             .header => try h.buffer(c),
         }
     }
@@ -359,6 +371,7 @@ pub const Highlighter = struct {
             if (next == null and held.len - in >= h.fence_n) {
                 try h.emitAll(held, h.opts.palette.fence);
                 h.fence_c = 0;
+                h.json = false;
                 h.kind = .text;
                 return;
             }
@@ -374,7 +387,7 @@ pub const Highlighter = struct {
                 else => h.opts.palette.context,
             };
             h.kind = .block;
-            return h.emitAll(held, h.line);
+            return h.emitAll(held, if (h.json and !h.diff) h.opts.palette.json_sep else h.line);
         }
 
         // At the start of a line, or at the indent of the list item it is
@@ -583,11 +596,57 @@ pub const Highlighter = struct {
         h.last = '|';
     }
 
+    /// JSON is intentionally only a lexical guess; a tiny delimiter stack
+    /// distinguishes object keys from array strings, without validating contents.
+    fn jsonChar(h: *Highlighter, c: []const u8) Error!void {
+        if (c.len != 1) return h.emit(c, if (h.json_string) (if (h.json_string_key) h.opts.palette.json_key else h.opts.palette.json_string) else h.opts.palette.json_sep);
+        const b = c[0];
+        if (h.json_string) {
+            const separator = !h.json_escape and (b == '\\' or (h.json_string_key and b == '"'));
+            try h.emit(c, if (separator) h.opts.palette.json_sep else if (h.json_string_key) h.opts.palette.json_key else h.opts.palette.json_string);
+            if (h.json_escape) h.json_escape = false else if (b == '\\') h.json_escape = true else if (b == '"') {
+                h.json_string = false;
+                if (!h.json_string_key) h.json_key_expected = false;
+            }
+            return;
+        }
+        if (b == '"') {
+            h.json_string = true;
+            h.json_string_key = h.json_key_expected;
+            return h.emit(c, if (h.json_string_key) h.opts.palette.json_sep else h.opts.palette.json_string);
+        }
+        switch (b) {
+            '{', '[' => {
+                if (h.json_depth < h.json_objects.len) {
+                    h.json_objects[h.json_depth] = b == '{';
+                    h.json_depth += 1;
+                }
+                h.json_key_expected = b == '{';
+            },
+            '}', ']' => {
+                if (h.json_depth > 0) h.json_depth -= 1;
+                h.json_key_expected = false;
+            },
+            ',' => h.json_key_expected = h.json_depth > 0 and h.json_objects[h.json_depth - 1],
+            ':' => h.json_key_expected = false,
+            else => {},
+        }
+        const atom = std.ascii.isAlphanumeric(b) or std.mem.indexOfScalar(u8, "-.+", b) != null;
+        return h.emit(c, if (atom) h.opts.palette.json_atom else h.opts.palette.json_sep);
+    }
+
     fn endLine(h: *Highlighter) Error!void {
         if (h.kind == .opening) try h.resolve(null);
         if (h.kind == .header) try h.replay();
         if (h.run_n > 0) try h.settle(0);
-        if (h.kind == .fence) h.diff = std.mem.eql(u8, h.lang[0..h.lang_n], "diff");
+        if (h.kind == .fence) {
+            h.diff = std.mem.eql(u8, h.lang[0..h.lang_n], "diff");
+            h.json = std.mem.eql(u8, h.lang[0..h.lang_n], "json");
+            h.json_depth = 0;
+            h.json_key_expected = false;
+            h.json_string = false;
+            h.json_escape = false;
+        }
         try h.set(.{});
         h.header_row = false;
         h.strong = false;
@@ -596,6 +655,8 @@ pub const Highlighter = struct {
         h.link = false;
         h.bracket = false;
         h.code = 0;
+        h.json_string = false;
+        h.json_escape = false;
         h.prev = .space;
         h.last = 0;
         h.kind = .opening;
@@ -792,6 +853,41 @@ test "a rule is told from a list and from emphasis" {
     try expectShown("{38;5;245}***{}", "***", .{});
     try expectShown("{38;5;245}- --{}", "- --", .{});
     try expectShown("{38;5;245}- {}-x", "- -x", .{});
+}
+
+test "json fences highlight strings, keywords and numbers without changing text" {
+    var opts: Options = .{};
+    opts.palette.block = .{ .fg = 6 };
+    opts.palette.code = .{ .fg = 8 };
+    opts.palette.heading = .{ .fg = 9 };
+    try parsePalette(&opts.palette, "json:string:fg3,json:key:fg1,json:atom:fg4,json:sep:fg2");
+    try expectShown(
+        "{38;5;245}```json{}\n{38;5;2}{\"{38;5;1}key{38;5;2}\": {38;5;4}true{38;5;2}, \"{38;5;1}s{38;5;2}\\{38;5;1}\"éx{38;5;2}\": {38;5;4}-12.5e+2{38;5;2}}{}\n{38;5;245}```{}\ntrue",
+        "```json\n{\"key\": true, \"s\\\"éx\": -12.5e+2}\n```\ntrue",
+        opts,
+    );
+    try expectShown(
+        "{38;5;245}```json{}\n{38;5;2}{\"{38;5;1}outer{38;5;2}\":[{\"{38;5;1}k{38;5;2}\":{38;5;3}\"v\"{38;5;2}}]}{}\n{38;5;245}```{}",
+        "```json\n{\"outer\":[{\"k\":\"v\"}]}\n```",
+        opts,
+    );
+    try expectShown(
+        "{38;5;245}```json{}\n{38;5;2}[{38;5;3}\"q{38;5;2}\\{38;5;3}\" b{38;5;2}\\{38;5;3}\\ n{38;5;2}\\{38;5;3}n u{38;5;2}\\{38;5;3}u1234\"{38;5;2}]{}\n{38;5;245}```{}",
+        "```json\n[\"q\\\" b\\\\ n\\n u\\u1234\"]\n```",
+        opts,
+    );
+    try expectShown(
+        "{38;5;245}```json{}\n{38;5;2}{\"\":{38;5;4}0{38;5;2},\"{38;5;1}tail{38;5;2}\\{38;5;1}\\{38;5;2}\":{38;5;4}1{38;5;2}}{}\n{38;5;245}```{}",
+        "```json\n{\"\":0,\"tail\\\\\":1}\n```",
+        opts,
+    );
+    try expectShown(
+        "{38;5;245}```json{}\n{38;5;4}false{38;5;2} {38;5;4}null{}\n{38;5;245}```{}",
+        "```json\nfalse null\n```",
+        opts,
+    );
+    opts.color = false;
+    try expectShown("```json\n{\"x\\\\y\": \"é\", \"v\": false}\n```", "```json\n{\"x\\\\y\": \"é\", \"v\": false}\n```", opts);
 }
 
 test "a fence holds until it closes, and a diff is coloured a line at a time" {
