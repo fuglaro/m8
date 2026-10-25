@@ -1081,7 +1081,7 @@ test "a call runs into its answer" {
         "* :robot::\n  > looking\n\n" ++
             "* :calling::read,c1\n  > * path x\n" ++
             "* :receipt::c1\n  >     one\n* :receipt::c1\n  >     two\n* :green_circle::c1\n\n" ++
-            "* :calling::read,c2\n  > * path y\n* :no_entry_sign::c2\n  > no\n\n" ++
+            "* :calling::read,c2\n  > * path y\n* :no_entry_sign::c2\n  >     no\n\n" ++
             "* :robot::\n  > done\n",
         out.written(),
     );
@@ -1173,7 +1173,7 @@ test "required top-level enums constrain converted call values before running" {
     for (cases) |case| {
         const tools = [_]toolbox.Tool{.{
             .name = "test",
-            .command = .{ .argv = &.{ "/bin/sh", "-c", "printf '* :no_entry_sign::c1\\n  > ran:%s\\n' \"$__choice__\"" } },
+            .command = .{ .argv = &.{ "/bin/sh", "-c", "printf '* :no_entry_sign::c1\\n  >     ran:%s\\n' \"$__choice__\"" } },
             .properties = &.{.{ .name = case.name, .type = case.type, .required = case.required }},
         }};
         var how: Went = .settled;

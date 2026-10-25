@@ -43,6 +43,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\Every 📜, 🤖, 💭 and 📲 is highlighted as markdown, and a line wider than the
         \\terminal is broken, carrying its quote and indent.
+        \\🧾 and 🚫 blocks use the literal indent style, without markdown or wrapping.
         \\
         \\--parsable breaks no line and pads no table, so what a terminal shows
         \\parses again once copied out of it. The colour is still written, and

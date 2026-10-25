@@ -407,13 +407,19 @@ pub fn writeLooking(w: *std.Io.Writer, mode: Mode, look: ?Look, r: Record) std.I
     try b.finish();
 }
 
-/// What a record is highlighted with, if anything: a 📜, 🤖, 💭 or 📲, and
-/// only ever in the rendered spelling.
+/// What a record is highlighted with, only in the rendered spelling.
+/// Literal records use the indent style without interpreting or reflowing them.
 fn looked(mode: Mode, look: ?Look, s: Sigil) ?Look {
     const l = look orelse return null;
     if (mode != .m8 or !(l.color or l.reflow)) return null;
     return switch (s) {
         .scroll, .bot, .thought, .call => l,
+        .result, .failed => blk: {
+            var literal = l;
+            literal.literal = true;
+            literal.reflow = false;
+            break :blk literal;
+        },
         else => null,
     };
 }
@@ -456,7 +462,6 @@ pub const ContentWriter = struct {
         if (looked(mode, look, s)) |l| b.hl = .init(w, l, lead(mode));
         return b;
     }
-
 
     pub fn write(b: *ContentWriter, bytes: []const u8) std.Io.Writer.Error!void {
         for (bytes) |c| {
@@ -588,20 +593,25 @@ test "a document fed a byte at a time reads as it does whole" {
     try testing.expectEqualStrings("last", whole[3].content.?);
 }
 
-test "a receipt is indented four spaces, and an empty line carries none" {
+test "a receipt and failure are indented four spaces, and an empty line carries none" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     var diag: Diagnostic = .{};
-    const src = "* :receipt::c1\n  >     one\n  >\n  >       two\n\n* :scroll::c1\n  > # three\n";
+    const src = "* :receipt::c1\n  >     one\n  >\n  >       two\n\n" ++
+        "* :no_entry_sign::c1\n  >     failed\n  >\n  >       detail\n\n" ++
+        "* :scroll::c1\n  > # three\n";
     const recs = try parse(a.allocator(), src, &diag);
     try testing.expectEqualStrings("one\n\n  two", recs[0].content.?);
-    try testing.expectEqualStrings("# three", recs[1].content.?);
+    try testing.expectEqualStrings("failed\n\n  detail", recs[1].content.?);
+    try testing.expectEqualStrings("# three", recs[2].content.?);
 
     var out: std.Io.Writer.Allocating = .init(a.allocator());
     try writeAll(&out.writer, .md, recs);
     try testing.expectEqualStrings(src, out.written());
 
     try testing.expectError(error.MissingIndent, parse(a.allocator(), "* :receipt::c1\n  >   one\n", &diag));
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectError(error.MissingIndent, parse(a.allocator(), "* :no_entry_sign::c1\n  >   failed\n", &diag));
     try testing.expectEqual(@as(usize, 2), diag.line);
 }
 
@@ -753,4 +763,33 @@ test "a streamed body round trips back through the parser" {
     const recs = try parse(a.allocator(), w.buffered(), &diag);
     try testing.expectEqual(@as(usize, 1), recs.len);
     try testing.expectEqualStrings(content, recs[0].content.?);
+}
+
+test "literal receipts and failures use the indent style without markdown or reflow" {
+    for ([_]Sigil{ .result, .failed }) |s| {
+        var a: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer a.deinit();
+        var look: Look = .{ .width = 8 };
+        look.palette.indented = .{ .fg = 123 };
+        const content = "# **literal** `code`\n\n```diff\n+raw\n```";
+        var whole: std.Io.Writer.Allocating = .init(a.allocator());
+        try writeLooking(&whole.writer, .m8, look, .{ .sigil = s, .value = "c1", .content = content });
+        var expected: std.Io.Writer.Allocating = .init(a.allocator());
+        try expected.writer.print("{s}{s}:c1\n", .{ header(.m8), s.text(.m8) });
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0) {
+                try expected.writer.writeAll(bareLead(.m8));
+            } else {
+                try expected.writer.print("{s}    \x1b[0;38;5;123m{s}\x1b[0m", .{ lead(.m8), line });
+            }
+            try expected.writer.writeByte('\n');
+        }
+        try testing.expectEqualStrings(expected.written(), whole.written());
+        var streamed: std.Io.Writer.Allocating = .init(a.allocator());
+        var cw = try ContentWriter.beginLooking(&streamed.writer, .m8, look, s, "c1");
+        for (content) |c| try cw.write(&.{c});
+        try cw.finish();
+        try testing.expectEqualStrings(whole.written(), streamed.written());
+    }
 }

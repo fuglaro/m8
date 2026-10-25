@@ -40,8 +40,9 @@ pub const Sigil = enum {
     result,
     // 📜 is a 🧾 meant to be read as markdown. A 🧾 is literal, and carries
     // its block indented four spaces so that anything rendering the file
-    // shows it as code; a 📜 carries its block as it is. A tool may answer
-    // with both, and a model is handed them joined in order.
+    // shows it as code; 🚫 carries its verdict block the same way. A 📜 carries
+    // its block as it is. A tool may answer with both, and a model is handed
+    // them joined in order.
     scroll,
     // 🔗 hands over files beside what a tool said, one `<path` line each. It
     // names its call as 🧾 does, and is kept by copying what it names into
@@ -157,7 +158,7 @@ pub const Sigil = enum {
     /// every reader is handed the literal text. An empty line carries none.
     pub fn indent(s: Sigil) []const u8 {
         return switch (s) {
-            .result => "    ",
+            .result, .failed => "    ",
             else => "",
         };
     }

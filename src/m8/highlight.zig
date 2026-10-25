@@ -16,8 +16,10 @@
 //!
 //! Everything else is written the moment it arrives.
 //!
-//! * Emphasis, strong, strikethrough and code spans open on a run with no word
-//!   before it and no space after, and close on the next with no space before.
+//! * Emphasis, strong and strikethrough open on a run with no word before
+//!   it and no space after, and close on the next with no space before.
+//! * Code spans open on a backtick run with no word before it, even with
+//!   whitespace after, and close on the next run of exactly the same length.
 //!   A code span holds everything inside it as written.
 //! * A link is the part from `](` to `)`, which is the first point at which it
 //!   is known to be one.
@@ -108,7 +110,7 @@ pub const Palette = struct {
     hunk: Style = .{ .fg = 6 },
     context: Style = .{},
     /// A line opening with four spaces.
-    indented: Style = .{},
+    indented: Style = .{ .fg = 181 },
 };
 
 // ----------------------------------------------------------------
@@ -122,6 +124,8 @@ pub const Options = struct {
     /// The terminal's width in cells, or 0 for none known.
     width: usize = 0,
     palette: Palette = .{},
+    /// The caller already knows this is literal content, not markdown.
+    literal: bool = false,
 };
 
 /// Apply compact style entries. Each entry replaces the prior style for its name.
@@ -324,6 +328,7 @@ pub const Highlighter = struct {
 
     /// What may still be the opening of a line rather than its text.
     fn holds(h: *const Highlighter, b: u8) bool {
+        if (h.opts.literal) return false;
         if (h.fence_c != 0) {
             // As far in as the fence opened, and then only its closing run.
             const held = h.hold[0..h.held];
@@ -342,6 +347,12 @@ pub const Highlighter = struct {
     fn resolve(h: *Highlighter, next: ?[]const u8) Error!void {
         const held = h.hold[0..h.held];
         h.held = 0;
+
+        if (h.opts.literal) {
+            h.line = h.opts.palette.indented;
+            h.kind = .block;
+            return h.emitAll(held, h.line);
+        }
 
         if (h.fence_c != 0) {
             const in = std.mem.indexOfNone(u8, held, " ") orelse held.len;
@@ -510,7 +521,7 @@ pub const Highlighter = struct {
                 try h.emitRun(c, n, h.current());
                 h.code = 0;
             } else {
-                if (h.code == 0 and opens) h.code = n;
+                if (h.code == 0 and h.prev != .word and next != 0) h.code = n;
                 try h.emitRun(c, n, h.current());
             }
             return;
@@ -751,8 +762,17 @@ test "a code span opens after an emoji as after punctuation, but not after a let
 test "a code span holds everything inside it" {
     try expectShown("{38;5;180}`*a*`{} {3}*b*{}", "`*a*` *b*", .{});
     try expectShown("{38;5;180}``a`b``{}", "``a`b``", .{});
-    // A space after the run, and it opens nothing.
-    try expectShown("`` a ``", "`` a ``", .{});
+}
+
+test "code spans allow whitespace at either edge and close only on a matching run" {
+    try expectShown("{38;5;180}`` a ``{} plain", "`` a `` plain", .{});
+    try expectShown("{38;5;180}` leading`{} plain", "` leading` plain", .{});
+    try expectShown("{38;5;180}`trailing `{} plain", "`trailing ` plain", .{});
+    try expectShown("{38;5;180}`   `{} plain", "`   ` plain", .{});
+    try expectShown("{38;5;180}`\ta\t`{} plain", "`\ta\t` plain", .{});
+    try expectShown("{38;5;180}`` `a` ``` b ``{} plain", "`` `a` ``` b `` plain", .{});
+    // An unmatched opener colours only the rest of its line.
+    try expectShown("{38;5;180}` *a*{}\nplain", "` *a*\nplain", .{});
 }
 
 test "a link is what follows the brackets" {
@@ -832,16 +852,16 @@ test "a broken line carries its style past its quote and indent" {
 }
 
 test "a line indented four past its list item is literal, unless it continues a paragraph" {
-    try expectShown("    *a* `b`", "    *a* `b`", .{});
-    try expectShown("\n    *a*", "\n    *a*", .{});
+    try expectShown("{38;5;181}    *a* `b`{}", "    *a* `b`", .{});
+    try expectShown("\n{38;5;181}    *a*{}", "\n    *a*", .{});
     // Continuing a paragraph, and inside a list item's own indent.
     try expectShown("a\n    {3}*b*{}", "a\n    *b*", .{});
     try expectShown("{38;5;245}- {}a\n\n    {3}*b*{}", "- a\n\n    *b*", .{});
-    try expectShown("{38;5;245}- {}a\n\n      *b*", "- a\n\n      *b*", .{});
+    try expectShown("{38;5;245}- {}a\n\n{38;5;181}      *b*{}", "- a\n\n      *b*", .{});
     // A line back at the margin ends the item.
-    try expectShown("{38;5;245}- {}a\n\nb\n\n    *c*", "- a\n\nb\n\n    *c*", .{});
+    try expectShown("{38;5;245}- {}a\n\nb\n\n{38;5;181}    *c*{}", "- a\n\nb\n\n    *c*", .{});
     // Literal lines run on, since they open no paragraph.
-    try expectShown("    *a*\n    *b*", "    *a*\n    *b*", .{});
+    try expectShown("{38;5;181}    *a*{}\n{38;5;181}    *b*{}", "    *a*\n    *b*", .{});
 }
 
 test "a code span is never broken, and what follows it is" {

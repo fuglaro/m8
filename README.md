@@ -1230,7 +1230,7 @@ Query:
 > * :calling::Called Tool Name,Call ID
 >
 > * :no_entry_sign::Call ID
->   > Error response
+>   >     Error response
 >
 > * :calling::Called Tool Name,Call ID
 >   > * Argument Name `value`
@@ -1256,8 +1256,9 @@ which nothing can know until it stops.
 
 📜 is a 🧾 meant to be read as markdown. A 🧾 is literal,
 so its block is indented four spaces inside the quote, and
-anything rendering the file shows it as code. A 📜 is
-carried as it is. A tool may answer with both, and the
+anything rendering the file shows it as code. 🚫's optional
+verdict block is indented the same way. A 📜 is carried
+as it is. A tool may answer with both, and the
 model is handed them joined in order; one mixing literal
 blocks into markdown writes a single 📜 with its own
 fences.
