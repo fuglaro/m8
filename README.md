@@ -757,6 +757,9 @@ m8 watch :crew/cody//delegated                   a chat, as it moves
   * Only the chat's own pointer is read, so a chat with none
     is waited on rather than shown as the chat above it.
   * A snip stays the 🧠 that names it.
+  * New `::stats::` lines from the chat's advisory `+.log`
+    go to stderr; ledger output remains stdout. Existing
+    stats are not replayed. Watch still polls the pointer.
 * `top :MOB/AGENT` is `ref`'s twin for 📚: it names a file for
   what it says about itself, and nothing else. See Tops.
 
@@ -817,9 +820,10 @@ turn is reported before you write a message.
   * It sits at the right end of the top status line, hard
     against the text, and stays until the next one.
   * Anything after the `::` is a status line as usual.
-  * `m8 parse openai-responses` says one under `-v`:
+  * A provider's optional `stats` command says one under `-v`:
     `::stats::✥19▇16K::` is what came out, the share the
     prompt cache held as a block, and what went in.
+    See [Stats commands](docs/providers.md#stats-commands).
 * The editor is the rows under that.
   * It starts as one row and grows with the message, to at most
     half the terminal.
@@ -2769,12 +2773,24 @@ write a program for is a provider.
 }
 ```
 
-Four entries mean anything to m8, and each is a command:
+Four entries name commands directly:
 
 * `cmd` gets the request answered.
 * `encode` makes the ledger a request.
 * `parse` makes the answer a turn.
 * `models` lists what it serves. See Listing models.
+
+An optional `stats` object is ordinary provider configuration to the
+framework: it is passed as JSON in `M8_PROVIDER_STATS`. `m8 url-provider`
+interprets that object to select response headers/body values and run its
+formatter; a custom provider command can use that environment variable for
+anything it chooses. The generic framework does not implement stats
+selection. Complete `::stats::` lines on provider stderr are recognized at
+end of response and routed to the existing converse log/verbosity handling;
+all other stderr remains ordinary provider diagnostics.
+
+See [Stats commands](docs/providers.md#stats-commands) for the url-provider
+contract and inline formatter examples.
 
 The first three are one pipeline, each one's output the next
 one's input:
@@ -2787,22 +2803,22 @@ one's input:
   The ones it ships are `m8 encode` and `m8 parse`,
   named the way a command of your own would be.
 
-What a stage says on stderr is held until the turn is in:
+What a stage says on stderr is ordinarily diagnostic output, held until
+the turn is in and then passed on. A complete `::stats::...` line from the
+provider's stderr is the one exception: it is collected at end of response
+and routed through the existing converse aside handling (the chat log and,
+when verbose, the invoking terminal). Other stderr lines remain diagnostics.
+A failed provider has its stderr given as the reason. `-v` reaches every stage
+as `M8_VERBOSITY`, so each says no more than was asked for.
 
-* A provider that answered has it passed on as it was said.
-* One that failed has it given as the reason.
-* `-v` reaches every stage as `M8_VERBOSITY`,
-  so each says no more than was asked for.
-
-Every string in the entry is handed to all three as
-`M8_PROVIDER_*` on top of the inherited environment, and
-means whatever a command makes of it. `url` arrives as
-`M8_PROVIDER_URL`, `api-version` as
-`M8_PROVIDER_API_VERSION`. A number or a truth goes as its
-JSON text, so `true` arrives as `true`. Only those with
-lowercase-and-hyphen keys go, because only those have a name
-to take. The commands stay behind — each already knows what
-it is.
+The generic provider framework reserves only `cmd`, `encode`, `parse`, and
+`models`. Other nameable keys are passed as `M8_PROVIDER_*`: scalar values
+are unchanged (JSON text for numbers and booleans), while objects and arrays
+are serialized as JSON. For example, `stats` becomes
+`M8_PROVIDER_STATS`. Generic providers may interpret such values themselves;
+only `m8 url-provider` assigns a meaning to `stats`. Keys must contain only
+lowercase letters, digits, and hyphens; `api-version` becomes
+`M8_PROVIDER_API_VERSION`. Unnameable keys and null values are left out.
 
 `header-` is nothing special to m8. It is `m8
 url-provider`'s one convention rather than the language's, and it is

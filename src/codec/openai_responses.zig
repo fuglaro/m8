@@ -479,13 +479,11 @@ fn event(built: *Building, v: std.json.Value) !bool {
     } else if (std.mem.eql(u8, kind, "response.function_call_arguments.delta")) {
         if (str(v.object.get("delta"))) |d| try built.args.appendSlice(built.arena, d);
     } else if (std.mem.eql(u8, kind, "response.completed")) {
-        if (v.object.get("response")) |resp| built.aside = try cost(built.arena, resp);
         return true;
     } else if (std.mem.eql(u8, kind, "response.incomplete")) {
         // Cut off rather than failed: what was said still happened, and the
         // ledger keeps it — along with that it was cut off.
         if (v.object.get("response")) |resp| built.reason = incompleteOf(resp);
-        if (v.object.get("response")) |resp| built.aside = try cost(built.arena, resp);
         return true;
     } else if (std.mem.eql(u8, kind, "response.failed") or std.mem.eql(u8, kind, "error")) {
         // A refusal, an overload or a bad request arrives here with a 200, so
@@ -517,7 +515,6 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     };
 
     var built: Building = .{ .arena = arena, .sink = sink };
-    built.aside = try cost(built.arena, v);
     if (str(v.object.get("status"))) |status| if (std.mem.eql(u8, status, "incomplete")) {
         built.reason = incompleteOf(v);
     };
@@ -650,8 +647,6 @@ const Building = struct {
     encrypted: []const u8 = "",
     /// Of the response rather than any item, and only known at its end.
     reason: []const u8 = "",
-    /// What the response cost, as a line for whoever is watching.
-    aside: []const u8 = "",
     /// The summary part being read, and how many before it became 💭 already.
     part: i64 = 0,
     parts: usize = 0,
@@ -797,29 +792,9 @@ const Building = struct {
         if (b.kind != .none) try b.stop();
         const reason = if (b.refused and b.reason.len == 0) "refusal" else b.reason;
         try api.stopped(b.arena, b.sink, stops, reason);
-        return .{ .calls = b.calls.items, .aside = b.aside };
+        return .{ .calls = b.calls.items };
     }
 };
-
-/// What a finished response says it cost, as a line. `input_tokens` is the
-/// whole prompt here, with the cached share a detail of it.
-fn cost(arena: Allocator, response: std.json.Value) ![]const u8 {
-    if (response != .object) return "";
-    const u = response.object.get("usage") orelse return "";
-    if (u != .object) return "";
-    var c: api.Cost = .{
-        .in = num(u.object.get("input_tokens")) orelse 0,
-        .out = num(u.object.get("output_tokens")) orelse 0,
-    };
-    if (u.object.get("input_tokens_details")) |d| if (d == .object) {
-        c.cached = num(d.object.get("cached_tokens")) orelse 0;
-        c.written = num(d.object.get("cache_write_tokens")) orelse 0;
-    };
-    if (u.object.get("output_tokens_details")) |d| if (d == .object) {
-        c.thinking = num(d.object.get("reasoning_tokens")) orelse 0;
-    };
-    return api.costLine(arena, c);
-}
 
 fn num(v: ?std.json.Value) ?i64 {
     const got = v orelse return null;
@@ -1050,27 +1025,18 @@ test "a streamed reply reads as the items it was made of" {
     , reply.calls[0].arguments);
 }
 
-test "a finished response says what it cost" {
+test "a finished response parses without built-in aside stats" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-
     const body =
-        \\event: response.completed
-        \\data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1200,"input_tokens_details":{"cached_tokens":1024,"cache_write_tokens":100},"output_tokens":80,"output_tokens_details":{"reasoning_tokens":64}}}}
-        \\
+        \\{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":1200,"output_tokens":80}}
     ;
-    const at_once =
-        \\{"status":"completed","output":[],"usage":{"input_tokens":1200,"input_tokens_details":{"cached_tokens":1024,"cache_write_tokens":100},"output_tokens":80,"output_tokens_details":{"reasoning_tokens":64}}}
-    ;
-    for ([_][]const u8{ body, at_once }) |got| {
-        var r: std.Io.Reader = .fixed(got);
-        var collect: Collect = .{ .arena = arena };
-        try testing.expectEqualStrings(
-            "::stats::\u{2725}80\u{2586}1K::\u{1F9EE} 1200 in, 1024 cached (85%), 100 written, 80 out (64 thinking)",
-            (try parse(arena, &r, collect.sink())).aside,
-        );
-    }
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqualStrings("", reply.aside);
+    try testing.expectEqualStrings("hello", collect.got.records.items[0].content.?);
 }
 
 test "a summary part that says it ended is said once" {

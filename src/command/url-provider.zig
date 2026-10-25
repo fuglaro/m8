@@ -14,6 +14,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const api = @import("../api.zig");
 const provider = @import("../provider.zig");
+const stats = @import("url-provider/stats.zig");
 const Ctx = api.Ctx;
 
 /// The default keeps the provider tiny and delegates TLS, certificates, proxy
@@ -54,6 +55,9 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  M8_PROVIDER_HEADER_NAME  a shell command whose output is sent as
         \\                           header NAME: HEADER_X_API_KEY is x-api-key.
         \\                           One that fails or prints nothing is left off.
+        \\  M8_PROVIDER_STATS        JSON: {"headers":[...],"body":[...],"cmd":[...]}
+        \\                           Select response values for a formatter at EOF.
+        \\                           Its stdout goes to stderr; the body still streams.
         \\
     );
     try w.writeAll(if (comptime no_curl_dep)
@@ -178,8 +182,16 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8, body: ?[]const u8, content_type: []
         return 1;
     };
 
+    const settings = stats.load(ctx);
+    var response_headers: std.Io.Writer.Allocating = .init(ctx.arena);
+    if (settings) |s| if (s.headers.len > 0) {
+        var it = response.head.iterateHeaders();
+        while (it.next()) |h| try response_headers.writer.print("{s}: {s}\n", .{ h.name, h.value });
+    };
+
     // A non-200 response still contains the api's explanation. Passing its
     // body through is part of the provider contract, just as it is in curl.
+    var response_body: std.ArrayList(u8) = .empty;
     var transfer_buf: [64 * 1024]u8 = undefined;
     const reader = response.reader(&transfer_buf);
     while (true) {
@@ -190,8 +202,10 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8, body: ?[]const u8, content_type: []
         const chunk = reader.buffered();
         ctx.out.writeAll(chunk) catch return 0;
         ctx.out.flush() catch return 0;
+        if (settings) |s| if (s.body.len > 0) try response_body.appendSlice(ctx.arena, chunk);
         reader.toss(chunk.len);
     }
+    if (settings) |s| stats.finish(ctx, s, response_headers.written(), response_body.items);
     return 0;
 }
 
@@ -224,12 +238,16 @@ fn runCurl(ctx: Ctx, args: []const []const u8, stdin: std.process.SpawnOptions.S
     var lines: std.ArrayList(u8) = .empty;
     try headers(ctx, &lines);
 
-    const environ = try api.childEnvironment(ctx.arena, ctx, &.{.{ .key = headers_var, .value = lines.items }});
+    const settings = stats.load(ctx);
+    const capture_headers = if (settings) |s| s.headers.len > 0 else false;
+    const environ = try api.childEnvironment(ctx.arena, ctx, &.{
+        .{ .key = headers_var, .value = lines.items },
+        .{ .key = "M8_URL_CAPTURE_HEADERS", .value = if (capture_headers) "1" else "" },
+    });
 
-    // curl reads the request from the stdin it inherits and writes the answer
-    // to the stdout it inherits, so nothing passes through here on the way
-    // and a stream stays one: `-N` hands on what has arrived rather than
-    // what would round out a buffer.
+    // Without stats, curl inherits stdout/stderr exactly as before. With stats,
+    // drain both pipes while forwarding body bytes unchanged. Headers use
+    // curl's separate stderr stream, never --include on the body stream.
     //
     // No `--fail`. A status that is not 200 still has a body, and the body is
     // what the api said — the codec reads it as it reads any other answer.
@@ -241,12 +259,45 @@ fn runCurl(ctx: Ctx, args: []const []const u8, stdin: std.process.SpawnOptions.S
         .argv = argv.items,
         .environ_map = environ,
         .stdin = stdin,
-        .stdout = .inherit,
-        .stderr = .inherit,
+        .stdout = if (settings != null) .pipe else .inherit,
+        .stderr = if (settings != null) .pipe else .inherit,
     }) catch |e| {
         try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
         return 1;
     };
+    defer child.kill(ctx.io);
+    if (settings) |s| {
+        var buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+        var streams: std.Io.File.MultiReader = undefined;
+        streams.init(ctx.arena, ctx.io, buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+        defer streams.deinit();
+        var body: std.ArrayList(u8) = .empty;
+        const response = streams.reader(0);
+        while (streams.fill(4096, .none)) |_| {
+            const chunk = response.buffered();
+            ctx.out.writeAll(chunk) catch return 0;
+            ctx.out.flush() catch return 0;
+            if (s.body.len > 0) try body.appendSlice(ctx.arena, chunk);
+            response.toss(chunk.len);
+        } else |e| switch (e) {
+            error.EndOfStream => {},
+            else => return e,
+        }
+        try streams.checkAnyError();
+        const raw_stderr = streams.reader(1).buffered();
+        const separated = if (capture_headers)
+            try stats.splitCurlStderr(ctx.arena, raw_stderr)
+        else
+            stats.CurlStderr{ .headers = "", .diagnostics = raw_stderr };
+        try ctx.err.writeAll(separated.diagnostics);
+        try ctx.err.flush();
+        const code: u8 = switch (try child.wait(ctx.io)) {
+            .exited => |code| code,
+            else => 1,
+        };
+        stats.finish(ctx, s, separated.headers, body.items);
+        return code;
+    }
     return switch (child.wait(ctx.io) catch return 1) {
         .exited => |code| code,
         else => 1,
@@ -262,12 +313,16 @@ const headers_var = "M8_PROVIDER_URL_HEADERS";
 /// argument is in `ps` for every user on the machine, and one of these is a
 /// key.
 const script =
-    \\exec curl -sS -N -H 'content-type: application/json' -H @/dev/fd/3 --data-binary @- "$1"
+    \\u=$1; shift
+    \\if [ "$M8_URL_CAPTURE_HEADERS" = 1 ]; then set -- "$@" --dump-header /dev/stderr; fi
+    \\exec curl -sS -N -H 'content-type: application/json' -H @/dev/fd/3 --data-binary @- "$@" "$u"
 ++ heredoc;
 
 /// The same, asking rather than posting: no body, so nothing says what one is.
 const get_script =
-    \\exec curl -sS -N -H @/dev/fd/3 "$1"
+    \\u=$1; shift
+    \\if [ "$M8_URL_CAPTURE_HEADERS" = 1 ]; then set -- "$@" --dump-header /dev/stderr; fi
+    \\exec curl -sS -N -H @/dev/fd/3 "$@" "$u"
 ++ heredoc;
 
 /// The same, handing over a file: `$2` as the field `file`, and every other
@@ -276,6 +331,7 @@ const get_script =
 const upload_script =
     \\u=$1 f=$2; shift 2
     \\for a; do set -- "$@" --form-string "$a"; shift; done
+    \\if [ "$M8_URL_CAPTURE_HEADERS" = 1 ]; then set -- "$@" --dump-header /dev/stderr; fi
     \\exec curl -sS -H @/dev/fd/3 -F "file=@$f" "$@" "$u"
 ++ heredoc;
 

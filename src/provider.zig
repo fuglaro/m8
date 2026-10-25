@@ -50,8 +50,7 @@ pub const Provider = struct {
     /// What lists the models it serves, one name a line. `m8 models` runs
     /// it; nothing else does.
     models: ?[]const []const u8 = null,
-    /// Everything else the entry said, for the environment. Only strings,
-    /// numbers and truths with lowercase-and-hyphen keys make it this far.
+    /// Everything else the entry said, for the environment.
     args: []const Arg,
 
     pub fn get(p: Provider, key: []const u8) ?[]const u8 {
@@ -68,12 +67,9 @@ pub const Arg = struct {
 /// The prefix every provider argument reaches its command under.
 pub const env_prefix = "M8_PROVIDER_";
 
-/// Read an entry, keeping what the command will be given.
-///
-/// Only strings, numbers and truths with lowercase-and-hyphen keys are passed
-/// on, because only those have an environment variable to be: `api-version`
-/// arrives as `M8_PROVIDER_API_VERSION`, and `true` as `true`. Anything else in the entry is m8's business or
-/// nobody's. The commands are left behind — each already knows what it is.
+/// Read an entry, keeping command keys for the pipeline and turning every
+/// other nameable value into an environment argument. Objects and arrays are
+/// JSON text; command definitions remain framework-owned.
 pub fn read(arena: Allocator, providers: std.json.ObjectMap, name: []const u8) !Provider {
     const v = providers.get(name) orelse return Error.UnknownProvider;
     if (v != .object) return Error.UnknownProvider;
@@ -85,17 +81,15 @@ pub fn read(arena: Allocator, providers: std.json.ObjectMap, name: []const u8) !
     var it = o.iterator();
     while (it.next()) |e| {
         const key = e.key_ptr.*;
-        // The commands are lists, so they stay behind with everything else
-        // that has no one spelling: a command already knows what it is. A
-        // number or a truth goes as its JSON text.
+        if (!nameable(key) or reserved(key)) continue;
         const value = switch (e.value_ptr.*) {
             .string, .number_string => |t| t,
             .bool => |b| if (b) "true" else "false",
             .integer => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
             .float => |n| try std.fmt.allocPrint(arena, "{d}", .{n}),
+            .object, .array => try std.json.Stringify.valueAlloc(arena, e.value_ptr.*, .{}),
             else => continue,
         };
-        if (!nameable(key)) continue;
         try args.append(arena, .{ .key = key, .value = value });
     }
 
@@ -109,7 +103,6 @@ pub fn read(arena: Allocator, providers: std.json.ObjectMap, name: []const u8) !
     };
 }
 
-/// A command as an entry writes it: a list of strings, with at least one.
 fn words(arena: Allocator, v: ?std.json.Value) !?[]const []const u8 {
     const list = v orelse return null;
     if (list != .array or list.array.items.len == 0) return Error.NoCommand;
@@ -131,6 +124,11 @@ fn nameable(key: []const u8) bool {
         return false;
     }
     return true;
+}
+
+fn reserved(key: []const u8) bool {
+    return std.mem.eql(u8, key, "cmd") or std.mem.eql(u8, key, "encode") or
+        std.mem.eql(u8, key, "parse") or std.mem.eql(u8, key, "models");
 }
 
 /// `api-version` becomes `M8_PROVIDER_API_VERSION`.
@@ -268,7 +266,6 @@ pub fn stages(
     };
 }
 
-/// Run a provider and read what it says.
 ///
 /// The stages are one pipeline, each one's stdout the next one's stdin, and
 /// m8 holds only the two ends: it writes the ledger to the first and reads
@@ -347,21 +344,35 @@ pub fn run(
         if (why.len > 0) try err.print(": {s}", .{why});
         try err.writeAll("\n");
     };
-    const turn = reply catch |parse_err| {
+    var turn = reply catch |parse_err| {
         if (!failed) try err.print("m8: provider: {s}\n", .{@errorName(parse_err)});
         return parse_err;
     };
     if (failed) return Error.ProviderFailed;
-    // A provider that answered may still have had something to say, such as
-    // a credential it could not find, or what the answer cost.
-    for (said) |aside| if (aside.len > 0) {
-        try err.writeAll(aside);
-        if (aside[aside.len - 1] != '\n') try err.writeAll("\n");
+    for (said) |diagnostic| if (diagnostic.len > 0) {
+        try routeDiagnostics(arena, diagnostic, &turn.aside, err);
     };
     return turn;
 }
 
-// ---------------------------------------------------------------- tests
+fn routeDiagnostics(arena: Allocator, text: []const u8, aside: *[]const u8, err: *std.Io.Writer) !void {
+    var ordinary: std.ArrayList(u8) = .empty;
+    var start: usize = 0;
+    while (start < text.len) {
+        const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
+        const complete = end < text.len;
+        const next = if (complete) end + 1 else end;
+        const line = text[start..next];
+        if (complete and std.mem.startsWith(u8, line, "::stats::")) {
+            aside.* = try std.mem.concat(arena, u8, &.{ aside.*, line });
+        } else try ordinary.appendSlice(arena, line);
+        start = next;
+    }
+    if (ordinary.items.len > 0) {
+        try err.writeAll(ordinary.items);
+        if (ordinary.items[ordinary.items.len - 1] != '\n') try err.writeAll("\n");
+    }
+}
 
 const testing = std.testing;
 const test_tmp = @import("test_tmp.zig");
@@ -380,6 +391,8 @@ test "an entry is its commands, and whatever else it wants to say" {
         \\{"local": {
         \\  "cmd": ["m8", "url-provider"],
         \\  "encode": ["m8", "encode", "openai-completions"],
+        \\  "parse": ["m8", "parse"],
+        \\  "models": ["m8", "models"],
         \\  "url": "http://x/v1/chat/completions",
         \\  "key": "cat ~/.key",
         \\  "name": "not-the-selection",
@@ -387,28 +400,37 @@ test "an entry is its commands, and whatever else it wants to say" {
         \\  "timeout": 30,
         \\  "use-cache": true,
         \\  "headers": {"x": "y"},
-        \\  "Weird_Key": "ignored"
+        \\  "features": ["one", 2, true],
+        \\  "stats": {"cmd": ["not", "special"], "enabled": true},
+        \\  "Weird_Key": {"ignored": true},
+        \\  "unset": null
         \\}}
     );
     const p = try read(arena, ps, "local");
 
-    // A stage it did not name is not there: the command is handed m8.
+    // Pipeline commands remain separate from environment arguments.
     try testing.expectEqualStrings("openai-completions", p.encode.?[2]);
-    try testing.expect(p.parse == null);
+    try testing.expect(p.parse != null);
+    try testing.expectEqualStrings("models", p.models.?[1]);
     try testing.expectEqual(@as(usize, 2), p.cmd.len);
     try testing.expectEqualStrings("m8", p.cmd[0]);
 
-    // Strings, numbers and truths with nameable keys go through; `cmd`
-    // never does, and neither does an object or a key with no environment
-    // name to take.
+    // Scalars preserve their spelling; structured settings become JSON.
+    // Reserved command keys, unnameable keys and nulls stay behind.
     try testing.expectEqualStrings("http://x/v1/chat/completions", p.get("url").?);
     try testing.expectEqualStrings("cat ~/.key", p.get("key").?);
     try testing.expectEqualStrings("2024-02-01", p.get("api-version").?);
     try testing.expect(p.get("cmd") == null);
+    try testing.expect(p.get("encode") == null);
+    try testing.expect(p.get("parse") == null);
+    try testing.expect(p.get("models") == null);
+    try testing.expect(p.get("Weird_Key") == null);
+    try testing.expect(p.get("unset") == null);
     try testing.expectEqualStrings("30", p.get("timeout").?);
     try testing.expectEqualStrings("true", p.get("use-cache").?);
-    try testing.expect(p.get("headers") == null);
-    try testing.expect(p.get("Weird_Key") == null);
+    try testing.expectEqualStrings("{\"x\":\"y\"}", p.get("headers").?);
+    try testing.expectEqualStrings("[\"one\",2,true]", p.get("features").?);
+    try testing.expectEqualStrings("{\"cmd\":[\"not\",\"special\"],\"enabled\":true}", p.get("stats").?);
 
     try testing.expectEqualStrings("M8_PROVIDER_API_VERSION", try envName(arena, "api-version"));
     try testing.expectEqualStrings("M8_PROVIDER_URL", try envName(arena, "url"));
@@ -418,6 +440,8 @@ test "an entry is its commands, and whatever else it wants to say" {
     try addEnvironment(arena, p, &env);
     try testing.expectEqualStrings("local", env.get("M8_PROVIDER_NAME").?);
     try testing.expectEqualStrings("http://x/v1/chat/completions", env.get("M8_PROVIDER_URL").?);
+    try testing.expectEqualStrings("[\"one\",2,true]", env.get("M8_PROVIDER_FEATURES").?);
+    try testing.expectEqualStrings("{\"cmd\":[\"not\",\"special\"],\"enabled\":true}", env.get("M8_PROVIDER_STATS").?);
 }
 
 test "an entry with no command is not a provider" {
@@ -589,13 +613,13 @@ test "the stages are one pipeline, and what each says aside is kept for the end"
 
     var thrown: std.Io.Writer.Allocating = .init(arena);
     var collect: Collect = .{ .arena = arena };
-    _ = try run(
+    const reply = try run(
         arena,
         io,
         .{
             .encode = &.{ "/bin/sh", "-c", "tr a-z A-Z" },
             .cmd = &.{ "/bin/sh", "-c", "sed 's/$/!/'" },
-            .parse = &.{ "/bin/sh", "-c", "echo '::stats::x' >&2; printf '* :robot::\n  > '; cat" },
+            .parse = &.{ "/bin/sh", "-c", "echo 'ordinary note' >&2; echo '::stats::x' >&2; printf '* :robot::\\n  > '; cat" },
         },
         null,
         "ask",
@@ -603,8 +627,8 @@ test "the stages are one pipeline, and what each says aside is kept for the end"
         &thrown.writer,
     );
     try testing.expectEqualStrings("ASK!", try collect.got.said(arena));
-    // As it was said, with nothing put in front of it.
-    try testing.expectEqualStrings("::stats::x\n", thrown.written());
+    try testing.expectEqualStrings("ordinary note\n", thrown.written());
+    try testing.expectEqualStrings("::stats::x\n", reply.aside);
 
     // The stage that failed is the one named.
     try testing.expectError(Error.ProviderFailed, run(

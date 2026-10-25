@@ -134,3 +134,81 @@ cheap one — the same three tiers as opus, sonnet and haiku,
 and a file each. Which of them a subscription endpoint serves,
 and whether it wants a `-codex` variant of the name instead,
 is that endpoint's business rather than this file's.
+
+## Stats commands
+
+Stats configuration is an ordinary provider value to the generic framework.
+It serializes the object as JSON in `M8_PROVIDER_STATS`; only `m8 url-provider`
+interprets it. A custom provider command can use that value for
+its own purposes. For the url transport, an optional object can select
+response metadata and name a formatter:
+
+```json
+"stats": {
+  "headers": ["x-request-id"],
+  "body": ["usage.input_tokens", "response.usage.input_tokens"],
+  "cmd": ["awk", "...inline program..."]
+}
+```
+
+`headers` selects response headers case-insensitively. `body` selects object
+fields by dot-separated paths: from the whole JSON response, or from each
+JSON SSE `data:` event. Missing paths and non-JSON events (including
+`[DONE]`) produce nothing. Selected objects are allowed too; this is not a
+query language and does not traverse arrays or escape dots in field names.
+
+The formatter receives named, JSON-valued lines on stdin:
+
+```text
+header.x-request-id: "req_123"
+body.response.usage.input_tokens: 1200
+```
+
+Each value occupies one physical line, including strings with escaped
+newlines. Names retain their configured spelling. Headers come first, in
+selection order; repeated headers produce repeated lines. Body events retain
+arrival order, with paths emitted in configuration order within each event.
+A later value does not erase an earlier line: retaining counts or doing
+arithmetic is the formatter's business. Anthropic, for example, supplies
+input/cache counts at message start and updates output counts later.
+
+The formatter's stdout is status output, not ledger content. Complete lines
+beginning `::stats::` written to provider stderr are routed to the existing
+converse log and verbosity handling. Other stderr is ordinary diagnostics.
+Formatter errors do not change the HTTP command's exit status. Without
+`stats`, curl's stdout and stderr are inherited unchanged and the response
+body is not captured.
+
+With stats enabled, curl response chunks continue to stdout unchanged. The
+body is retained in memory only when `body` selectors are configured; it is
+never prefixed with headers or otherwise altered. Selected headers use curl's
+`--dump-header /dev/stderr`; `std.Io.File.MultiReader` drains the response and
+stderr pipes while keeping header metadata separate from curl diagnostics.
+The stdlib HTTP transport uses its header iterator and an optional in-memory
+body copy. In either transport, after the response reaches EOF the formatter
+runs with selected lines on stdin, stdout forwarded to stderr, and its stderr
+preserved as diagnostics. Stats therefore describe the completed response;
+no live-timing guarantee is made.
+
+### Examples
+
+[The Anthropic stats fragment](examples/stats-anthropic.json) is self-contained:
+its inline POSIX awk formatter handles whole-response and streaming usage,
+retaining counts across events. The existing
+[Codex configuration](../.m8-st8/core/providers/codex.json) shows OpenAI usage.
+Neither requires an installed helper script.
+
+### Watching stats
+
+`m8 watch` keeps polling the pointer and tails new complete `::stats::` lines
+from its sibling `+.log`, forwarding them unchanged to stderr. Ledger output
+stays on stdout. Existing stats are not replayed when watch starts.
+Logged stats prefix the detail field with the latest saved ledger reference,
+for example `::stats::✥80▆1K::+/abcdefghij: 1200 in, 80 out`; the compact panel
+and provider formatter are unchanged. Without a saved stage, stats stay unlinked.
+
+The log carries stats only, not pointer changes or resets. It is advisory, not
+another ledger: no locks, transactions, or delivery guarantees.
+Concurrent or interrupted writes may leave malformed lines, and watch ignores
+unrecognized records. The pointer remains authoritative even when the log is
+missing or truncated.

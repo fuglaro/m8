@@ -53,6 +53,10 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\Only the chat's own pointer is read. One with none is waited on,
         \\rather than shown as the chat above it.
         \\
+        \\New ::stats:: lines from its sibling +.log go unchanged to stderr.
+        \\Old stats are not replayed. The log is advisory; the pointer remains
+        \\authoritative, and both are polled.
+        \\
     );
 }
 
@@ -75,6 +79,9 @@ fn run(ctx: Ctx) !u8 {
     }
     const agent = try address.agentOf(ctx.arena, ctx.io, dirs, a.name);
     const ptr = try session.pointerOf(ctx.arena, a.name);
+    const log_path = try session.logPath(ctx.arena, ctx.io, dirs, a.name);
+    // Start at EOF: this watcher reports new advisory stats, not old history.
+    var log_offset: u64 = if (std.Io.Dir.cwd().statFile(ctx.io, log_path, .{})) |st| st.size else |_| 0;
 
     // What was last shown outlives the look that showed it.
     var shown_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -87,6 +94,8 @@ fn run(ctx: Ctx) !u8 {
     while (true) : (try ctx.io.sleep(pause, .awake)) {
         _ = scratch.reset(.retain_capacity);
         const arena = scratch.allocator();
+
+        pollLog(ctx.io, log_path, &log_offset, ctx.err) catch {};
 
         const named = (try session.deref(arena, ctx.io, dirs, ptr)) orelse agent;
         const head = try session.settle(arena, ctx.io, dirs, named);
@@ -110,4 +119,48 @@ fn run(ctx: Ctx) !u8 {
         shown = shown_buf[0..head.len];
         @memcpy(shown_buf[0..head.len], head);
     }
+}
+
+// Advisory only: complete lines are forwarded; partial lines wait for next poll.
+fn pollLog(io: std.Io, path: []const u8, offset: *u64, err: *std.Io.Writer) !void {
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return;
+    defer file.close(io);
+    if (try file.length(io) < offset.*) offset.* = 0;
+    var buf: [64 * 1024]u8 = undefined;
+    const n = try file.readPositionalAll(io, &buf, offset.*);
+    const last = std.mem.lastIndexOfScalar(u8, buf[0..n], '\n') orelse {
+        if (n == buf.len) offset.* += n; // Discard an oversized malformed record.
+        return;
+    };
+    var lines = std.mem.splitScalar(u8, buf[0 .. last + 1], '\n');
+    while (lines.next()) |line| if (std.mem.startsWith(u8, line, "::stats::")) {
+        try err.writeAll(line);
+        try err.writeByte('\n');
+    };
+    offset.* += last + 1;
+    try err.flush();
+}
+
+test "watch log follows complete stats only and recovers from truncation" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const dir = try @import("../test_tmp.zig").make(arena, io, "m8-watch-log");
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+    const path = try std.fs.path.join(arena, &.{ dir, "+.log" });
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var offset: u64 = 0;
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "noise\n::stats::partial" });
+    try pollLog(io, path, &offset, &out.writer);
+    try std.testing.expectEqualStrings("", out.written());
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "noise\n::stats::partial complete\nnoise\n::stats::next\n" });
+    try pollLog(io, path, &offset, &out.writer);
+    try pollLog(io, path, &offset, &out.writer);
+    try std.testing.expectEqualStrings("::stats::partial complete\n::stats::next\n", out.written());
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "::stats::reset\n" });
+    try pollLog(io, path, &offset, &out.writer);
+    try std.testing.expect(std.mem.endsWith(u8, out.written(), "::stats::reset\n"));
 }

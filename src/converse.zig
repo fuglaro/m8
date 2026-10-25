@@ -299,6 +299,22 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 try turn.append(arena, record);
             }
             try progress.keep(arena, turn.items);
+            if (answered.aside.len > 0) {
+                if (opts.keep) |k| {
+                    if (std.mem.endsWith(u8, k.home, "/+")) {
+                        const chat = k.home[0 .. k.home.len - 2];
+                        var lines = std.mem.splitScalar(u8, answered.aside, '\n');
+                        while (lines.next()) |line| if (std.mem.startsWith(u8, line, "::stats::")) {
+                            session.appendStats(arena, io, dirs, chat, if (progress.kept > 0) progress.lead[0].value else null, line["::stats::".len..]) catch {};
+                        };
+                    }
+                }
+                if (level > 0) {
+                    try ctx.err.writeAll(answered.aside);
+                    if (!std.mem.endsWith(u8, answered.aside, "\n")) try ctx.err.writeByte('\n');
+                    try ctx.err.flush();
+                }
+            }
             if (answered.calls.len == 0) break;
             const calls = answered.calls;
 

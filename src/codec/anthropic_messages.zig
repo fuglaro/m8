@@ -542,10 +542,7 @@ fn event(built: *Building, v: std.json.Value) !bool {
     if (v != .object) return false;
     const kind = str(v.object.get("type")) orelse return false;
 
-    if (std.mem.eql(u8, kind, "message_start")) {
-        const m = v.object.get("message") orelse return false;
-        if (m == .object) built.tally(m.object.get("usage"));
-    } else if (std.mem.eql(u8, kind, "content_block_start")) {
+    if (std.mem.eql(u8, kind, "content_block_start")) {
         const block = v.object.get("content_block") orelse return false;
         if (block != .object) return false;
         try built.start(block);
@@ -572,7 +569,6 @@ fn event(built: *Building, v: std.json.Value) !bool {
             if (str(d.object.get("stop_reason"))) |why| built.reason = why;
             built.category = categoryOf(d);
         }
-        built.tally(v.object.get("usage"));
     } else if (std.mem.eql(u8, kind, "message_stop")) {
         return true;
     } else if (std.mem.eql(u8, kind, "error")) {
@@ -603,7 +599,6 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     var built: Building = .{ .arena = arena, .sink = sink };
     built.reason = str(v.object.get("stop_reason")) orelse "";
     built.category = categoryOf(v);
-    built.tally(v.object.get("usage"));
     const content = v.object.get("content") orelse return built.finish();
     if (content != .array) return built.finish();
     for (content.array.items) |block| {
@@ -654,11 +649,6 @@ const Building = struct {
     /// Of the message rather than any block, and only known at its end.
     reason: []const u8 = "",
     category: []const u8 = "",
-    /// What the message cost, as far as it has said: `message_start` says it
-    /// first and `message_delta` again as the counts run on.
-    cost: api.Cost = .{},
-    costed: bool = false,
-    fresh: i64 = 0,
 
     const Kind = enum { none, text, thinking, tool_use };
 
@@ -695,20 +685,6 @@ const Building = struct {
                     try b.args.appendSlice(b.arena, buf.written());
             }
         }
-    }
-
-    /// A usage object, over whatever an earlier one said. `input_tokens` is
-    /// only what the cache did not touch here, so what was read from it and
-    /// what was written to it are added back to make the whole prompt.
-    fn tally(b: *Building, usage: ?std.json.Value) void {
-        const u = usage orelse return;
-        if (u != .object) return;
-        b.costed = true;
-        if (num(u.object.get("cache_read_input_tokens"))) |n| b.cost.cached = n;
-        if (num(u.object.get("cache_creation_input_tokens"))) |n| b.cost.written = n;
-        if (num(u.object.get("output_tokens"))) |n| b.cost.out = n;
-        if (num(u.object.get("input_tokens"))) |n| b.fresh = n;
-        b.cost.in = b.fresh + b.cost.cached + b.cost.written;
     }
 
     fn delta(b: *Building, which: []const u8, fragment: []const u8) !void {
@@ -770,15 +746,9 @@ const Building = struct {
         } else {
             try api.stopped(b.arena, b.sink, stops, b.reason);
         }
-        const aside = if (b.costed) try api.costLine(b.arena, b.cost) else "";
-        return .{ .calls = b.calls.items, .aside = aside };
+        return .{ .calls = b.calls.items };
     }
 };
-
-fn num(v: ?std.json.Value) ?i64 {
-    const got = v orelse return null;
-    return if (got == .integer) got.integer else null;
-}
 
 fn str(v: ?std.json.Value) ?[]const u8 {
     const got = v orelse return null;
@@ -1168,33 +1138,18 @@ test "an error is what the api said, and the reply says so" {
     );
 }
 
-test "a finished message says what it cost, the cache counted back in" {
+test "a finished message parses without built-in aside stats" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-
     const body =
-        \\event: message_start
-        \\data: {"type":"message_start","message":{"usage":{"input_tokens":76,"cache_creation_input_tokens":100,"cache_read_input_tokens":1024,"output_tokens":1}}}
-        \\
-        \\event: message_delta
-        \\data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":80}}
-        \\
-        \\event: message_stop
-        \\data: {"type":"message_stop"}
-        \\
+        \\{"type":"message","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":76,"output_tokens":80}}
     ;
-    const at_once =
-        \\{"type":"message","content":[],"stop_reason":"end_turn","usage":{"input_tokens":76,"cache_creation_input_tokens":100,"cache_read_input_tokens":1024,"output_tokens":80}}
-    ;
-    for ([_][]const u8{ body, at_once }) |got| {
-        var r: std.Io.Reader = .fixed(got);
-        var collect: Collect = .{ .arena = arena };
-        try testing.expectEqualStrings(
-            "::stats::\u{2725}80\u{2586}1K::\u{1F9EE} 1200 in, 1024 cached (85%), 100 written, 80 out",
-            (try parse(arena, &r, collect.sink())).aside,
-        );
-    }
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqualStrings("", reply.aside);
+    try testing.expectEqualStrings("hello", collect.got.records.items[0].content.?);
 }
 
 test "files a 🔗 hands over go out beside the answer, uploaded or whole" {

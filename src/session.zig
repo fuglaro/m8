@@ -246,6 +246,39 @@ pub fn point(
     try write(arena, io, scoped, ptr, &.{.{ .sigil = .agent, .value = target }});
 }
 
+/// Append stats with the saved ledger reference in the detail field.
+/// The compact panel is unchanged; pointers remain authoritative.
+pub fn appendStats(arena: Allocator, io: std.Io, dirs: config.Dirs, chat: []const u8, target: ?[]const u8, payload: []const u8) !void {
+    const path = try logPath(arena, io, dirs, chat);
+    const saved = target orelse return appendLog(arena, io, path, payload);
+    const relative = std.mem.startsWith(u8, saved, chat) and saved.len > chat.len and saved[chat.len] == '/';
+    const name = if (relative) saved[chat.len + 1 ..] else saved;
+    const split = std.mem.indexOf(u8, payload, "::") orelse payload.len;
+    const detail = if (split < payload.len) payload[split + 2 ..] else "";
+    const linked = try std.fmt.allocPrint(arena, "{s}::{s}:{s}{s}", .{ payload[0..split], name, if (detail.len > 0) " " else "", detail });
+    try appendLog(arena, io, path, linked);
+}
+
+/// Resolve through config's selected state root, then replace the pointer's
+/// markdown filename with the sibling log filename.
+pub fn logPath(arena: Allocator, io: std.Io, dirs: config.Dirs, chat: []const u8) ![]const u8 {
+    const ptr = try pointerOf(arena, chat);
+    const md = try config.filePath(arena, io, dirs, ptr);
+    const stem = if (std.mem.endsWith(u8, md, ".md")) md[0 .. md.len - 3] else return error.InvalidName;
+    return std.fmt.allocPrint(arena, "{s}.log", .{stem});
+}
+
+fn appendLog(arena: Allocator, io: std.Io, path: []const u8, value: []const u8) !void {
+    if (std.fs.path.dirname(path)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
+    const bytes = try std.fmt.allocPrint(arena, "::stats::{s}\n", .{value});
+    // One append write where possible, without locking or delivery guarantees.
+    const rc = std.posix.system.open(try arena.dupeZ(u8, path), .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true, .CLOEXEC = true }, @as(std.posix.mode_t, 0o600));
+    if (std.posix.errno(rc) != .SUCCESS) return error.LogOpenFailed;
+    const file: std.Io.File = .{ .handle = @intCast(rc), .flags = .{ .nonblocking = false } };
+    defer file.close(io);
+    try file.writeStreamingAll(io, bytes);
+}
+
 /// Take a pointer away, from the nearest directory that has one. Nothing it
 /// named is touched: a turn is never rewritten, and a chat reset is a chat
 /// that goes back to reading as its parent.
@@ -490,4 +523,26 @@ test "a global pointer is not a valid storage name" {
     defer f.deinit();
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(error.InvalidName, settle(arena, f.io, config.Dirs{ .roots = &dirs }, "+"));
+}
+
+test "stats log links saved stages without logging pointer changes" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const f = try Fixture.init(arena, &threaded, "m8-session-log");
+    defer f.deinit();
+    try f.write(arena, "mob/agent", "* :brain::/local/tiny\n");
+    const dirs: config.Dirs = .{ .roots = &.{f.dir} };
+    const chat = "mob/agent//job";
+    const ptr = try pointerOf(arena, chat);
+    try point(arena, f.io, dirs, ptr, "mob/agent");
+    try appendStats(arena, f.io, dirs, chat, "mob/agent//job/+/saved", "80::1200 in, 80 out");
+    try appendStats(arena, f.io, dirs, chat, "mob/agent//job/+/saved", "80");
+    try appendStats(arena, f.io, dirs, chat, null, "80::unlinked");
+    try unpoint(arena, f.io, dirs, ptr);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(f.io, try logPath(arena, f.io, dirs, chat), arena, .unlimited);
+    try testing.expectEqualStrings("::stats::80::+/saved: 1200 in, 80 out\n::stats::80::+/saved:\n::stats::80::unlinked\n", bytes);
+    try testing.expectEqual(@as(?[]const u8, null), try deref(arena, f.io, dirs, ptr));
 }

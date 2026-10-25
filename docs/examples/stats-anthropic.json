@@ -1,0 +1,16 @@
+{
+  "stats": {
+    "headers": [],
+    "body": [
+      "message.usage.input_tokens",
+      "message.usage.cache_read_input_tokens",
+      "message.usage.cache_creation_input_tokens",
+      "message.usage.output_tokens",
+      "usage.input_tokens",
+      "usage.cache_read_input_tokens",
+      "usage.cache_creation_input_tokens",
+      "usage.output_tokens"
+    ],
+    "cmd": ["awk", "function latest_line(    path, parts, count, key, value) {\n  if ($0 !~ /^body\\.(message\\.)?usage\\./) return\n  path = $0; sub(/:[[:space:]]*.*/, \"\", path)\n  count = split(path, parts, \"[.]\"); if (count < 3) return\n  key = parts[count]; value = $0; sub(/^.*:[[:space:]]*/, \"\", value)\n  if (value !~ /^-?[0-9]+$/) return\n  values[key] = value + 0; any = 1\n}\nfunction compact(n,    unit, units) {\n  unit = 0; units = \" KMGTP\"; n = int(n < 0 ? 0 : n)\n  while (n >= 1000 && unit < 5) { n = int(n / 1000); unit++ }\n  return sprintf(\"%d%s\", n % 10000, unit ? substr(units, unit + 1, 1) : \"\")\n}\nfunction cache_block(percent, cached, blocks, idx) {\n  if (cached <= 0) return \"_\"\n  split(\"▁ ▂ ▃ ▄ ▅ ▆ ▇\", blocks, \" \"); idx = int(percent * 7 / 100)\n  if (idx < 0) idx = 0; if (idx > 6) idx = 6\n  return blocks[idx + 1]\n}\n{ latest_line() }\nEND {\n  if (!any) exit\n  input = values[\"input_tokens\"] + values[\"cache_read_input_tokens\"] + values[\"cache_creation_input_tokens\"]\n  output = values[\"output_tokens\"]; cached = values[\"cache_read_input_tokens\"]; written = values[\"cache_creation_input_tokens\"]\n  percent = input > 0 ? int(cached * 100 / input) : 0\n  printf \"::stats::✥%s%s%s::\", compact(output), cache_block(percent, cached), compact(input)\n  printf \"%d in, %d cached (%d%%)\", input, cached, percent\n  if (written > 0) printf \", %d written\", written\n  printf \", %d out\\n\", output\n}"]
+  }
+}

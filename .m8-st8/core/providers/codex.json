@@ -13,6 +13,25 @@
     "parse",
     "openai-responses"
   ],
+  "stats": {
+    "headers": [],
+    "body": [
+      "usage.input_tokens",
+      "usage.output_tokens",
+      "usage.input_tokens_details.cached_tokens",
+      "usage.input_tokens_details.cache_write_tokens",
+      "usage.output_tokens_details.reasoning_tokens",
+      "response.usage.input_tokens",
+      "response.usage.output_tokens",
+      "response.usage.input_tokens_details.cached_tokens",
+      "response.usage.input_tokens_details.cache_write_tokens",
+      "response.usage.output_tokens_details.reasoning_tokens"
+    ],
+    "cmd": [
+      "awk",
+      "function short(n, u) { u=0; n=int(n<0?0:n); while(n>=1000 && u<5) { n=int(n/1000); u++ } return sprintf(\"%d%s\", n%10000, u?substr(\" KMGTP\",u+1,1):\"\") }\n/^body\\.(response\\.)?usage\\./ && $2 ~ /^[0-9]+$/ { k=$1; sub(/:$/,\"\",k); sub(/^.*\\./,\"\",k); v[k]=$2; seen=1 }\nEND {\n  if(!seen) exit\n  input=v[\"input_tokens\"]; out=v[\"output_tokens\"]; cached=v[\"cached_tokens\"]; written=v[\"cache_write_tokens\"]; thinking=v[\"reasoning_tokens\"]\n  hit=input>0?int(cached*100/input):0; b=int(hit*7/100); if(b<0)b=0; if(b>6)b=6\n  split(\"▁ ▂ ▃ ▄ ▅ ▆ ▇\",blocks,\" \")\n  printf \"::stats::✥%s%s%s::%d in, %d cached (%d%%)\", short(out), (cached>0?blocks[b+1]:\"_\"), short(input), input, cached, hit\n  if(written>0) printf \", %d written\",written\n  printf \", %d out\",out\n  if(thinking>0) printf \" (%d thinking)\",thinking\n  printf \"\\n\"\n}"
+    ]
+  },
   "url": "https://chatgpt.com/backend-api/codex/responses",
   "upload": "# Emit MIME data:MIME;base64,BYTES NAME \np=${1% (*} h=${1##* (} h=${h%)}; n=${p##*/}\ncase $n in\n  *.jpeg|*.jpg) m=image/jpeg ;; *.png) m=image/png ;; *.gif) m=image/gif ;;\n  *.webp) m=image/webp ;; *.pdf) m=application/pdf ;;\n  *) echo \"upload: no type for $n\" >&2; exit 1 ;;\nesac\ncase $p in /*) f=$p ;; *) f=$M8_MOB_ST8_DIR/$p ;; esac\nbefore=$(stat -f '%d:%i:%z:%m:%c' -- \"$f\") || exit\n[ \"$(shasum -a 256 <\"$f\" | cut -c1-64)\" = \"$h\" ] || { echo \"upload: $p is not the file linked\" >&2; exit 1; }\nprintf '%s data:%s;base64,' $m $m; base64 <\"$f\" | tr -d '\\n'; printf ' %s' \"$n\"\nafter=$(stat -f '%d:%i:%z:%m:%c' -- \"$f\") || exit\n[ \"$before\" = \"$after\" ] || { echo \"upload: $p changed while encoding\" >&2; exit 1; }",
   "models-url": "https://chatgpt.com/backend-api/codex/models?client_version=999.0.0",

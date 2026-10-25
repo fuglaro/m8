@@ -51,6 +51,7 @@
   Leveraging unicode colors as a LUT??? Needs to be reasonably
   cross-common-font compatible so constraining to some common standardised ones
   is crucial - if even possible. 2 char wide grid?
+* Mini renderer for depth and id pass drawn in ascii. Also edge line pass?
 
 ### Tool loop de-opinion
 
