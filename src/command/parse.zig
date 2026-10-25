@@ -88,7 +88,8 @@ fn run(ctx: Ctx) !u8 {
         try doc.write(ctx.out, ctx.mode, .{
             .sigil = .call,
             .value = try std.fmt.allocPrint(ctx.arena, "{s},{s}", .{ call.name, call.id }),
-            .content = try toolbox.renderArgs(ctx.arena, ctx.mode, call.arguments),
+            // Arguments that are not a JSON object are kept as they came.
+            .content = toolbox.renderArgs(ctx.arena, ctx.mode, call.arguments) catch call.arguments,
         });
     }
     return 0;

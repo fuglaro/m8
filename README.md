@@ -1,5 +1,5 @@
 
-# mEight - The Composable Agentic Shell Harness
+# m8 (mEight) - The Composable Agentic Shell Harness
 
 The command-line-first agentic harness - fully embracing the shell.
 
@@ -33,16 +33,16 @@ Or with a TUI:
 │ can you write a haiku to scratch/haiku.md about having good mates?
 
 ▐ 📲:edit,call_354d69588f1c4cd090828705078c4dca
-│ * path `scratch/haiku.md`
+│ * path `"scratch/haiku.md"`
 │ * new_string
-│   ```
+│   ```text
 │   Good mates share the road
 │   Laughter warms the evening air
 │   Home is where we meet
 │
 │   ```
-│ * old_string
-│ * pages
+│ * old_string `""`
+│ * pages `""`
 ▐ 📜:call_354d69588f1c4cd090828705078c4dca
 │ ```diff
 │ +Good mates share the road
@@ -1277,42 +1277,50 @@ spoke and was cut off; it still answers the call,
 because running it again to find out how it would
 have ended would do whatever it does a second time.
 
-What a call supplies is a bullet per argument: the name,
-then the value beside it as a code span. Only a value
-over more than one line needs a block underneath,
-indented under its bullet. The closing fence is what
-ends it, so the newline before that fence is framing
-rather than something the value said — which is how a
-value that really does end in one is written as a blank
-line before the close.
+What a call supplies is a bullet per argument, including any
+parameter the model supplied that the tool does not define.
+Property order is preserved. The spelling carries the type;
+reading a call does not require the tool's schema.
 
-The empty string is the name with nothing after it at
-all: no span, no block. Models hand an optional argument
-an empty string rather than leave it out, often enough
-that the block spelling would cost three lines of
-document to say nothing. An empty block still reads as
-the empty string, so a model that writes one is
-understood either way.
+An absent argument has no bullet. Null has a bare bullet,
+with nothing after its name. Inline values are JSON inside
+code spans: numbers and booleans are unquoted, strings are
+quoted, and the empty string is a span containing `""`.
+Thus a string spelling `"123"` or `"null"` stays a string.
+There is no special bare `""` form.
 
-Neither form escapes anything, and neither has to.
+A string needing JSON escapes for quotes, backslashes, tabs
+or newlines uses a `text` fence with its literal contents.
+If it contains non-portable control characters, such as NUL
+or carriage return, it instead uses a `json` fence holding a
+JSON-escaped string. Unicode escapes are supported there.
+A `text` fence always means a string; a `json` fence, like a
+code span, is parsed as JSON. Unlabelled fences are not an
+argument spelling.
+
+Arrays and objects use compact JSON in a span. When the
+rendered line would exceed 100 characters, they instead use
+pretty-printed JSON in a `json` fence.
+
+Fences are indented under the bullet. The closing fence ends
+the value, so the newline before it is framing. A literal
+string ending in a newline has a blank line before the close.
+
+A call that does not read this way is malformed. It is kept
+as written and answered with a ❌, and an api is sent it with
+no arguments.
+
 Backticks are CommonMark's, so a span opens with a run
 longer than any run inside it and a fence with one at
 least as long as anything it holds:
 
 ```
-`` ` ``      a value that is one backtick
-``a`b``      a run ends at a run of its own length
-`  a  `      one space each side is framing, and only one
+``"`"``      a string that is one backtick
+``"a`b"``    a run ends at a run of its own length
 ```
 
-That last rule is what lets a span start or end with a
-backtick at all, and it costs a value that begins and
-ends with a space an extra one at each end. A value that
-is nothing but spaces is left alone, or a single space
-would have no spelling.
-
-So a human reads the value and not an escaped copy of
-it, and what m8 reads is what the thing rendering the
+So a human reads the value with nothing escaped but its
+quotes, and what m8 reads is what the thing rendering the
 document shows. That is the whole reason for taking
 CommonMark's rule rather than a simpler one: the moment
 they differ, a document says one thing to a person and
@@ -1557,7 +1565,7 @@ A 🔗 hands files to the model beside what a tool said.
 
 ```m8
 ▐ 📲:see,c1
-│ * file `shot.png`
+│ * file `"shot.png"`
 
 ▐ 🔗:c1
 │ <+/crew/^/see-shot-c1.jpeg (9f86d081b8…)
@@ -1566,7 +1574,7 @@ A 🔗 hands files to the model beside what a tool said.
 ```
 
 > * :calling::see,c1
->   > * file `shot.png`
+>   > * file `"shot.png"`
 >
 > * :link::c1
 >   > <+/crew/^/see-shot-c1.jpeg (9f86d081b8…)
@@ -1971,7 +1979,7 @@ conversation.
 
 ```m8
 ▐ 📲:deploy,c1
-│ * target `prod`
+│ * target `"prod"`
 
 ▐ ❓:tool,c1
 │ deploy to prod?
@@ -1985,7 +1993,7 @@ conversation.
 ```
 
 > * :calling::deploy,c1
->   > * target `prod`
+>   > * target `"prod"`
 >
 > * :question::tool,c1
 >   > deploy to prod?

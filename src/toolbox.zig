@@ -488,104 +488,111 @@ fn writeNested(w: *std.Io.Writer, mode: Mode, text: []const u8) !void {
 
 // ------------------------------------------------------------- call arguments
 
-/// A call's arguments as bullets, one per key, so a saved turn reads as the
-/// language rather than as a blob of JSON.
+/// Arguments are self-describing: spans and json fences hold JSON, text
+/// fences hold literal strings, and a bare bullet is null. Keep every key,
+/// including those not defined by the tool, in its original order.
 pub fn renderArgs(arena: Allocator, mode: Mode, args: []const u8) ![]const u8 {
-    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{}) catch
-        return arena.dupe(u8, args);
-    if (v != .object) return arena.dupe(u8, args);
-
+    _ = mode;
+    const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{});
+    if (v != .object) return error.InvalidCallArguments;
     var buf: std.Io.Writer.Allocating = .init(arena);
     const w = &buf.writer;
     var it = v.object.iterator();
     while (it.next()) |e| {
-        var text: std.Io.Writer.Allocating = .init(arena);
-        try std.json.Stringify.value(e.value_ptr.*, .{}, &text.writer);
-        // A string goes in as itself: the point is that a human reads the
-        // value, not an escaped copy of it.
-        const raw = if (e.value_ptr.* == .string) e.value_ptr.*.string else text.written();
-
-        // The empty string is the name with nothing after it. A model that
-        // has nothing to pass for an optional parameter can still pass it, and
-        // a bare bullet says so in one line rather than three.
-        if (raw.len == 0) {
+        const value = e.value_ptr.*;
+        if (value == .null) {
             try w.print("* {s}\n", .{e.key_ptr.*});
             continue;
         }
-
-        // One line fits beside its name, whatever is in it: a span carries a
-        // backtick by opening with a longer run. Only more than one line
-        // needs a block.
-        if (std.mem.indexOfScalar(u8, raw, '\n') == null) {
-            try w.print("* {s} ", .{e.key_ptr.*});
-            try markdown.writeSpan(w, raw);
-            try w.writeByte('\n');
-            continue;
+        var json: std.Io.Writer.Allocating = .init(arena);
+        const portable_json = value == .string and needsPortableJson(value.string);
+        try std.json.Stringify.value(value, .{ .escape_unicode = portable_json }, &json.writer);
+        const raw = json.written();
+        if (value == .string) {
+            // Without escapes JSON adds only the two surrounding quotes.
+            if (portable_json) {
+                try w.print("* {s}\n", .{e.key_ptr.*});
+                try markdown.writeFence(w, "  ", "json", raw);
+                continue;
+            }
+            if (!std.mem.eql(u8, raw[1 .. raw.len - 1], value.string)) {
+                try w.print("* {s}\n", .{e.key_ptr.*});
+                try markdown.writeFence(w, "  ", "text", value.string);
+                continue;
+            }
         }
-        try w.print("* {s}\n", .{e.key_ptr.*});
-        try markdown.writeFence(w, "  ", "", raw);
+        var span: std.Io.Writer.Allocating = .init(arena);
+        try markdown.writeSpan(&span.writer, raw);
+        const complex = value == .array or value == .object;
+        const line_len = 2 + e.key_ptr.*.len + 1 + span.written().len;
+        if (complex and line_len > 100) {
+            var pretty: std.Io.Writer.Allocating = .init(arena);
+            try std.json.Stringify.value(value, .{ .whitespace = .indent_2 }, &pretty.writer);
+            try w.print("* {s}\n", .{e.key_ptr.*});
+            try markdown.writeFence(w, "  ", "json", pretty.written());
+        } else {
+            try w.print("* {s} {s}\n", .{ e.key_ptr.*, span.written() });
+        }
     }
-    _ = mode;
     return std.mem.trimEnd(u8, buf.written(), "\n");
 }
 
-/// Read those bullets back into the JSON a provider wants.
-///
-/// A value that parses as JSON and is not a string is taken as that; anything
-/// else is the text itself. The one ambiguity is a string that happens to
-/// spell a number — `123` returns as an integer — and the alternative is
-/// escaping every value, which would cost the block the readability it exists
-/// for.
+/// Tabs and LF have portable literal text spellings. Other control characters
+/// use a JSON fence, escaping Unicode there as well for safe document transport.
+fn needsPortableJson(text: []const u8) bool {
+    for (text, 0..) |c, i| {
+        if ((c < 0x20 and c != '\t' and c != '\n') or c == 0x7f) return true;
+        if (c == 0xc2 and i + 1 < text.len and text[i + 1] >= 0x80 and text[i + 1] <= 0x9f) return true;
+        if (c == 0xe2 and i + 2 < text.len and text[i + 1] == 0x80 and (text[i + 2] == 0xa8 or text[i + 2] == 0xa9)) return true;
+    }
+    return false;
+}
+
+/// Decode the value's explicit spelling, independently of any tool schema.
+/// No bullet means absent; a bullet without a span or fence means null.
+/// Anything else is not an argument, so the call is malformed.
 pub fn parseArgs(arena: Allocator, mode: Mode, content: []const u8) ![]const u8 {
     _ = mode;
     var obj: std.json.ObjectMap = .empty;
-
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trimStart(u8, line, " \t");
-        if (!std.mem.startsWith(u8, trimmed, "*")) continue;
-
+        if (trimmed.len == 0) continue;
+        if (!std.mem.startsWith(u8, trimmed, "*")) return error.InvalidCallArguments;
         const rest = std.mem.trim(u8, trimmed[1..], " \t");
-        // The name runs to the first space, so the value beside it — which is
-        // the whole of the rest — may hold as many as it likes.
         const cut = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
         const key = rest[0..cut];
         if (key.len == 0) continue;
-
         const after = std.mem.trim(u8, rest[cut..], " \t");
         if (after.len > 0) {
             const found = try markdown.spans(arena, after);
-            const value = if (found.len > 0) found[0] else after;
-            try obj.put(arena, key, valueOf(arena, value));
+            if (found.len != 1) return error.InvalidCallArguments;
+            try obj.put(arena, key, try argumentJson(arena, found[0]));
             continue;
         }
-
-        // Nothing beside it, so the value is the block underneath — and a
-        // bullet with no block under it is the empty string, which is the
-        // spelling `renderArgs` writes. The block form still reads the same,
-        // so a model that writes one is understood either way.
-        const opening = lines.peek() orelse {
-            try obj.put(arena, key, .{ .string = "" });
-            break;
-        };
-        if (!markdown.opensFence(opening)) {
-            try obj.put(arena, key, .{ .string = "" });
-            continue;
+        if (lines.peek()) |opening| {
+            if (markdown.opensFence(opening)) {
+                _ = lines.next();
+                const f = try markdown.readFence(arena, opening, &lines);
+                const value: std.json.Value = if (std.mem.eql(u8, f.runner, "text"))
+                    .{ .string = f.code }
+                else if (std.mem.eql(u8, f.runner, "json"))
+                    try argumentJson(arena, f.code)
+                else
+                    return error.InvalidCallArguments;
+                try obj.put(arena, key, value);
+                continue;
+            }
         }
-        _ = lines.next();
-        const f = try markdown.readFence(arena, opening, &lines);
-        try obj.put(arena, key, valueOf(arena, f.code));
+        try obj.put(arena, key, .null);
     }
-
     var buf: std.Io.Writer.Allocating = .init(arena);
     try std.json.Stringify.value(std.json.Value{ .object = obj }, .{}, &buf.writer);
     return buf.written();
 }
 
-fn valueOf(arena: Allocator, text: []const u8) std.json.Value {
-    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch
-        return .{ .string = text };
-    return if (v == .string) .{ .string = text } else v;
+fn argumentJson(arena: Allocator, text: []const u8) !std.json.Value {
+    return std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{}) catch return error.InvalidCallArguments;
 }
 
 // ---------------------------------------------------------------- tests
@@ -794,27 +801,14 @@ test "call arguments survive a trip through the document and back" {
     }
 }
 
-test "an empty string is the name and nothing after it" {
+test "null empty and literal quote strings have distinct spellings" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-
-    // What gets written: a bare bullet, with no span and no block.
-    try testing.expectEqualStrings(
-        \\* old_string
-        \\* path `HAIKU.md`
-    , try renderArgs(arena, .md, "{\"old_string\":\"\",\"path\":\"HAIKU.md\"}"));
-
-    // What gets read: the same, and the block spelling a model may write
-    // instead, and a bare bullet does not swallow the line after it.
-    for ([_][]const u8{
-        "* old_string\n* path `HAIKU.md`",
-        "* old_string\n  ```\n\n  ```\n* path `HAIKU.md`",
-    }) |src| {
-        const got = try std.json.parseFromSliceLeaky(std.json.Value, arena, try parseArgs(arena, .md, src), .{});
-        try testing.expectEqualStrings("", got.object.get("old_string").?.string);
-        try testing.expectEqualStrings("HAIKU.md", got.object.get("path").?.string);
-    }
+    const args = "{\"empty\":\"\",\"quoted\":\"\\\"\\\"\",\"nothing\":null,\"path\":\"HAIKU.md\",\"undefined\":123}";
+    const expected = "* empty `\"\"`\n* quoted\n  ```text\n  \"\"\n  ```\n* nothing\n* path `\"HAIKU.md\"`\n* undefined `123`";
+    try testing.expectEqualStrings(expected, try renderArgs(arena, .md, args));
+    try testing.expectEqualStrings(args, try parseArgs(arena, .md, expected));
 }
 
 test "a property has an environment name only when it already is one" {
@@ -890,4 +884,111 @@ test "a 🧰 may add a variable of its own, after its name" {
     const bare = try parse(arena, .md, "make", "`sh`");
     try testing.expectEqualStrings("make", bare.name);
     try testing.expectEqualStrings("", bare.env_var);
+}
+
+test "string arguments are literal even when they spell JSON" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    for ([_][]const u8{ "null", "true", "false", "123", "1e3", "[]", "{\"x\":1}", "\"\"", " hello ", " 123 ", "   ", "`hello`", "a``b", "first\nsecond", "first\n" }) |text| {
+        var json: std.Io.Writer.Allocating = .init(arena);
+        try json.writer.writeAll("{\"value\":");
+        try std.json.Stringify.value(text, .{}, &json.writer);
+        try json.writer.writeByte('}');
+        for ([_]Mode{ .md, .m8 }) |mode| {
+            const rendered_args = try renderArgs(arena, mode, json.written());
+            const parsed_args = try parseArgs(arena, mode, rendered_args);
+            try testing.expectEqualStrings(json.written(), parsed_args);
+        }
+    }
+}
+
+test "complex arguments switch to pretty fences above 100 rendered characters" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    // * x `["..."]` has ten framing bytes: 90 payload bytes fits exactly.
+    for ([_]usize{ 90, 91 }) |length| {
+        const payload = try arena.alloc(u8, length);
+        @memset(payload, 'a');
+        const args = try std.fmt.allocPrint(arena, "{{\"x\":[\"{s}\"]}}", .{payload});
+        const content = try renderArgs(arena, .md, args);
+        try testing.expectEqual(length > 90, std.mem.indexOf(u8, content, "```json") != null);
+        if (length == 90) try testing.expectEqual(@as(usize, 100), content.len);
+        if (length == 91) try testing.expect(std.mem.indexOf(u8, content, "\n    \"") != null);
+        try testing.expectEqualStrings(args, try parseArgs(arena, .md, content));
+    }
+    const args = "{\"o\":{\"b\":\"123\",\"a\":true},\"x\":[\"null\",\"true\"]}";
+    try testing.expectEqualStrings(args, try parseArgs(arena, .md, try renderArgs(arena, .md, args)));
+}
+
+test "argument recovery rejects invalid JSON, unlabelled fences and stray lines" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    for ([_][]const u8{ "* n `hello`", "* s \"\"", "* a `[1,`", "* s\n  ```\n  hello\n  ```", "* s\n  ```json\n  hello\n  ```", "{\"s\":1}", "* s `1`\nnot an argument" }) |content|
+        try testing.expectError(error.InvalidCallArguments, parseArgs(arena, .md, content));
+    try testing.expectEqualStrings("", try renderArgs(arena, .md, "{}"));
+    try testing.expectEqualStrings("* unknown `1`", try renderArgs(arena, .md, "{\"unknown\":1}"));
+}
+
+test "string spellings select JSON spans text fences and portable JSON fences" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const cases = [_]struct { text: []const u8, expected: []const u8 }{
+        .{ .text = "", .expected = "* s `\"\"`" },
+        .{ .text = "null", .expected = "* s `\"null\"`" },
+        .{ .text = "hello", .expected = "* s `\"hello\"`" },
+        .{ .text = " hello ", .expected = "* s `\" hello \"`" },
+        .{ .text = "a`b", .expected = "* s ``\"a`b\"``" },
+        .{ .text = "a\"b", .expected = "* s\n  ```text\n  a\"b\n  ```" },
+        .{ .text = "C:\\path", .expected = "* s\n  ```text\n  C:\\path\n  ```" },
+        .{ .text = "a\tb", .expected = "* s\n  ```text\n  a\tb\n  ```" },
+        .{ .text = "a\nb\n", .expected = "* s\n  ```text\n  a\n  b\n  \n  ```" },
+        .{ .text = "a\r\nb", .expected = "* s\n  ```json\n  \"a\\r\\nb\"\n  ```" },
+        .{ .text = "a\x00b", .expected = "* s\n  ```json\n  \"a\\u0000b\"\n  ```" },
+        .{ .text = "a\x7fb", .expected = "* s\n  ```json\n  \"a\\u007fb\"\n  ```" },
+    };
+    for (cases) |case| {
+        var json: std.Io.Writer.Allocating = .init(arena);
+        try json.writer.writeAll("{\"s\":");
+        try std.json.Stringify.value(case.text, .{}, &json.writer);
+        try json.writer.writeByte('}');
+        const content = try renderArgs(arena, .md, json.written());
+        try testing.expectEqualStrings(case.expected, content);
+        try testing.expectEqualStrings(json.written(), try parseArgs(arena, .md, content));
+    }
+    // Text whose literal contents look like JSON is never inferred as JSON.
+    try testing.expectEqualStrings("{\"s\":\"123\"}", try parseArgs(arena, .md, "* s\n  ```text\n  123\n  ```"));
+    try testing.expectEqualStrings("{\"s\":\"\"}", try parseArgs(arena, .md, "* s\n  ```text\n  \n  ```"));
+    try testing.expectEqualStrings("{\"s\":\"\xe2\x98\x83\"}", try parseArgs(arena, .md, "* s\n  ```json\n  \"\\u2603\"\n  ```"));
+}
+
+test "every ASCII control and Unicode string survives the document transport" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var strings: std.ArrayList([]const u8) = .empty;
+    for (0..128) |c| {
+        const text = try arena.dupe(u8, "a b");
+        text[1] = @intCast(c);
+        try strings.append(arena, text);
+    }
+    try strings.appendSlice(arena, &.{ "\xc2\x85", "\xe2\x80\xa8", "\xf0\x9f\x98\x84\r", "caf\xc3\xa9", "hello\n```text\n* fake `true`\n" });
+    for (strings.items) |text| {
+        var json: std.Io.Writer.Allocating = .init(arena);
+        try json.writer.writeAll("{\"s\":");
+        try std.json.Stringify.value(text, .{}, &json.writer);
+        try json.writer.writeByte('}');
+        for ([_]Mode{ .md, .m8 }) |mode| {
+            const record: doc.Record = .{ .sigil = .call, .value = "example,c1", .content = try renderArgs(arena, mode, json.written()) };
+            var document: std.Io.Writer.Allocating = .init(arena);
+            try doc.write(&document.writer, mode, record);
+            var diag: doc.Diagnostic = .{};
+            const records = try doc.parse(arena, document.written(), &diag);
+            const back = try parseArgs(arena, mode, records[0].content.?);
+            try testing.expectEqualStrings(json.written(), back);
+        }
+    }
 }

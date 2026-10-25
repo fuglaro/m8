@@ -223,7 +223,9 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             const c: codec.Call = .{
                 .id = ledger.callId(asked.value),
                 .name = ledger.callName(asked.value),
-                .arguments = try toolbox.parseArgs(arena, .md, asked.content orelse ""),
+                // A call that does not read is handed on as written, for
+                // `answer` to fail.
+                .arguments = toolbox.parseArgs(arena, .md, asked.content orelse "") catch asked.content orelse "",
             };
             const said = try ledger.exclamations(arena, records.items, c.id);
             try status.call(arena, c);
@@ -363,8 +365,9 @@ fn called(arena: Allocator, c: codec.Call) !doc.Record {
         .sigil = .call,
         .value = try std.fmt.allocPrint(arena, "{s},{s}", .{ c.name, c.id }),
         // Kept in the spelling every file is written in; the reader is handed
-        // whichever one they are being written.
-        .content = try toolbox.renderArgs(arena, .md, c.arguments),
+        // whichever one they are being written. Arguments that are not a JSON
+        // object are kept as the model wrote them, and `answer` fails them.
+        .content = toolbox.renderArgs(arena, .md, c.arguments) catch c.arguments,
     };
 }
 
@@ -497,7 +500,8 @@ fn answer(
         );
 
     const args = std.json.parseFromSliceLeaky(std.json.Value, arena, c.arguments, .{}) catch
-        return failure(arena, c.id, "arguments were not JSON", .{});
+        return failure(arena, c.id, "arguments could not be read", .{});
+    if (args != .object) return failure(arena, c.id, "arguments could not be read", .{});
 
     for (tool.properties) |prop| {
         if (!prop.required) continue;
@@ -1181,5 +1185,47 @@ test "required top-level enums constrain converted call values before running" {
         try testing.expectEqual(@as(usize, 1), records.len);
         try testing.expectEqual(sigil.Sigil.failed, records[0].sigil);
         try testing.expectEqualStrings(case.expected, records[0].content.?);
+    }
+}
+
+test "called renders JSON arguments without a tool schema" {
+    const testing = std.testing;
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const args = "{\"text\":\"42\",\"count\":42,\"empty\":\"\",\"nothing\":null,\"extra\":true}";
+    const record = try called(arena, .{ .id = "c1", .name = "measure", .arguments = args });
+    try testing.expectEqualStrings(args, try toolbox.parseArgs(arena, .md, record.content.?));
+}
+
+test "a call that does not read is kept as written and failed" {
+    const testing = std.testing;
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var env: std.process.Environ.Map = .init(arena);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = threaded.io(),
+        .mode = .md,
+        .env = &env,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &out.writer,
+        .tty = null,
+    };
+    const tools = [_]toolbox.Tool{.{ .name = "edit", .command = .{ .argv = &.{"true"} } }};
+    // Cut off mid-JSON, a JSON array, and bullets whose span is not JSON.
+    for ([_][]const u8{ "{\"path\":\"HAIKU", "[1]", "* path `HAIKU.md`" }) |args| {
+        const c: codec.Call = .{ .id = "c1", .name = "edit", .arguments = args };
+        try testing.expectEqualStrings(args, (try called(arena, c)).content.?);
+        var how: Went = .settled;
+        const records = try answer(ctx, "", "", "", .{}, &tools, &tools, c, &.{}, &how);
+        try testing.expectEqual(sigil.Sigil.failed, records[0].sigil);
+        try testing.expectEqualStrings("arguments could not be read", records[0].content.?);
     }
 }

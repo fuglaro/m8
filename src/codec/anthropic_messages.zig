@@ -408,11 +408,11 @@ fn writeResult(s: *std.json.Stringify, id: []const u8, a: Answer) !void {
     try s.endObject();
 }
 
-/// A call's arguments as the object this api wants. `parseArgs` always builds
-/// one, so what cannot be read is an empty one rather than a string in a
-/// field that has no room for it.
+/// A call's arguments as the object this api wants. What cannot be read was
+/// failed, and is an empty one rather than a string in a field that has no
+/// room for it.
 fn arguments(arena: Allocator, content: []const u8) !std.json.Value {
-    const args = try toolbox.parseArgs(arena, .md, content);
+    const args = toolbox.parseArgs(arena, .md, content) catch return .{ .object = .empty };
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, args, .{}) catch
         return .{ .object = .empty };
     return if (v == .object) v else .{ .object = .empty };
@@ -852,9 +852,9 @@ test "records group into messages, and an answer follows the call that asked" {
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Say hi." },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
         .{ .sigil = .result, .value = "c1", .content = "hi" },
-        .{ .sigil = .call, .value = "say,c2", .content = "* text `bye`" },
+        .{ .sigil = .call, .value = "say,c2", .content = "* text `\"bye\"`" },
         .{ .sigil = .failed, .value = "c2", .content = "nope" },
         .{ .sigil = .bot, .content = "Done." },
     };
@@ -1203,23 +1203,26 @@ test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
     const arena = a.allocator();
 
     var records = [_]doc.Record{
-        .{ .sigil = .call, .value = "see,c1", .content = "* file `a.jpeg`" },
+        .{ .sigil = .call, .value = "see,c1", .content = "* file `\"a.jpeg\"`" },
         .{ .sigil = .result, .value = "c1", .content = "here" },
         .{ .sigil = .link, .value = "c1", .content = ">image/jpeg data:image/jpeg;base64,YWJj a.jpeg\n>application/pdf data:application/pdf;base64,YWJj b.pdf" },
         .{ .sigil = .ok, .value = "c1" },
     };
     const body = try encode(arena, &records, .{ .model = "m" });
-    try testing.expect(std.mem.indexOf(u8, body, \\{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"YWJj"}},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"YWJj"}}
+    try testing.expect(std.mem.indexOf(u8, body,
+        \\{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"YWJj"}},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"YWJj"}}
     ) != null);
 
     records[2].content = ">image/jpeg ref:file-a\n>application/pdf ref:file-b b.pdf";
     const ids = try encode(arena, &records, .{ .model = "m" });
-    try testing.expect(std.mem.indexOf(u8, ids, \\{"type":"image","source":{"type":"file","file_id":"file-a"}},{"type":"document","source":{"type":"file","file_id":"file-b"}}
+    try testing.expect(std.mem.indexOf(u8, ids,
+        \\{"type":"image","source":{"type":"file","file_id":"file-a"}},{"type":"document","source":{"type":"file","file_id":"file-b"}}
     ) != null);
 
     records[2].content = ">image/png https://example.com/a.png a.png";
     const url = try encode(arena, &records, .{ .model = "m" });
-    try testing.expect(std.mem.indexOf(u8, url, \\{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}
+    try testing.expect(std.mem.indexOf(u8, url,
+        \\{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}
     ) != null);
 
     // A file never handed over, for want of an upload, cannot be sent.

@@ -70,7 +70,9 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
         if (rec.sigil == .call) try calls.append(arena, .{
             .id = ledger.callId(rec.value),
             .name = ledger.callName(rec.value),
-            .arguments = try toolbox.parseArgs(arena, m, rec.content orelse ""),
+            // A call that does not read is handed on as written, for the
+            // harness to fail.
+            .arguments = toolbox.parseArgs(arena, m, rec.content orelse "") catch rec.content orelse "",
         });
     }
     return .{ .calls = calls.items };
@@ -252,7 +254,7 @@ test "a reply in the language streams as it is written" {
         \\  > two
         \\
         \\* :calling::say,c1
-        \\  > * text `hi`
+        \\  > * text `"hi"`
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
@@ -273,4 +275,19 @@ test "a reply in the language streams as it is written" {
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
+}
+
+test "a call in the language that does not read is handed on as written" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const body =
+        \\* :calling::edit,c1
+        \\  > * path `HAIKU.md`
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqualStrings("* path `HAIKU.md`", reply.calls[0].arguments);
 }

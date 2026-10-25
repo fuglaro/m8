@@ -370,11 +370,9 @@ fn restate(arena: Allocator, from: doc.Mode, to: doc.Mode, r: doc.Record) !doc.R
             .value = r.value,
             .content = try toolbox.render(arena, to, try toolbox.parse(arena, from, r.value, content)),
         },
-        .call => .{
-            .sigil = r.sigil,
-            .value = r.value,
-            .content = try toolbox.renderArgs(arena, to, try toolbox.parseArgs(arena, from, content)),
-        },
+        // Argument bullets use the same Markdown in both document modes.
+        // Restating them must not decode their types without a tool schema.
+        .call => r,
         else => r,
     };
 }
@@ -625,13 +623,13 @@ test "tool calls stay, and only an unanswered one is still owed" {
         \\* :brain::/local/tiny
         \\
         \\* :calling::say,c1
-        \\  > * text `hi`
+        \\  > * text `"hi"`
         \\
         \\* :receipt::c1
         \\  >     hi
         \\
         \\* :calling::say,c2
-        \\  > * text `bye`
+        \\  > * text `"bye"`
     );
 
     const dirs = [_][]const u8{f.dir};
@@ -807,7 +805,7 @@ test "nested content is kept in one spelling and restated for the reader" {
 
     const records = [_]doc.Record{
         .{ .sigil = .tool, .value = "say", .content = "> Says a thing.\n\n:shield:jail\n`say`\n* text string" },
-        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
     };
 
     // A terminal is written the rendered spelling all the way down: the 🛡️

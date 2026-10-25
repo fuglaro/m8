@@ -165,7 +165,8 @@ fn run(
         try s.objectField("name");
         try s.write(callName(r.value));
         try s.objectField("arguments");
-        try s.write(try toolbox.parseArgs(arena, .md, r.content orelse ""));
+        // A call that does not read was failed, and goes out with nothing.
+        try s.write(toolbox.parseArgs(arena, .md, r.content orelse "") catch "{}");
         try s.endObject();
         try s.endObject();
     }
@@ -619,9 +620,9 @@ test "calls gather onto the turn that made them, ahead of their answers" {
     const records = [_]doc.Record{
         .{ .sigil = .agent, .value = "local/tiny" },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
         .{ .sigil = .result, .value = "c1", .content = "hi" },
-        .{ .sigil = .call, .value = "say,c2", .content = "* text `bye`" },
+        .{ .sigil = .call, .value = "say,c2", .content = "* text `\"bye\"`" },
         .{ .sigil = .failed, .value = "c2", .content = "nope" },
         .{ .sigil = .bot, .content = "Done." },
     };
@@ -657,7 +658,7 @@ test "an answer that arrived late is still written beside its call" {
     // What a run that picked up an owed call leaves behind: the 📲 is history,
     // somebody said something, and only then was it answered.
     const records = [_]doc.Record{
-        .{ .sigil = .call, .value = "say,c2", .content = "* text `bye`" },
+        .{ .sigil = .call, .value = "say,c2", .content = "* text `\"bye\"`" },
         .{ .sigil = .user, .content = "Now say done." },
         .{ .sigil = .result, .value = "c2", .content = "bye" },
         .{ .sigil = .bot, .content = "Done." },
@@ -684,7 +685,7 @@ test "a call still owed is written without an answer" {
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
     };
     const body = try encode(arena, &records, .{ .model = "tiny" });
     const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
@@ -880,7 +881,7 @@ test "a 🤖 with nothing under it never reaches the wire" {
     const records = [_]doc.Record{
         .{ .sigil = .bot, .content = "Let me look." },
         .{ .sigil = .bot, .value = "(cut off at length)" },
-        .{ .sigil = .call, .value = "say,c1", .content = "* text `hi`" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
         .{ .sigil = .result, .value = "c1", .content = "hi" },
     };
     const body = try encode(arena, &records, .{ .model = "tiny" });
@@ -910,13 +911,14 @@ test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
     const arena = a.allocator();
 
     var records = [_]doc.Record{
-        .{ .sigil = .call, .value = "see,c1", .content = "* file `a.jpeg`" },
+        .{ .sigil = .call, .value = "see,c1", .content = "* file `\"a.jpeg\"`" },
         .{ .sigil = .result, .value = "c1", .content = "here" },
         .{ .sigil = .link, .value = "c1", .content = ">image/jpeg data:image/jpeg;base64,YWJj a.jpeg\n>application/pdf data:application/pdf;base64,YWJj b.pdf" },
         .{ .sigil = .ok, .value = "c1" },
     };
     const body = try encode(arena, &records, .{ .model = "m" });
-    try testing.expect(std.mem.indexOf(u8, body, \\{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,YWJj"}},{"type":"file","file":{"filename":"b.pdf","file_data":"data:application/pdf;base64,YWJj"}}]}
+    try testing.expect(std.mem.indexOf(u8, body,
+        \\{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,YWJj"}},{"type":"file","file":{"filename":"b.pdf","file_data":"data:application/pdf;base64,YWJj"}}]}
     ) != null);
 
     // An image part takes a url alone, so an uploaded image cannot be shown.
@@ -926,4 +928,43 @@ test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
     // A file never handed over, for want of an upload, cannot be sent.
     records[2].content = "<a.jpeg";
     try testing.expectError(error.NoUpload, encode(arena, &records, .{ .model = "m" }));
+}
+
+test "call arguments preserve unknown properties as JSON values" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const records = [_]doc.Record{
+        .{ .sigil = .agent, .value = "local/tiny" },
+        .{ .sigil = .bot },
+        .{ .sigil = .call, .value = "measure,c1", .content = "* text `\"42\"`\n* count `42`\n* unknown `\"ignored\"`\n* empty `\"\"`\n* nothing\n* literal_null `\"null\"`" },
+    };
+    const body = try encode(arena, &records, .{ .model = "tiny" });
+    const request = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
+    const messages = field(request, "messages").array.items;
+    const calls = field(messages[0], "tool_calls").array.items;
+    const raw = field(field(calls[0], "function"), "arguments").string;
+    const args = try std.json.parseFromSliceLeaky(std.json.Value, arena, raw, .{});
+    try testing.expectEqualStrings("42", field(args, "text").string);
+    try testing.expectEqual(@as(i64, 42), field(args, "count").integer);
+    try testing.expectEqualStrings("ignored", field(args, "unknown").string);
+    try testing.expectEqualStrings("", field(args, "empty").string);
+    try testing.expect(field(args, "nothing") == .null);
+    try testing.expectEqualStrings("null", field(args, "literal_null").string);
+}
+
+test "a call that does not read goes out with no arguments" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const records = [_]doc.Record{
+        .{ .sigil = .agent, .value = "local/tiny" },
+        .{ .sigil = .bot },
+        .{ .sigil = .call, .value = "edit,c1", .content = "* path `HAIKU.md`" },
+        .{ .sigil = .failed, .value = "c1", .content = "arguments could not be read" },
+    };
+    const body = try encode(arena, &records, .{ .model = "tiny" });
+    const request = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
+    const calls = field(field(request, "messages").array.items[0], "tool_calls").array.items;
+    try testing.expectEqualStrings("{}", field(field(calls[0], "function"), "arguments").string);
 }

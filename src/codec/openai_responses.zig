@@ -177,7 +177,9 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                 try s.write(callName(r.value));
                 try s.objectField("arguments");
                 // A JSON string, as this api and chat completions both want.
-                try s.write(try toolbox.parseArgs(arena, .md, r.content orelse ""));
+                // A call that does not read was failed, and goes out with
+                // nothing.
+                try s.write(toolbox.parseArgs(arena, .md, r.content orelse "") catch "{}");
                 try s.endObject();
             },
             .result, .scroll, .link, .ok, .failed => {
@@ -854,7 +856,7 @@ test "the system prompt is a field, and the rest is the ledger in its own order"
         .{ .sigil = .system, .content = "Be brief." },
         .{ .sigil = .system, .content = "Be kind." },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,fc_1", .content = "* text `hi`" },
+        .{ .sigil = .call, .value = "say,fc_1", .content = "* text `\"hi\"`" },
         .{ .sigil = .result, .value = "fc_1", .content = "hi" },
         .{ .sigil = .bot, .content = "Done." },
     };
@@ -885,7 +887,7 @@ test "a call answered twice is one output, and a failure keeps only what it said
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .call, .value = "say,fc_1", .content = "* text `hi`" },
+        .{ .sigil = .call, .value = "say,fc_1", .content = "* text `\"hi\"`" },
         .{ .sigil = .result, .value = "fc_1", .content = "part one" },
         .{ .sigil = .failed, .value = "fc_1", .content = "nope" },
     };
@@ -1415,23 +1417,26 @@ test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
     const arena = a.allocator();
 
     var records = [_]doc.Record{
-        .{ .sigil = .call, .value = "see,c1", .content = "* file `a.jpeg`" },
+        .{ .sigil = .call, .value = "see,c1", .content = "* file `\"a.jpeg\"`" },
         .{ .sigil = .result, .value = "c1", .content = "here" },
         .{ .sigil = .link, .value = "c1", .content = ">image/jpeg data:image/jpeg;base64,YWJj a.jpeg\n>application/pdf data:application/pdf;base64,YWJj b.pdf" },
         .{ .sigil = .ok, .value = "c1" },
     };
     const body = try encode(arena, &records, .{ .model = "m" });
-    try testing.expect(std.mem.indexOf(u8, body, \\"output":[{"type":"input_text","text":"here"},{"type":"input_image","image_url":"data:image/jpeg;base64,YWJj"},{"type":"input_file","filename":"b.pdf","file_data":"data:application/pdf;base64,YWJj"}]
+    try testing.expect(std.mem.indexOf(u8, body,
+        \\"output":[{"type":"input_text","text":"here"},{"type":"input_image","image_url":"data:image/jpeg;base64,YWJj"},{"type":"input_file","filename":"b.pdf","file_data":"data:application/pdf;base64,YWJj"}]
     ) != null);
 
     records[2].content = ">image/jpeg ref:file-a\n>application/pdf ref:file-b b.pdf";
     const ids = try encode(arena, &records, .{ .model = "m" });
-    try testing.expect(std.mem.indexOf(u8, ids, \\{"type":"input_image","file_id":"file-a"},{"type":"input_file","file_id":"file-b"}
+    try testing.expect(std.mem.indexOf(u8, ids,
+        \\{"type":"input_image","file_id":"file-a"},{"type":"input_file","file_id":"file-b"}
     ) != null);
 
     records[2].content = ">application/pdf https://example.com/b.pdf b.pdf";
     const url = try encode(arena, &records, .{ .model = "m" });
-    try testing.expect(std.mem.indexOf(u8, url, \\{"type":"input_file","file_url":"https://example.com/b.pdf"}
+    try testing.expect(std.mem.indexOf(u8, url,
+        \\{"type":"input_file","file_url":"https://example.com/b.pdf"}
     ) != null);
 
     // A file never handed over, for want of an upload, cannot be sent.

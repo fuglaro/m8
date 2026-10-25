@@ -647,7 +647,7 @@ test "unregistered config names have no name-based sandbox rule" {
     // path-based and only registered existing directories are protected.
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p staging && echo x > staging/evil.md"));
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mv staging .m8-st8"));
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p .m8-st8 2>/dev/null; mv staging .m8-st8/core"));
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p staging .m8-st8 && mv staging .m8-st8/core"));
 }
 
 test "unregistered config paths through symlinks are not name-blocked" {
