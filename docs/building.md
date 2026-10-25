@@ -107,8 +107,9 @@ zig build -Dsplit=all
   * Nothing is lost: `m8 NAME` reaches it there.
   * Leaving one out altogether is not installing its
     program.
-* `small` with no `split` builds `toy-provider` apart.
-  `-Dsmall=true -Dsplit=` says otherwise.
+* `small` with no `split` builds `cast` and `toy-provider`
+  apart too.
+  `-Dsmall=true -Dsplit=` says otherwise, and holds every command.
 * The names are the files in `src/command`: one file is one
   command, and what it keeps to itself is in a folder
   beneath.

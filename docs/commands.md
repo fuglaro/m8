@@ -346,6 +346,46 @@ turn is reported before you write a message.
 riff knows nothing about m8. `m8 riff sh -c 'cat; date'` is as
 much a riff as a chat is.
 
+## Casting
+
+`cast` replays a ledger as riff would have shown it, as an
+animated SVG: a session a README can carry.
+
+```bash
+m8 ref :games/zork | m8 encode | m8 cast >zork.svg
+m8 ref :games/zork | m8 encode | m8 cast --size 100x30 --speed 40l,🤖60w >zork.svg
+```
+
+* A small build has it beside `m8` as `m8-cast`, since no
+  session needs it. See [Building](building.md).
+* Each 🙋 is typed into the editor and sent, and what follows
+  arrives above it, as riff shows it.
+  * Records before the first 🙋 are left out, as riff shows
+    nothing until something is sent.
+* `--speed` is a default, then sigils, each a number of
+  milliseconds and what it is per.
+  * `c` a character, `w` a word, `l` a line, `b` a block.
+  * A number after that is the pause before it starts, as in
+    `🙋50c1000`.
+  * Unless named, 🙋 is typed at `50c` after 600 ms, and the
+    rest arrive at `30l`.
+    * An answer to a 🙋 starts 200 ms after it is sent, and
+      anything else straight on.
+* `--no-riff ADDRESS` plays it at a plain terminal instead.
+  * Each 🙋 is typed at a `>>> ` prompt as the command that
+    says it: `m8 ADDRESS -- 'MESSAGE'`.
+  * A message with a `'` or a line break in it, or too wide
+    for one line, is a heredoc: `m8 ADDRESS <<'^^'`.
+  * What follows is what that command writes, so not the 🙋.
+* `--size` is the terminal, `80x24` unless said.
+  * A line wider than it wraps, as a terminal wraps it.
+* It is CSS and nothing else, so it plays wherever an image
+  does.
+  * It holds the last frame for 3 seconds and plays again.
+  * The text is m8's own rendering, so it keeps m8's look.
+  * Every run sits on a cell grid, so a viewer's font cannot
+    push it out of line.
+
 ## Encoding
 
 ```bash

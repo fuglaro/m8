@@ -182,7 +182,7 @@ model. The chat is the save file, and forking it forks the world.
 ## Where things are
 
 * [Why m8](docs/why.md) — what it is for, and what others have already proved.
-* [Commands](docs/commands.md) — addresses, composing, riff, encoding, calling.
+* [Commands](docs/commands.md) — addresses, composing, riff, casting, encoding, calling.
 * [The language](docs/language.md) — records, sigils, tops and types, enough to
   write a parser from.
 * [Tools](docs/tools.md) — how a call reaches a program, and how a tool asks the

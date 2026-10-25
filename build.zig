@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
     const said_small = b.option(
         bool,
         "small",
-        "Build ReleaseSmall artifacts with debug symbols omitted; -Dformats then defaults to openai-responses and -Dsplit to toy-provider",
+        "Build ReleaseSmall artifacts with debug symbols omitted; -Dformats then defaults to openai-responses and -Dsplit to cast,toy-provider",
     ) orelse false;
     const minimal = core or said_minimal;
     const small = minimal or said_small;
@@ -36,11 +36,11 @@ pub fn build(b: *std.Build) void {
         "split",
         "Commands to build as programs of their own, comma-separated, or `all` (default: none, or what -Dsmall, -Dminimal or -Dcore name)",
     ) orelse if (core)
-        "toy-provider,munge,secure-shield,ask-shield,riff"
+        "cast,toy-provider,munge,secure-shield,ask-shield,riff"
     else if (minimal)
-        "toy-provider,munge,secure-shield,ask-shield"
+        "cast,toy-provider,munge,secure-shield,ask-shield"
     else if (small)
-        "toy-provider"
+        "cast,toy-provider"
     else
         "";
     const split = if (std.mem.eql(u8, said_split, "all")) every else said_split;

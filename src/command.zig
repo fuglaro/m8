@@ -27,6 +27,7 @@ const every = .{
     @import("command/tail.zig"),
     @import("command/exclude.zig"),
     @import("command/render.zig"),
+    @import("command/cast.zig"),
     @import("command/encode.zig"),
     @import("command/parse.zig"),
     @import("command/top.zig"),
