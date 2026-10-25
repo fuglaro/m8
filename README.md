@@ -2,7 +2,7 @@
 # m8 (mEight) - The Composable Agentic Shell Harness
 
 A full agentic harness in under a megabyte, needing only what a shell already
-has: bash, sed and curl.
+has like bash, sed and curl.
 
 ```
 fuglaro@localhost> m8 :demo/pagey -- 'One word -> do you like Haiku?'
