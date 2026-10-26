@@ -46,7 +46,6 @@
 
 * :toolbox::search_journal
   > > Grep search inside the journal.
-  > > Glob descent skips hidden path components unless named explicitly.
   >
   > `m8` `call` `--mob-space` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `journal.txt`
   > * regex string
