@@ -5,20 +5,40 @@ A full agentic harness in under a megabyte, needing only what a shell already
 has like bash, sed and curl.
 
 ```
-fuglaro@localhost> m8 :demo/pagey -- 'One word -> do you like Haiku?'
+>>> m8 :crew/devyn -- 'One word -> do you like Haiku?'
 ▐ 🤖:
 │ Yes.
 
-▐ 🧠:demo/pagey/+/swlyayqtjk
-fuglaro@localhost> m8 :demo/pagey -- 'Throw me a quick example please.'
+▐ 🧠:crew/devyn/+/swlyayqtjk
+
+>>> m8 :crew/devyn -- 'Can you make me one?'
 ▐ 🤖:
 │ Moonlight on still ponds
 │ Crickets stitch the dark with song
 │ Dawn waits behind hills
 
-▐ 🧠:demo/pagey/+/psbarddrym
+▐ 🧠:crew/devyn/+/psbarddrym
 ```
 
+It's flexible enough to run any chat-shaped model including the
+1979 text adventure Z-machine engine! Here's a transcript where
+the Zork-I game is acting as the agent:
+[![Zork](docs/examples/coop/zork.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/coop/zork.svg)
+(slowed down for readability - click to open where you can hold down to pause)
+
+In that transcript above, the player wasn't a human... it was actually
+a GPT-6 Luna agent using Zork as a subagent reached through a tool.
+Here is the transcript where the Luna is being guided by the user:
+[![Zork Player](docs/examples/coop/zork-player.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/coop/zork-player.svg)
+
+* Agent definitions:
+  * [Zork-Player Agent](docs/examples/coop/zork-player.md)
+  * [Zork Agent](docs/examples/coop/zork.md)
+* Full ledger:
+  * [Zork-Player Ledger](docs/examples/coop/zork-player+.md)
+  * [Zork Ledger](docs/examples/coop/zork+.md)
+
+Note:
 * Pre-release: open for comment, and still settling.
 * Working on m8 itself? Read [dev/STYLE_GUIDE.md](dev/STYLE_GUIDE.md) first.
 

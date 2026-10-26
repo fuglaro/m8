@@ -362,6 +362,9 @@ m8 ref :games/zork | m8 encode | m8 cast --size 100x30 --speed 40l,🤖60w >zork
   arrives above it, as riff shows it.
   * Records before the first 🙋 are left out, as riff shows
     nothing until something is sent.
+  * The editor grows with the message, keeping its line
+    breaks, to half the terminal, then scrolls within, and
+    is one row again once sent.
 * `--speed` is a default, then sigils, each a number of
   milliseconds and what it is per.
   * `c` a character, `w` a word, `l` a line, `b` a block.
@@ -377,11 +380,17 @@ m8 ref :games/zork | m8 encode | m8 cast --size 100x30 --speed 40l,🤖60w >zork
   * A message with a `'` or a line break in it, or too wide
     for one line, is a heredoc: `m8 ADDRESS <<'^^'`.
   * What follows is what that command writes, so not the 🙋.
+* `--skip-snips` leaves out what a turn kept aside: a `💭snip`,
+  and the 🧠 naming where one went.
 * `--size` is the terminal, `80x24` unless said.
   * A line wider than it wraps, as a terminal wraps it.
 * It is CSS and nothing else, so it plays wherever an image
   does.
   * It holds the last frame for 3 seconds and plays again.
+  * Opened as a page of its own, holding the mouse down on
+    it pauses it. As an image it cannot be pressed, so link
+    the image to its raw file:
+    `[![Zork](zork.svg)](https://raw.githubusercontent.com/OWNER/REPO/main/zork.svg)`.
   * The text is m8's own rendering, so it keeps m8's look.
   * Every run sits on a cell grid, so a viewer's font cannot
     push it out of line.

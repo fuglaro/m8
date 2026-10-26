@@ -35,20 +35,42 @@ pub const command: api.Command = .{
     .help = page,
 };
 
-pub const Error = error{NothingToRun};
+pub const Error = error{ NothingToRun, MissingTmpdir };
+
+const Options = struct {
+    how: Answer = .framed,
+    mob_space: bool = false,
+    args: []const []const u8,
+
+    fn parse(args: []const []const u8) Options {
+        var options: Options = .{ .args = args };
+        while (options.args.len > 0) {
+            const arg = options.args[0];
+            if (std.mem.eql(u8, arg, "--mob-space")) {
+                options.mob_space = true;
+            } else if (std.mem.eql(u8, arg, "--no-wrap")) {
+                options.how = .unwrapped;
+            } else if (std.mem.eql(u8, arg, "--md")) {
+                options.how = .scrolled;
+            } else break;
+            options.args = options.args[1..];
+        }
+        return options;
+    }
+};
 
 fn run(ctx: Ctx) !u8 {
-    const how: Answer = if (ctx.args.len == 0)
-        .framed
-    else if (std.mem.eql(u8, ctx.args[0], "--no-wrap"))
-        .unwrapped
-    else if (std.mem.eql(u8, ctx.args[0], "--md"))
-        .scrolled
-    else
-        .framed;
-    const args = if (how == .framed) ctx.args else ctx.args[1..];
-    if (args.len == 0) return help(ctx);
-    const expanded = try argline.line(ctx.arena, ctx.env, ctx.err, args);
+    const options = Options.parse(ctx.args);
+    if (options.args.len == 0) return help(ctx);
+    const cwd = if (options.mob_space) blk: {
+        const tmpdir = ctx.env.get("TMPDIR") orelse "";
+        if (tmpdir.len == 0) {
+            try ctx.err.writeAll("m8 call: --mob-space requires TMPDIR to be set and non-empty\n");
+            return Error.MissingTmpdir;
+        }
+        break :blk tmpdir;
+    } else null;
+    const expanded = try argline.line(ctx.arena, ctx.env, ctx.err, options.args);
     if (expanded.len == 0) {
         try ctx.err.writeAll("m8 call: everything expanded away\n");
         return Error.NothingToRun;
@@ -59,7 +81,7 @@ fn run(ctx: Ctx) !u8 {
     // nothing.
     var inner = ctx;
     if (ctx.env.get("M8_CALL_ID")) |id| inner.call_id = id;
-    return execute(inner, expanded, how);
+    return spawn(inner, expanded, options.how, cwd);
 }
 
 /// Run an already-built command line.
@@ -70,7 +92,7 @@ fn run(ctx: Ctx) !u8 {
 /// conditions inside it.
 pub fn execute(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
     if (argv.len == 0) return Error.NothingToRun;
-    return spawn(ctx, argv, how);
+    return spawn(ctx, argv, how, null);
 }
 
 /// What becomes of what the command said.
@@ -102,7 +124,7 @@ fn executable(arena: std.mem.Allocator, self: []const u8, expanded: []const []co
     return copy;
 }
 
-fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
+fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer, cwd: ?[]const u8) !u8 {
     // What was inherited, and then what this call is saying. The call's own
     // values are put last, so an inherited variable cannot shadow them. What
     // a shield does to an environment it does in its own process, further out
@@ -112,6 +134,7 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
 
     var child = try std.process.spawn(ctx.io, .{
         .argv = full,
+        .cwd = if (cwd) |path| .{ .path = path } else .inherit,
         .environ_map = environ,
         .stdin = .inherit,
         .stdout = .pipe,
@@ -381,10 +404,14 @@ fn help(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 call [--no-wrap|--md] PROG [ARGS]
+        \\  m8 call [--mob-space] [--no-wrap|--md] PROG [ARGS]
         \\
         \\The program's stdout becomes a 🧾 receipt, followed by 🟢 or 🚫 for
         \\how it ended. Stdin remains the descriptor call itself was given.
+        \\
+        \\--mob-space runs the program with TMPDIR as its working directory,
+        \\the mob-space provided by the environment. TMPDIR must be set and
+        \\non-empty; without this option the working directory is inherited.
         \\
         \\--md makes it a 📜 instead: the same answer, written to be read as
         \\markdown rather than as literal output.
@@ -564,4 +591,24 @@ test "what is not a character is said as U+FFFD, wherever a read cuts" {
     var complaint: Tail = .{};
     complaint.keep("bad \xe2M\n");
     try testing.expectEqualStrings("bad \u{FFFD}M", try complaint.written(arena));
+}
+test "mob-space combines with answer options and leaves program arguments alone" {
+    for ([_][]const []const u8{
+        &.{ "--mob-space", "--md", "pwd", "--no-wrap" },
+        &.{ "--md", "--mob-space", "pwd", "--no-wrap" },
+    }) |args| {
+        const options = Options.parse(args);
+        try testing.expect(options.mob_space);
+        try testing.expectEqual(Answer.scrolled, options.how);
+        try testing.expectEqualSlices([]const u8, args[2..], options.args);
+    }
+    const plain = Options.parse(&.{ "pwd", "--mob-space" });
+    try testing.expect(!plain.mob_space);
+    try testing.expectEqual(Answer.framed, plain.how);
+    try testing.expectEqual(@as(usize, 2), plain.args.len);
+
+    const unwrapped = Options.parse(&.{ "--mob-space", "--no-wrap", "pwd" });
+    try testing.expect(unwrapped.mob_space);
+    try testing.expectEqual(Answer.unwrapped, unwrapped.how);
+    try testing.expectEqualStrings("pwd", unwrapped.args[0]);
 }

@@ -2,12 +2,15 @@
 //!
 //! The picture is for a README, where an image is all that runs: no script,
 //! only the CSS inside the SVG. So nothing is drawn frame by frame. Every line
-//! is written once, where it ends up, and one clock runs the whole picture: a
-//! number counting the milliseconds of a play, back to nought when it ends.
-//! Each line reads that clock and its own few numbers to decide whether it
-//! shows and how much of it: whole, or clipped to the words or characters
-//! that have arrived. Scrolling is one stepped transform on everything above
-//! the editor. That is what keeps a whole session to a few kilobytes.
+//! is written once, plain, where it ends up, and a curtain in the background
+//! colour hides what has not arrived yet. The curtain's moves, the scrolling,
+//! and riff's editor and status line are each one stepped animation, however
+//! long the session. A browser does no work for a step not yet due, so the
+//! picture costs about the same to play at any length, and its size is the
+//! text and a short line per move. The text is gathered into a few large
+//! elements, a page each, and a page is switched off once it has scrolled
+//! out of sight, since a browser's work on every step follows how many there
+//! are.
 //!
 //! The text is m8's own rendering, the same bytes `render` writes, read back
 //! out of its colour codes. So the look follows m8 rather than a copy of it.
@@ -34,6 +37,7 @@ const doc = @import("../m8/doc.zig");
 const highlight = @import("../m8/highlight.zig");
 const sigil = @import("../m8/sigil.zig");
 const config = @import("../config.zig");
+const session = @import("../session.zig");
 const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
@@ -49,7 +53,7 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 cast [--size COLSxROWS] [--speed SPEEDS] [--no-riff ADDRESS]
+        \\  m8 cast [--size COLSxROWS] [--speed SPEEDS] [--no-riff ADDRESS] [--skip-snips]
         \\
         \\Reads a ledger on stdin and writes an SVG that plays it the way riff
         \\would have shown it: each 🙋 typed into the editor and sent, and
@@ -80,6 +84,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\A message with a quote or a line break in it, or too wide for one
         \\line, is said as a heredoc, m8 ADDRESS <<'^^', and the answer is what
         \\that command writes.
+        \\
+        \\--skip-snips leaves out what a turn kept aside: a 💭snip, and the 🧠
+        \\that names where one went.
         \\
         \\Records before the first 🙋 are left out, as riff shows nothing
         \\until something is sent.
@@ -182,6 +189,7 @@ fn run(ctx: Ctx) !u8 {
     var rows: usize = 24;
     var speeds: Speeds = .{};
     var address: ?[]const u8 = null;
+    var snips = true;
     var i: usize = 0;
     while (i < ctx.args.len) : (i += 1) {
         const arg = ctx.args[i];
@@ -196,6 +204,8 @@ fn run(ctx: Ctx) !u8 {
             i += 1;
             speeds = parseSpeeds(value) catch
                 return bad(ctx, "--speed is a default and then sigils, each a number of ms, c, w, l or b, and a pause if said, as in 40l,🤖60w,🙋50c1000");
+        } else if (std.mem.eql(u8, arg, "--skip-snips")) {
+            snips = false;
         } else if (std.mem.eql(u8, arg, "--no-riff") and value.len > 0) {
             i += 1;
             address = value;
@@ -208,6 +218,7 @@ fn run(ctx: Ctx) !u8 {
     const look: doc.Look = .{ .width = cols, .palette = try config.highlights(ctx.arena, ctx.io, ctx.env) };
     var c: Cast = try .init(ctx.arena, ctx.out, look, speeds, cols, rows);
     c.address = address;
+    c.snips = snips;
     try c.open();
 
     var diag: doc.Diagnostic = .{};
@@ -240,24 +251,99 @@ fn failed(ctx: Ctx, diag: *const doc.Diagnostic, e: anyerror) anyerror {
     return error.Said;
 }
 
-// ---------------------------------------------------------------- the clock
+// ---------------------------------------------------------------- tracks
 
-/// The stylesheet's fixed part. `--t` is the clock, in milliseconds, and an
-/// element is told when on it with its own properties:
-///
-/// * `.a` shows from `--a`, and `.g` from `--a` until `--b`.
-/// * `.c` shows `--n` cells, one more each `--d` from `--s`.
-/// * `.m` moves along the same cells at the same times: the cursor.
-const clock =
-    "@property --t{syntax:'<number>';inherits:true;initial-value:0}" ++
-    ".a{opacity:clamp(0,calc(var(--t) - var(--a) + 1),1)}" ++
-    ".g{opacity:calc(clamp(0,calc(var(--t) - var(--a) + 1),1) * clamp(0,calc(var(--b) - var(--t)),1))}" ++
-    ".c{clip-path:inset(0 calc(100% - 100% * " ++ cells_typed ++ " / var(--n)) 0 0)}" ++
-    std.fmt.comptimePrint(".m{{transform:translateX(calc({s} * {d}px))}}", .{ cells_typed, cw });
+/// Where something animated is at a moment: translated to `x`, `y`, and from
+/// there moving `steps` times, evenly, to where the next frame has it.
+const Frame = struct { t: u64, x: i64 = 0, y: i64 = 0, steps: usize = 0 };
 
-const cells_typed = "round(down,clamp(0,(var(--t) - var(--s)) / var(--d),var(--n)),1)";
+/// One element's moves over a play, as one stepped animation. Each element
+/// that moves is one animation however much it moves, since a browser does
+/// work for every animation on every frame but none for a step not yet due.
+const Track = struct {
+    frames: std.ArrayList(Frame) = .empty,
+
+    /// Moves to `f` at its time, or at the time of the last move if that is
+    /// later. A move at the very moment another arrived replaces it, unless
+    /// that one ends a run of steps, which the new one then follows by a
+    /// millisecond.
+    fn at(tr: *Track, arena: std.mem.Allocator, f: Frame) !void {
+        var g = f;
+        const fs = tr.frames.items;
+        if (fs.len > 0 and fs[fs.len - 1].t >= g.t) {
+            g.t = fs[fs.len - 1].t;
+            if (fs.len < 2 or fs[fs.len - 2].steps == 0) {
+                fs[fs.len - 1] = g;
+                return;
+            }
+            g.t += 1;
+        }
+        try tr.frames.append(arena, g);
+    }
+
+    /// From `x` along `n` cells, one each `ms` from `t`.
+    fn along(tr: *Track, arena: std.mem.Allocator, t: u64, x: i64, y: i64, n: usize, ms: u64) !void {
+        try tr.at(arena, .{ .t = t, .x = x, .y = y, .steps = n });
+        try tr.at(arena, .{ .t = t + n * ms, .x = x + @as(i64, @intCast(n * cw)), .y = y });
+    }
+
+    fn css(tr: *const Track, w: *std.Io.Writer, name: []const u8, end_at: u64) !void {
+        try w.print(".{s}{{animation:{s} {d}ms step-end infinite}}@keyframes {s}{{", .{ name, name, end_at, name });
+        for (tr.frames.items) |f| {
+            try w.print("{d:.4}%{{transform:translate({d}px,{d}px)", .{ pct(f.t, end_at), f.x, f.y });
+            if (f.steps > 0) try w.print(";animation-timing-function:steps({d})", .{f.steps});
+            try w.writeAll("}");
+        }
+        try w.writeAll("}");
+    }
+};
+
+/// A moment as a share of the play, as a keyframe gives it.
+fn pct(t: u64, end_at: u64) f64 {
+    return @as(f64, @floatFromInt(t)) * 100.0 / @as(f64, @floatFromInt(end_at));
+}
+
+fn px(cell: usize, size: usize) i64 {
+    return @intCast(pad + cell * size);
+}
 
 // ---------------------------------------------------------------- casting
+
+/// Rows of text gathered into one `<text>`, each run a `<tspan>` placed and
+/// held to its cells, and the block characters drawn beside it. A browser
+/// lays out and paints by the `<text>`, so a few large ones play far faster
+/// than one a run.
+const Group = struct {
+    spans: std.Io.Writer.Allocating,
+    shapes: std.Io.Writer.Allocating,
+    rows: usize = 0,
+
+    fn init(arena: std.mem.Allocator) Group {
+        return .{ .spans = .init(arena), .shapes = .init(arena) };
+    }
+
+    fn flush(g: *Group, w: *std.Io.Writer) !void {
+        if (g.spans.written().len > 0) try w.print("<text>{s}</text>\n", .{g.spans.written()});
+        if (g.shapes.written().len > 0) try w.print("{s}\n", .{g.shapes.written()});
+        g.spans.clearRetainingCapacity();
+        g.shapes.clearRetainingCapacity();
+        g.rows = 0;
+    }
+};
+
+/// How many rows of the scrollback, or of messages, share a `<text>`, which
+/// is a page.
+const group_rows = 100;
+
+/// A page of the scrollback: switched on when its first row arrives, and off
+/// again once it has scrolled out of sight, so that a long session costs
+/// what a screenful does. A page of messages is on from the first being
+/// typed until the last is sent. Chromium honours this; Firefox draws every page
+/// regardless, which it does quickly enough on its own.
+const Page = struct { from: u64, end: usize = 0, gone: ?u64 = null };
+
+/// What riff's status line says, top to bottom in its strip.
+const statuses = [_][]const u8{ waiting_empty, waiting_written, working };
 
 const Cast = struct {
     arena: std.mem.Allocator,
@@ -268,35 +354,53 @@ const Cast = struct {
     rows: usize,
     /// The address said to at a plain terminal, or riff's when there is none.
     address: ?[]const u8 = null,
+    /// Whether what a turn kept aside is shown.
+    snips: bool = true,
 
     /// The record being read: rendered, and as it was said.
     rendered: std.Io.Writer.Allocating,
     said: std.ArrayList(u8) = .empty,
     body: ?doc.ContentWriter = null,
     sig: doc.Sigil = .user,
+    value: []const u8 = "",
     lines: usize = 0,
 
-    /// Whether the first 🙋 has been reached.
+    /// Whether the first 🙋 has been reached, and whether nothing has arrived
+    /// since the last was sent.
     started: bool = false,
+    answering: bool = false,
     /// The time the next thing arrives at, and the scrollback row it takes.
     t: u64 = 0,
     row: usize = 0,
-
-    /// What comes after the scrollback: the editor, status and cursor
-    /// elements, and the styles the text has used.
-    later: std.Io.Writer.Allocating,
     styles: std.ArrayList(Sgr) = .empty,
-    /// The scrollback's offset in rows, and when it last changed.
-    scrolls: std.ArrayList([2]u64) = .empty,
-    scrolled: u64 = 0,
+    scrollback: Group,
+    pages: std.ArrayList(Page) = .empty,
 
-    /// The status line being said, and since when.
-    status: []const u8 = waiting_empty,
-    status_from: u64 = 0,
-    /// When the editor was last emptied, which is when its cursor went home,
-    /// and whether nothing has arrived since.
-    sent: u64 = 0,
-    answering: bool = false,
+    /// Everything in the scrollback is written as it ends up, and a curtain
+    /// in the background colour hides what has not arrived yet: the rest of
+    /// the row being written and every row below it. Its edge is where a
+    /// terminal's cursor is, so at a plain terminal the cursor rides on it.
+    curtain: Track = .{},
+    scroll: Track = .{},
+    scrolled: usize = 0,
+
+    /// Riff's live rows are a panel, the status bar over the editor, that
+    /// runs off the bottom of the picture and rises a row as the editor
+    /// grows. Every message rides in it, a screen apart in a strip, so that
+    /// only the one in the editor is ever in sight, with a curtain of its
+    /// own and the cursor at that curtain's edge. The status line is a strip
+    /// too.
+    later: std.Io.Writer.Allocating,
+    messages: usize = 0,
+    drafts: Group,
+    draft_pages: std.ArrayList(Page) = .empty,
+    /// The editor's rows, and the panel's rise to give it them.
+    e: usize = 1,
+    panel: Track = .{},
+    editor: Track = .{},
+    cover: Track = .{},
+    status: Track = .{},
+    saying: usize = 0,
 
     fn init(arena: std.mem.Allocator, out: *std.Io.Writer, look: doc.Look, speeds: Speeds, cols: usize, rows: usize) !Cast {
         return .{
@@ -308,6 +412,8 @@ const Cast = struct {
             .rows = rows,
             .rendered = .init(arena),
             .later = .init(arena),
+            .scrollback = .init(arena),
+            .drafts = .init(arena),
         };
     }
 
@@ -319,7 +425,24 @@ const Cast = struct {
     /// Rows above the status bar and editor, which a plain terminal has none
     /// of.
     fn region(c: *const Cast) usize {
-        return if (c.address == null) c.rows - 2 else c.rows;
+        return if (c.address == null) c.rows - 1 - c.e else c.rows;
+    }
+
+    /// The most rows riff's editor has: the live rows are at most half the
+    /// terminal.
+    fn most(c: *const Cast) usize {
+        return @max(1, c.rows / 2 -| 1);
+    }
+
+    /// How far apart the strips hold what they show, so that nothing but the
+    /// one shown is ever in the picture.
+    fn apart(c: *const Cast) usize {
+        return (c.rows + 2) * lh;
+    }
+
+    /// The editor's first row, while it is one row.
+    fn editorTop(c: *const Cast) usize {
+        return pad + (c.rows - 1) * lh;
     }
 
     fn open(c: *Cast) !void {
@@ -332,6 +455,12 @@ const Cast = struct {
             \\<g clip-path="url(#r)"><g class="s">
             \\
         , .{ w, h, w, h, font_size, fg, bg, pad, w, c.region() * lh });
+        try c.edge(0, 0, 0);
+        try c.scroll.at(c.arena, .{ .t = 0 });
+        try c.panel.at(c.arena, .{ .t = 0 });
+        try c.editor.at(c.arena, .{ .t = 0 });
+        try c.cover.at(c.arena, .{ .t = 0, .x = px(c.margin(), cw), .y = @intCast(c.editorTop()) });
+        try c.status.at(c.arena, .{ .t = 0 });
     }
 
     pub fn begin(c: *Cast, s: doc.Sigil, value: []const u8) !void {
@@ -339,6 +468,7 @@ const Cast = struct {
         c.said.clearRetainingCapacity();
         c.body = try doc.ContentWriter.beginLooking(&c.rendered.writer, .m8, c.look, s, value);
         c.sig = s;
+        c.value = try c.arena.dupe(u8, value);
         c.lines = 0;
     }
 
@@ -358,6 +488,7 @@ const Cast = struct {
     pub fn end(c: *Cast) !void {
         if (c.lines > 0) try c.body.?.finish();
         c.body = null;
+        if (!c.snips and c.snip()) return;
         const first = !c.started;
         if (first) {
             if (c.sig != .user) return;
@@ -380,13 +511,20 @@ const Cast = struct {
             try c.typeIn(c.said.items)
         else
             c.t += pace.pause orelse if (c.answering) latency else 0;
-        if (c.address != null and c.answering)
-            try c.out.print("<rect class=\"g\" x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\" style=\"--a:{d};--b:{d}\"/>\n", .{ pad, pad + c.row * lh, cw, lh, c.sent, c.t });
         c.answering = c.sig == .user;
         const from = c.t;
         var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, c.rendered.written(), "\n"), '\n');
         while (it.next()) |l| try c.place(l, pace);
+        // The newline ending the last line takes the cursor onto the next,
+        // and a terminal scrolls to show it then, not when it is written in.
+        try c.reach(c.t);
         if (pace.unit == .block) c.t = from + pace.ms;
+    }
+
+    /// Whether the record is a turn's aside, or the 🧠 naming where one went.
+    fn snip(c: *const Cast) bool {
+        return (c.sig == .thought and c.lines > 0 and std.mem.eql(u8, c.value, session.snip)) or
+            (c.sig == .agent and session.namesSnip(c.value));
     }
 
     /// A message typed into the editor, and then sent.
@@ -396,74 +534,95 @@ const Cast = struct {
         c.t += pace.pause orelse think;
         try c.say(waiting_written, c.t);
 
-        // The editor is one row here; a message of several reads on one.
-        const flat = try c.arena.dupe(u8, message);
-        for (flat) |*b| if (b.* == '\n') {
-            b.* = ' ';
-        };
+        // The message in its own place in the strip, a row for each of its
+        // lines and for each time one is too wide, as riff breaks it.
         const m = c.margin();
-        const y = pad + (c.rows - 1) * lh;
-        const shown = try layout(c.arena, flat, c.cols - 2 * m, .{}, pace.unit == .word);
-        const took = duration(pace, shown);
-        const send = c.t + took + enter;
+        const width = c.cols -| ((2 * m -| 1) + 2);
+        c.messages += 1;
+        const base = c.editorTop() + c.messages * c.apart();
+        if (c.drafts.rows == 0) try c.draft_pages.append(c.arena, .{ .from = c.t });
+        var lines = std.mem.splitScalar(u8, message, '\n');
+        var j: usize = 0;
+        while (lines.next()) |l| {
+            var rest = l;
+            while (true) : (j += 1) {
+                const shown = try layout(c.arena, rest, @max(width, 1), .{});
+                const y = base + j * lh;
+                try c.texts(&c.drafts, shown, m, y);
+                try c.grow(j + 1, c.t);
+                try c.typed(&c.cover, shown, pace, m, @intCast(y), c.t);
+                c.t += duration(pace, shown);
+                rest = rest[shown.rest orelse {
+                    j += 1;
+                    break;
+                } ..];
+            }
+        }
+        // Sent: the editor empty and one row again, the rows it gave back
+        // left blank rather than scrolled into.
+        c.t += enter;
+        try c.editor.at(c.arena, .{ .t = c.t });
+        try c.cover.at(c.arena, .{ .t = c.t, .x = px(m, cw), .y = @intCast(c.editorTop()) });
+        c.e = 1;
+        try c.panel.at(c.arena, .{ .t = c.t });
+        try c.say(working, c.t);
+        c.draft_pages.items[c.draft_pages.items.len - 1].gone = c.t;
+        if (c.drafts.rows >= group_rows) try c.draftPage();
+    }
 
-        const w = &c.later.writer;
-        try w.writeAll("<g");
-        const words = try group(w, pace, shown, c.t, send);
-        try w.writeAll(">");
-        try c.texts(w, shown, m, y, words);
-        try w.writeAll("</g>\n");
+    /// The messages gathered so far, written as a page.
+    fn draftPage(c: *Cast) !void {
+        if (c.drafts.rows == 0) return;
+        try c.later.writer.print("<g class=\"m{d}\">", .{c.draft_pages.items.len - 1});
+        try c.drafts.flush(&c.later.writer);
+        try c.later.writer.writeAll("</g>\n");
+    }
 
-        // The cursor: home since the last send, along the message as it is
-        // typed, and gone once it is sent.
-        try cursor(w, pad + m * cw, y, c.sent, send, pace, c.t, c.t + took, shown.cells());
-
-        c.t = send;
-        c.sent = send;
-        try c.say(working, send);
+    /// The editor showing the latest message with `rows` rows of it written
+    /// from `t`: grown to hold them, as far as it may, and past that
+    /// scrolled within to keep the last in sight.
+    fn grow(c: *Cast, rows: usize, t: u64) !void {
+        const e = @min(c.most(), rows);
+        if (e > c.e) {
+            c.e = e;
+            try c.panel.at(c.arena, .{ .t = t, .y = -@as(i64, @intCast((e - 1) * lh)) });
+            try c.reach(t);
+        }
+        // The panel's rise carries the message up with it; what is left is
+        // which message, and how far it has scrolled within.
+        const shift: i64 = @intCast(c.messages * c.apart() + (rows - c.e) * lh);
+        try c.editor.at(c.arena, .{ .t = t, .y = -shift });
     }
 
     /// A message typed at a plain terminal's prompt as the command that says
     /// it to the address, and entered.
     fn command(c: *Cast, address: []const u8, message: []const u8) !void {
         const pace = c.speeds.of(.user);
-        const prompted = c.t;
+        try c.reach(c.t);
+        try c.out.print("<text x=\"{d}\" y=\"{d}\" textLength=\"{d}\">&gt;&gt;&gt;</text>\n", .{ pad, pad + c.row * lh + baseline, 3 * cw });
+        try c.edge(c.t, prompt.len, c.row);
         c.t += pace.pause orelse think;
 
         const one = try std.fmt.allocPrint(c.arena, "m8 {s} -- '{s}'", .{ address, message });
         const fits = std.mem.indexOfAny(u8, message, "'\n") == null and
-            prompt.len + (try layout(c.arena, one, std.math.maxInt(usize), .{}, false)).last <= c.cols;
-        const typed = if (fits) one else try std.fmt.allocPrint(c.arena, "m8 {s} <<'" ++ heredoc ++ "'\n{s}\n" ++ heredoc, .{ address, message });
+            prompt.len + (try layout(c.arena, one, std.math.maxInt(usize), .{})).last <= c.cols;
+        const said = if (fits) one else try std.fmt.allocPrint(c.arena, "m8 {s} <<'" ++ heredoc ++ "'\n{s}\n" ++ heredoc, .{ address, message });
 
-        var lines = std.mem.splitScalar(u8, typed, '\n');
-        var at: ?u64 = prompted;
-        while (lines.next()) |l| : (at = null) {
+        var lines = std.mem.splitScalar(u8, said, '\n');
+        var col: usize = prompt.len;
+        while (lines.next()) |l| : (col = 0) {
+            // A line too wide for the terminal carries on in the next row.
             var rest = l;
-            var col: usize = 0;
-            var from = c.t;
-            if (at) |p| {
-                try c.reach(p);
-                try c.out.print("<text x=\"{d}\" y=\"{d}\" textLength=\"{d}\" class=\"a\" style=\"--a:{d}\">&gt;&gt;&gt;</text>\n", .{ pad, pad + c.row * lh + baseline, 3 * cw, p });
-                col = prompt.len;
-                from = p;
-            }
-            // A line too wide for the terminal carries on in the next row,
-            // the cursor with it.
             while (true) {
-                const shown = try layout(c.arena, rest, c.cols - col, .{}, pace.unit == .word);
-                const y = pad + c.row * lh;
-                const start = c.t;
-                try c.placeRow(shown, pace, col);
-                const last = shown.rest == null and lines.peek() == null;
-                try cursor(c.out, pad + col * cw, y, from, if (last) c.t + enter else c.t, pace, start, c.t, shown.cells());
+                const shown = try layout(c.arena, rest, c.cols - col, .{});
+                try c.placeRow(shown, pace, col, shown.rest != null or lines.peek() != null);
                 rest = rest[shown.rest orelse break ..];
                 col = 0;
-                from = c.t;
             }
         }
+        // Entered, the cursor goes to the next row to wait for the answer.
         c.t += enter;
-        // Entered, the cursor waits on the next row for the answer.
-        c.sent = c.t;
+        try c.edge(c.t, 0, c.row);
         try c.reach(c.t);
     }
 
@@ -474,52 +633,87 @@ const Cast = struct {
         var rest = rendered;
         var style: Sgr = .{};
         while (true) {
-            const shown = try layout(c.arena, rest, c.cols, style, pace.unit == .word);
-            try c.placeRow(shown, pace, 0);
+            const shown = try layout(c.arena, rest, c.cols, style);
+            try c.placeRow(shown, pace, 0, true);
             rest = rest[shown.rest orelse break ..];
             style = shown.style;
         }
     }
 
-    fn placeRow(c: *Cast, shown: Shown, pace: Pace, col: usize) !void {
+    /// A row written from `col`, the curtain drawn back off it as it arrives
+    /// and, unless it is to wait at the row's end, onto the next row.
+    fn placeRow(c: *Cast, shown: Shown, pace: Pace, col: usize, onward: bool) !void {
         const at = c.t;
-        const y = pad + c.row * lh;
-        if (shown.runs.len > 0) {
-            try c.out.writeAll("<g");
-            const words = try group(c.out, pace, shown, at, null);
-            try c.out.writeAll(">");
-            try c.texts(c.out, shown, col, y, words);
-            try c.out.writeAll("</g>\n");
-        }
+        if (c.scrollback.rows == 0) try c.pages.append(c.arena, .{ .from = at });
+        try c.texts(&c.scrollback, shown, col, pad + c.row * lh);
         try c.reach(at);
+        try c.typed(&c.curtain, shown, pace, col, px(c.row, lh), at);
         c.row += 1;
+        if (c.scrollback.rows >= group_rows) try c.page();
         switch (pace.unit) {
             .block => {},
             .line => c.t += pace.ms,
             .word, .char => c.t += duration(pace, shown),
         }
+        if (onward) try c.edge(c.t, 0, c.row);
+    }
+
+    /// An edge moved along a row as it arrives at the pace given, from `at`:
+    /// a cell at a time, a word at a time, or to its end at once.
+    fn typed(c: *Cast, tr: *Track, shown: Shown, pace: Pace, col: usize, y: i64, at: u64) !void {
+        if (pace.ms > 0 and pace.unit == .char and shown.cells() > 0)
+            return tr.along(c.arena, at, px(col + shown.first, cw), y, shown.cells(), pace.ms);
+        if (pace.ms > 0 and pace.unit == .word) {
+            for (shown.word_ends, 0..) |e, j| try tr.at(c.arena, .{ .t = at + j * pace.ms, .x = px(col + e, cw), .y = y });
+            return;
+        }
+        try tr.at(c.arena, .{ .t = at, .x = px(col + shown.last, cw), .y = y });
+    }
+
+    /// The curtain's edge at `col` of `row`, from `t`.
+    fn edge(c: *Cast, t: u64, col: usize, row: usize) !void {
+        try c.curtain.at(c.arena, .{ .t = t, .x = px(col, cw), .y = px(row, lh) });
     }
 
     /// The scrollback scrolled from `at` as far as the row being written.
     fn reach(c: *Cast, at: u64) !void {
         if (c.row < c.region()) return;
         const off = c.row + 1 - c.region();
-        if (off == c.scrolled) return;
-        try c.scrolls.append(c.arena, .{ at, off });
+        if (off <= c.scrolled) return;
+        try c.scroll.at(c.arena, .{ .t = at, .y = -@as(i64, @intCast(off * lh)) });
         c.scrolled = off;
+        for (c.pages.items) |*p| if (p.end > 0 and p.end <= off and p.gone == null) {
+            p.gone = at;
+        };
+    }
+
+    /// The scrollback gathered so far, written as a page.
+    fn page(c: *Cast) !void {
+        if (c.scrollback.rows == 0) return;
+        const k = c.pages.items.len - 1;
+        c.pages.items[k].end = c.row;
+        try c.out.print("<g class=\"p{d}\">", .{k});
+        try c.scrollback.flush(c.out);
+        try c.out.writeAll("</g>\n");
     }
 
     /// Every run of a line, each held to the width of its cells, and every
     /// block character drawn.
-    fn texts(c: *Cast, w: *std.Io.Writer, shown: Shown, col: usize, y: usize, words: ?Words) !void {
+    fn texts(c: *Cast, g: *Group, shown: Shown, col: usize, y: usize) !void {
+        const w = &g.spans.writer;
         for (shown.runs) |r| {
             const x = pad + (col + r.col) * cw;
-            const said = try c.attrs(r, shown, words);
+            const plain = std.meta.eql(r.style, Sgr{});
+            const said = if (r.wide)
+                (if (plain) " class=\"w\"" else try std.fmt.allocPrint(c.arena, " class=\"w f{d}\"", .{try c.class(r.style)}))
+            else if (plain) "" else try std.fmt.allocPrint(c.arena, " class=\"f{d}\"", .{try c.class(r.style)});
             if (r.block) |cp| {
-                try drawShape(w, cp, x, y, said);
+                try drawShape(&g.shapes.writer, cp, x, y, said);
                 continue;
             }
-            try w.print("<text x=\"{d}\" y=\"{d}\"{s}", .{ x, y + baseline, said });
+            // A wide character sits a pixel low, so an emoji's top stays in
+            // its own row.
+            try w.print("<tspan x=\"{d}\" y=\"{d}\"{s}", .{ x, y + baseline + @intFromBool(r.wide), said });
             if (r.cells > 1 and !r.wide) try w.print(" textLength=\"{d}\"", .{r.cells * cw});
             try w.writeAll(">");
             for (r.text) |b| switch (b) {
@@ -528,23 +722,9 @@ const Cast = struct {
                 '>' => try w.writeAll("&gt;"),
                 else => try w.writeByte(b),
             };
-            try w.writeAll("</text>");
+            try w.writeAll("</tspan>");
         }
-    }
-
-    /// A run's style, and when its word arrives if words arrive one by one.
-    fn attrs(c: *Cast, r: Run, shown: Shown, words: ?Words) ![]const u8 {
-        const plain = std.meta.eql(r.style, Sgr{});
-        if (words) |ws| {
-            var j: usize = 0;
-            for (shown.word_ends) |e| j += @intFromBool(e <= r.col);
-            const at = ws.at + j * ws.ms;
-            return if (plain)
-                std.fmt.allocPrint(c.arena, " class=\"a\" style=\"--a:{d}\"", .{at})
-            else
-                std.fmt.allocPrint(c.arena, " class=\"a f{d}\" style=\"--a:{d}\"", .{ try c.class(r.style), at });
-        }
-        return if (plain) "" else std.fmt.allocPrint(c.arena, " class=\"f{d}\"", .{try c.class(r.style)});
+        g.rows += 1;
     }
 
     fn class(c: *Cast, s: Sgr) !usize {
@@ -553,119 +733,105 @@ const Cast = struct {
         return c.styles.items.len - 1;
     }
 
-    /// The status line says `what` from `at`, and what it said before stops.
+    /// The status line says `what` from `at`.
     fn say(c: *Cast, what: []const u8, at: u64) !void {
-        if (std.mem.eql(u8, what, c.status)) return;
-        try c.statusText(c.status, c.status_from, at);
-        c.status = what;
-        c.status_from = at;
-    }
-
-    fn statusText(c: *Cast, what: []const u8, from: u64, until: ?u64) !void {
-        const w = &c.later.writer;
-        const m = c.margin();
-        try w.print("<text x=\"{d}\" y=\"{d}\" fill=\"{s}\"", .{ pad + (m + 1) * cw, pad + (c.rows - 2) * lh + baseline, bg });
-        if (until) |u|
-            try w.print(" class=\"g\" style=\"--a:{d};--b:{d}\"", .{ from, u })
-        else
-            try w.print(" class=\"a\" style=\"--a:{d}\"", .{from});
-        try w.print(">{s}</text>\n", .{what[0..@min(what.len, c.cols -| 2 * m + 1 -| 4)]});
+        const k = for (statuses, 0..) |s, k| {
+            if (s.ptr == what.ptr) break k;
+        } else unreachable;
+        if (k == c.saying) return;
+        c.saying = k;
+        try c.status.at(c.arena, .{ .t = at, .y = -@as(i64, @intCast(k * c.apart())) });
     }
 
     fn close(c: *Cast) !void {
         const end_at = c.t + hold;
         const o = c.out;
+        const w = c.cols * cw + 2 * pad;
+        const h = (c.row + c.rows + 2) * lh;
+        try c.page();
         if (c.address != null) {
             // The next prompt, waiting.
             if (c.started) c.row += 1;
-            const y = pad + c.row * lh;
-            try o.print("<text x=\"{d}\" y=\"{d}\" textLength=\"{d}\" class=\"a\" style=\"--a:{d}\">&gt;&gt;&gt;</text>", .{ pad, y + baseline, 3 * cw, c.t });
-            try o.print("<rect class=\"a\" x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\" style=\"--a:{d}\"/>\n", .{ pad + prompt.len * cw, y, cw, lh, c.t });
-            try c.placeRow(.{ .runs = &.{}, .first = 0, .last = 0, .word_ends = &.{} }, .{ .ms = 0, .unit = .block }, 0);
-            try o.writeAll("</g></g>\n");
-        } else try c.riffBelow();
-        try c.stylesheet(end_at);
+            try c.reach(c.t);
+            try o.print("<text x=\"{d}\" y=\"{d}\" textLength=\"{d}\">&gt;&gt;&gt;</text>\n", .{ pad, pad + c.row * lh + baseline, 3 * cw });
+            try c.edge(c.t, prompt.len, c.row);
+            try o.print("<g class=\"cu\"><rect width=\"{d}\" height=\"{d}\"/><path fill=\"{s}\" d=\"M{d} 0H{d}V{d}H-{d}V{d}H{d}Z\"/></g>\n", .{ cw, lh, bg, cw, 2 * w, h, 2 * w, lh, cw });
+        } else try o.print("<path class=\"cu\" fill=\"{s}\" d=\"M0 0H{d}V{d}H-{d}V{d}H0Z\"/>\n", .{ bg, 2 * w, h, 2 * w, lh });
+        try o.writeAll("</g></g>\n");
+        if (c.address == null) try c.riffBelow();
+
+        // Spaces kept as a terminal keeps them, and every character its own
+        // glyph in its own cell. A wide character is a size smaller, as an
+        // emoji at the font's size stands taller than its row.
+        try o.writeAll("<style><![CDATA[text{white-space:pre;font-kerning:none;font-variant-ligatures:none}.w{font-size:14px}svg:active *{animation-play-state:paused}");
+        try c.curtain.css(o, "cu", end_at);
+        try c.scroll.css(o, "s", end_at);
+        if (c.address == null) {
+            try c.panel.css(o, "pn", end_at);
+            try c.editor.css(o, "es", end_at);
+            try c.cover.css(o, "ec", end_at);
+            try c.status.css(o, "ss", end_at);
+        }
+        try switches(o, "p", c.pages.items, end_at);
+        try switches(o, "m", c.draft_pages.items, end_at);
+        for (c.styles.items, 0..) |s, k| {
+            try o.print(".f{d}{{", .{k});
+            try s.css(o);
+            try o.writeAll("}");
+        }
+        try o.writeAll("]]></style>\n</svg>\n");
     }
 
-    /// The status bar and the editor, below the scrollback.
-    fn riffBelow(c: *Cast) !void {
-        if (std.mem.eql(u8, c.status, working)) try c.say(waiting_empty, c.t);
-        try c.statusText(c.status, c.status_from, null);
-        const o = c.out;
-        try o.writeAll("</g></g>\n");
+    /// Each page switched on and off, as `.{prefix}K`.
+    fn switches(o: *std.Io.Writer, prefix: []const u8, pages: []const Page, end_at: u64) !void {
+        for (pages, 0..) |p, k| {
+            if (p.from == 0 and p.gone == null) continue;
+            try o.print(".{s}{d}{{animation:{s}{d} {d}ms step-end infinite}}@keyframes {s}{d}{{0%{{display:none}}{d:.4}%{{display:inline}}", .{ prefix, k, prefix, k, end_at, prefix, k, pct(p.from, end_at) });
+            if (p.gone) |g| try o.print("{d:.4}%{{display:none}}", .{pct(g, end_at)});
+            try o.writeAll("}");
+        }
+    }
 
-        // The status bar and the editor's edge, as riff draws them.
+    /// The status bar and the editor, below the scrollback: the panel's
+    /// back, the messages riding in it, and its front.
+    fn riffBelow(c: *Cast) !void {
+        if (c.saying == 2) try c.say(waiting_empty, c.t);
+        try c.draftPage();
+        const o = c.out;
+        const w = c.cols * cw + 2 * pad;
+        const deep = 2 * c.rows * lh;
         const m = c.margin();
         const inner = c.cols - (2 * m -| 1);
         const sy = pad + (c.rows - 2) * lh;
-        const ey = pad + (c.rows - 1) * lh;
+        const ey = c.editorTop();
         const x0 = pad + (m -| 1) * cw;
         const in_grey = " fill=\"" ++ grey ++ "\"";
+
+        // The back: the terminal's own background from the status bar down,
+        // and the editor's edge the height of it.
+        try o.print("<g class=\"pn\"><rect y=\"{d}\" width=\"{d}\" height=\"{d}\" fill=\"{s}\"/><rect x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\"{s}/></g>\n", .{ sy, w, deep, bg, x0, ey, eighths(0, 1, cw), deep, in_grey });
+
+        // Every message, seen only where the editor can ever be, and the
+        // curtain over what is not yet typed.
+        try o.print("<clipPath id=\"e\"><rect y=\"{d}\" width=\"{d}\" height=\"{d}\"/></clipPath><g clip-path=\"url(#e)\"><g class=\"pn\"><g class=\"es\">\n", .{ pad + (c.rows - c.most()) * lh, w, deep });
+        try o.writeAll(c.later.written());
+        try o.print("<g class=\"ec\"><rect width=\"{d}\" height=\"{d}\"/><path fill=\"{s}\" d=\"M{d} 0H{d}V{d}H-{d}V{d}H{d}Z\"/></g></g></g></g>\n", .{ cw, lh, bg, cw, 2 * w, c.apart(), 2 * w, lh, cw });
+
+        // The front: the status bar as riff draws it, and what it says.
+        try o.writeAll("<g class=\"pn\">");
         if (inner >= 8) {
             try drawShape(o, 0x2582, x0, sy, in_grey);
             try drawShape(o, 0x259F, x0 + cw, sy, in_grey);
             try o.print("<rect x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\"{s}/>", .{ x0 + 2 * cw, sy, (inner - 4) * cw, lh, in_grey });
             try drawShape(o, 0x2599, x0 + (inner - 2) * cw, sy, in_grey);
             try drawShape(o, 0x2582, x0 + (inner - 1) * cw, sy, in_grey);
-            try o.writeAll("\n");
-        } else try o.print("<rect x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\"{s}/>\n", .{ x0, sy, inner * cw, lh, in_grey });
-        try drawShape(o, 0x258F, x0, ey, in_grey);
-        try o.writeAll("\n");
-        try o.writeAll(c.later.written());
-        // The cursor home after the last send, for as long as the picture holds.
-        try o.print("<rect class=\"a\" x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\" style=\"--a:{d}\"/>\n", .{ pad + m * cw, ey, cw, lh, c.sent });
-    }
-
-    fn stylesheet(c: *Cast, end_at: u64) !void {
-        const o = c.out;
-        try o.print("<style><![CDATA[{s}svg{{animation:t {d}ms linear infinite}}@keyframes t{{to{{--t:{d}}}}}", .{ clock, end_at, end_at });
-        for (c.styles.items, 0..) |s, k| {
-            try o.print(".f{d}{{", .{k});
-            try s.css(o);
-            try o.writeAll("}");
-        }
-        if (c.scrolls.items.len > 0) {
-            try o.print(".s{{animation:s {d}ms step-end infinite}}@keyframes s{{0%{{transform:none}}", .{end_at});
-            for (c.scrolls.items) |s| {
-                const when = @as(f64, @floatFromInt(s[0])) * 100.0 / @as(f64, @floatFromInt(end_at));
-                try o.print("{d:.3}%{{transform:translateY(-{d}px)}}", .{ when, s[1] * lh });
-            }
-            try o.print("100%{{transform:translateY(-{d}px)}}}}", .{c.scrolled * lh});
-        }
-        try o.writeAll("]]></style>\n</svg>\n");
+        } else try o.print("<rect x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\"{s}/>", .{ x0, sy, inner * cw, lh, in_grey });
+        try o.print("<g class=\"ss\" fill=\"{s}\">", .{bg});
+        for (statuses, 0..) |s, k|
+            try o.print("<text x=\"{d}\" y=\"{d}\">{s}</text>", .{ pad + (m + 1) * cw, sy + k * c.apart() + baseline, s[0..@min(s.len, c.cols -| 2 * m + 1 -| 4)] });
+        try o.writeAll("</g></g>\n");
     }
 };
-
-/// When the words of a line arrive, when they arrive one by one: the first
-/// at `at`, and each after it `ms` later.
-const Words = struct { at: u64, ms: u64 };
-
-/// The attributes that bring a line in at `at` at the pace given, and take
-/// it away again at `gone` when there is one. Words arriving one by one are
-/// each told when, so those are handed back.
-fn group(w: *std.Io.Writer, pace: Pace, shown: Shown, at: u64, gone: ?u64) !?Words {
-    const typed = pace.unit == .char and pace.ms > 0 and shown.cells() > 0;
-    const by_word = pace.unit == .word;
-    const class = if (typed)
-        (if (gone != null) "c g" else "c")
-    else if (gone != null) "g" else if (by_word) "" else "a";
-    if (class.len > 0) try w.print(" class=\"{s}\"", .{class});
-    try w.print(" style=\"--a:{d}", .{at});
-    if (gone) |g| try w.print(";--b:{d}", .{g});
-    if (typed) try w.print(";--s:{d};--d:{d};--n:{d}", .{ at, pace.ms, shown.cells() });
-    try w.writeAll("\"");
-    return if (by_word) .{ .at = at, .ms = pace.ms } else null;
-}
-
-/// A cursor at `x`, there from `a` until `b`, moving along `n` cells as they
-/// are typed from `start`, or to the end of them at `end` when they arrive
-/// otherwise.
-fn cursor(w: *std.Io.Writer, x: usize, y: usize, a: u64, b: u64, pace: Pace, start: u64, end: u64, n: usize) !void {
-    const typed = pace.unit == .char and pace.ms > 0;
-    try w.print("<rect class=\"g m\" x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\" style=\"--a:{d};--b:{d};--s:{d};--d:{d};--n:{d}\"/>\n", .{
-        x, y, cw, lh, a, b, if (typed) start else end, if (typed) pace.ms else 1, n,
-    });
-}
 
 fn duration(pace: Pace, shown: Shown) u64 {
     return switch (pace.unit) {
@@ -762,11 +928,11 @@ const Shown = struct {
     }
 };
 
-/// A rendered line read back into runs on the grid. Spaces are never drawn,
-/// only stepped over, and a wide character is a run of its own so that a
-/// font's idea of its width cannot push what follows it along. With `words`,
-/// every word is a run of its own too, so each can arrive by itself.
-fn layout(arena: std.mem.Allocator, line: []const u8, width: usize, from: Sgr, words: bool) !Shown {
+/// A rendered line read back into runs on the grid, a run for each style.
+/// Spaces at a run's ends are stepped over rather than drawn, and a wide
+/// character is a run of its own so that a font's idea of its width cannot
+/// push what follows it along.
+fn layout(arena: std.mem.Allocator, line: []const u8, width: usize, from: Sgr) !Shown {
     var runs: std.ArrayList(Run) = .empty;
     var ends: std.ArrayList(usize) = .empty;
     var style: Sgr = from;
@@ -824,13 +990,7 @@ fn layout(arena: std.mem.Allocator, line: []const u8, width: usize, from: Sgr, w
         if (cp == ' ') {
             if (in_word) try ends.append(arena, col);
             in_word = false;
-            // A run never holds two spaces together, which a renderer is
-            // free to collapse into one; the next run starts at its own cell.
-            if (cur.items.len > 0 and (words or cur.items[cur.items.len - 1] == ' ')) {
-                try Flush.run(arena, &runs, &cur, start, col, style, false);
-                col += 1;
-                start = col;
-            } else if (cur.items.len == 0) {
+            if (cur.items.len == 0) {
                 col += 1;
                 start = col;
             } else {
@@ -971,7 +1131,7 @@ test "a pace may say the pause before it" {
 test "a line is laid out on the grid, its spaces stepped over" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    const s = try layout(a.allocator(), "\u{2502}     \x1b[0;38;5;181mWest of House\x1b[0m  ", 80, .{}, false);
+    const s = try layout(a.allocator(), "\u{2502}     \x1b[0;38;5;181mWest of House\x1b[0m  ", 80, .{});
     try testing.expectEqual(@as(usize, 2), s.runs.len);
     try testing.expectEqual(@as(?u21, 0x2502), s.runs[0].block);
     try testing.expectEqual(@as(usize, 6), s.runs[1].col);
@@ -980,19 +1140,10 @@ test "a line is laid out on the grid, its spaces stepped over" {
     try testing.expectEqualSlices(usize, &.{ 1, 10, 13, 19 }, s.word_ends);
 }
 
-test "arriving by word, every word is a run" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const s = try layout(a.allocator(), "West of House", 80, .{}, true);
-    try testing.expectEqual(@as(usize, 3), s.runs.len);
-    try testing.expectEqualStrings("of", s.runs[1].text);
-    try testing.expectEqual(@as(usize, 5), s.runs[1].col);
-}
-
 test "a wide character is a run of its own, and a block one is drawn" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
-    const s = try layout(a.allocator(), "\u{2590} \u{1F916}:", 80, .{}, false);
+    const s = try layout(a.allocator(), "\u{2590} \u{1F916}:", 80, .{});
     try testing.expectEqual(@as(usize, 3), s.runs.len);
     try testing.expectEqual(@as(?u21, 0x2590), s.runs[0].block);
     try testing.expect(s.runs[1].wide);
@@ -1013,11 +1164,11 @@ test "what does not fit is handed back, in the style it was in" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const line = "ab \x1b[0;1mcdef";
-    const s = try layout(a.allocator(), line, 5, .{}, false);
+    const s = try layout(a.allocator(), line, 5, .{});
     try testing.expectEqualStrings("cd", s.runs[1].text);
     try testing.expectEqualStrings("ef", line[s.rest.?..]);
     try testing.expect(s.style.bold);
-    const next = try layout(a.allocator(), line[s.rest.?..], 5, s.style, false);
+    const next = try layout(a.allocator(), line[s.rest.?..], 5, s.style);
     try testing.expect(next.runs[0].style.bold);
     try testing.expectEqual(@as(?usize, null), next.rest);
 }
