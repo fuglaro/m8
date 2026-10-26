@@ -382,6 +382,10 @@ m8 ref :games/zork | m8 encode | m8 cast --size 100x30 --speed 40l,🤖60w >zork
   * What follows is what that command writes, so not the 🙋.
 * `--skip-snips` leaves out what a turn kept aside: a `💭snip`,
   and the 🧠 naming where one went.
+* `--static` draws it all at once instead, as tall as it is,
+  with nothing moving.
+  * A 🙋 at the end is left typed and unsent, in the editor or
+    at the prompt.
 * `--size` is the terminal, `80x24` unless said.
   * A line wider than it wraps, as a terminal wraps it.
 * It is CSS and nothing else, so it plays wherever an image

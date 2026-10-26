@@ -31,6 +31,9 @@
 //! prompt as the command that says it to the address, and what follows is
 //! what that command writes, which is everything after the 🙋 and not the 🙋
 //! itself.
+//!
+//! With `--static` it is a still: the whole ledger at once, as tall as it
+//! is, and a 🙋 at the end left typed and unsent.
 
 const std = @import("std");
 const doc = @import("../m8/doc.zig");
@@ -53,7 +56,7 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 cast [--size COLSxROWS] [--speed SPEEDS] [--no-riff ADDRESS] [--skip-snips]
+        \\  m8 cast [--size COLSxROWS] [--speed SPEEDS] [--no-riff ADDRESS] [--skip-snips] [--static]
         \\
         \\Reads a ledger on stdin and writes an SVG that plays it the way riff
         \\would have shown it: each 🙋 typed into the editor and sent, and
@@ -87,6 +90,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\--skip-snips leaves out what a turn kept aside: a 💭snip, and the 🧠
         \\that names where one went.
+        \\
+        \\--static draws it all at once instead, as tall as it is, with
+        \\nothing moving. A 🙋 at the end is left typed and unsent.
         \\
         \\Records before the first 🙋 are left out, as riff shows nothing
         \\until something is sent.
@@ -190,6 +196,7 @@ fn run(ctx: Ctx) !u8 {
     var speeds: Speeds = .{};
     var address: ?[]const u8 = null;
     var snips = true;
+    var still = false;
     var i: usize = 0;
     while (i < ctx.args.len) : (i += 1) {
         const arg = ctx.args[i];
@@ -206,6 +213,8 @@ fn run(ctx: Ctx) !u8 {
                 return bad(ctx, "--speed is a default and then sigils, each a number of ms, c, w, l or b, and a pause if said, as in 40l,🤖60w,🙋50c1000");
         } else if (std.mem.eql(u8, arg, "--skip-snips")) {
             snips = false;
+        } else if (std.mem.eql(u8, arg, "--static")) {
+            still = true;
         } else if (std.mem.eql(u8, arg, "--no-riff") and value.len > 0) {
             i += 1;
             address = value;
@@ -219,6 +228,11 @@ fn run(ctx: Ctx) !u8 {
     var c: Cast = try .init(ctx.arena, ctx.out, look, speeds, cols, rows);
     c.address = address;
     c.snips = snips;
+    var body: std.Io.Writer.Allocating = .init(ctx.arena);
+    if (still) {
+        c.still = ctx.out;
+        c.out = &body.writer;
+    }
     try c.open();
 
     var diag: doc.Diagnostic = .{};
@@ -342,6 +356,14 @@ const group_rows = 100;
 /// regardless, which it does quickly enough on its own.
 const Page = struct { from: u64, end: usize = 0, gone: ?u64 = null };
 
+/// A record as it was said and as it renders, kept past its end.
+const Said = struct { sig: doc.Sigil, said: []const u8, rendered: []const u8 };
+
+/// How text is set: spaces kept as a terminal keeps them, and every
+/// character its own glyph in its own cell. A wide character is a size
+/// smaller, as an emoji at the font's size stands taller than its row.
+const text_css = "text{white-space:pre;font-kerning:none;font-variant-ligatures:none}.w{font-size:14px}";
+
 /// What riff's status line says, top to bottom in its strip.
 const statuses = [_][]const u8{ waiting_empty, waiting_written, working };
 
@@ -356,6 +378,11 @@ const Cast = struct {
     address: ?[]const u8 = null,
     /// Whether what a turn kept aside is shown.
     snips: bool = true,
+    /// Where a still goes, once the picture is whole and its height known:
+    /// everything is written to `out` until then. A 🙋 is held until a
+    /// record follows it, as the last is left unsent.
+    still: ?*std.Io.Writer = null,
+    held: ?Said = null,
 
     /// The record being read: rendered, and as it was said.
     rendered: std.Io.Writer.Allocating,
@@ -425,6 +452,7 @@ const Cast = struct {
     /// Rows above the status bar and editor, which a plain terminal has none
     /// of.
     fn region(c: *const Cast) usize {
+        if (c.still != null) return std.math.maxInt(u32);
         return if (c.address == null) c.rows - 1 - c.e else c.rows;
     }
 
@@ -446,21 +474,26 @@ const Cast = struct {
     }
 
     fn open(c: *Cast) !void {
-        const w = c.cols * cw + 2 * pad;
-        const h = c.rows * lh + 2 * pad;
-        try c.out.print(
-            \\<svg xmlns="http://www.w3.org/2000/svg" width="{d}" height="{d}" viewBox="0 0 {d} {d}" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="{d}" fill="{s}">
-            \\<rect width="100%" height="100%" rx="6" fill="{s}"/>
-            \\<clipPath id="r"><rect y="{d}" width="{d}" height="{d}"/></clipPath>
-            \\<g clip-path="url(#r)"><g class="s">
-            \\
-        , .{ w, h, w, h, font_size, fg, bg, pad, w, c.region() * lh });
+        if (c.still == null) try c.header(c.out, c.rows, c.region());
         try c.edge(0, 0, 0);
         try c.scroll.at(c.arena, .{ .t = 0 });
         try c.panel.at(c.arena, .{ .t = 0 });
         try c.editor.at(c.arena, .{ .t = 0 });
         try c.cover.at(c.arena, .{ .t = 0, .x = px(c.margin(), cw), .y = @intCast(c.editorTop()) });
         try c.status.at(c.arena, .{ .t = 0 });
+    }
+
+    /// The picture `rows` high, its scrollback `above` rows of it.
+    fn header(c: *Cast, o: *std.Io.Writer, rows: usize, above: usize) !void {
+        const w = c.cols * cw + 2 * pad;
+        const h = rows * lh + 2 * pad;
+        try o.print(
+            \\<svg xmlns="http://www.w3.org/2000/svg" width="{d}" height="{d}" viewBox="0 0 {d} {d}" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="{d}" fill="{s}">
+            \\<rect width="100%" height="100%" rx="6" fill="{s}"/>
+            \\<clipPath id="r"><rect y="{d}" width="{d}" height="{d}"/></clipPath>
+            \\<g clip-path="url(#r)"><g class="s">
+            \\
+        , .{ w, h, w, h, font_size, fg, bg, pad, w, above * lh });
     }
 
     pub fn begin(c: *Cast, s: doc.Sigil, value: []const u8) !void {
@@ -489,31 +522,46 @@ const Cast = struct {
         if (c.lines > 0) try c.body.?.finish();
         c.body = null;
         if (!c.snips and c.snip()) return;
+        // A still leaves its last 🙋 unsent, so each waits to see whether
+        // anything follows it.
+        if (c.held) |h| {
+            c.held = null;
+            try c.settle(h);
+        }
+        if (c.still != null and c.sig == .user) {
+            c.held = .{ .sig = .user, .said = try c.arena.dupe(u8, c.said.items), .rendered = try c.arena.dupe(u8, c.rendered.written()) };
+            return;
+        }
+        try c.settle(.{ .sig = c.sig, .said = c.said.items, .rendered = c.rendered.written() });
+    }
+
+    /// A record played: typed and sent when it is a 🙋, arriving otherwise.
+    fn settle(c: *Cast, r: Said) !void {
         const first = !c.started;
         if (first) {
-            if (c.sig != .user) return;
+            if (r.sig != .user) return;
             c.started = true;
         }
 
-        const pace: Pace = if (c.sig == .user) .{ .ms = 0, .unit = .block } else c.speeds.of(c.sig);
+        const pace: Pace = if (r.sig == .user) .{ .ms = 0, .unit = .block } else c.speeds.of(r.sig);
         if (c.address) |address| {
             // The answer starts on the row after the command, and every record
             // and the next prompt after a blank one.
             if (!first and !c.answering) c.row += 1;
-            if (c.sig == .user) {
-                try c.command(address, c.said.items);
+            if (r.sig == .user) {
+                try c.command(address, r.said, true);
                 c.answering = true;
                 return;
             }
         } else if (!first) c.row += 1; // the blank line between records
 
-        if (c.sig == .user)
-            try c.typeIn(c.said.items)
+        if (r.sig == .user)
+            try c.typeIn(r.said)
         else
             c.t += pace.pause orelse if (c.answering) latency else 0;
-        c.answering = c.sig == .user;
+        c.answering = r.sig == .user;
         const from = c.t;
-        var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, c.rendered.written(), "\n"), '\n');
+        var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, r.rendered, "\n"), '\n');
         while (it.next()) |l| try c.place(l, pace);
         // The newline ending the last line takes the cursor onto the next,
         // and a terminal scrolls to show it then, not when it is written in.
@@ -534,29 +582,17 @@ const Cast = struct {
         c.t += pace.pause orelse think;
         try c.say(waiting_written, c.t);
 
-        // The message in its own place in the strip, a row for each of its
-        // lines and for each time one is too wide, as riff breaks it.
+        // The message in its own place in the strip.
         const m = c.margin();
-        const width = c.cols -| ((2 * m -| 1) + 2);
         c.messages += 1;
         const base = c.editorTop() + c.messages * c.apart();
         if (c.drafts.rows == 0) try c.draft_pages.append(c.arena, .{ .from = c.t });
-        var lines = std.mem.splitScalar(u8, message, '\n');
-        var j: usize = 0;
-        while (lines.next()) |l| {
-            var rest = l;
-            while (true) : (j += 1) {
-                const shown = try layout(c.arena, rest, @max(width, 1), .{});
-                const y = base + j * lh;
-                try c.texts(&c.drafts, shown, m, y);
-                try c.grow(j + 1, c.t);
-                try c.typed(&c.cover, shown, pace, m, @intCast(y), c.t);
-                c.t += duration(pace, shown);
-                rest = rest[shown.rest orelse {
-                    j += 1;
-                    break;
-                } ..];
-            }
+        for (try c.messageRows(message), 0..) |shown, j| {
+            const y = base + j * lh;
+            try c.texts(&c.drafts, shown, m, y);
+            try c.grow(j + 1, c.t);
+            try c.typed(&c.cover, shown, pace, m, @intCast(y), c.t);
+            c.t += duration(pace, shown);
         }
         // Sent: the editor empty and one row again, the rows it gave back
         // left blank rather than scrolled into.
@@ -578,6 +614,23 @@ const Cast = struct {
         try c.later.writer.writeAll("</g>\n");
     }
 
+    /// A message as riff's editor holds it: a row for each of its lines, and
+    /// for each time one is too wide.
+    fn messageRows(c: *Cast, message: []const u8) ![]const Shown {
+        const width = c.cols -| ((2 * c.margin() -| 1) + 2);
+        var rows: std.ArrayList(Shown) = .empty;
+        var lines = std.mem.splitScalar(u8, message, '\n');
+        while (lines.next()) |l| {
+            var rest = l;
+            while (true) {
+                const shown = try layout(c.arena, rest, @max(width, 1), .{});
+                try rows.append(c.arena, shown);
+                rest = rest[shown.rest orelse break ..];
+            }
+        }
+        return rows.items;
+    }
+
     /// The editor showing the latest message with `rows` rows of it written
     /// from `t`: grown to hold them, as far as it may, and past that
     /// scrolled within to keep the last in sight.
@@ -594,13 +647,18 @@ const Cast = struct {
         try c.editor.at(c.arena, .{ .t = t, .y = -shift });
     }
 
-    /// A message typed at a plain terminal's prompt as the command that says
-    /// it to the address, and entered.
-    fn command(c: *Cast, address: []const u8, message: []const u8) !void {
-        const pace = c.speeds.of(.user);
+    /// A plain terminal's prompt, waiting on the row.
+    fn prompted(c: *Cast) !void {
         try c.reach(c.t);
         try c.out.print("<text x=\"{d}\" y=\"{d}\" textLength=\"{d}\">&gt;&gt;&gt;</text>\n", .{ pad, pad + c.row * lh + baseline, 3 * cw });
         try c.edge(c.t, prompt.len, c.row);
+    }
+
+    /// A message typed at a plain terminal's prompt as the command that says
+    /// it to the address, and entered if `sent`.
+    fn command(c: *Cast, address: []const u8, message: []const u8, sent: bool) !void {
+        const pace = c.speeds.of(.user);
+        try c.prompted();
         c.t += pace.pause orelse think;
 
         const one = try std.fmt.allocPrint(c.arena, "m8 {s} -- '{s}'", .{ address, message });
@@ -621,6 +679,7 @@ const Cast = struct {
             }
         }
         // Entered, the cursor goes to the next row to wait for the answer.
+        if (!sent) return;
         c.t += enter;
         try c.edge(c.t, 0, c.row);
         try c.reach(c.t);
@@ -744,6 +803,7 @@ const Cast = struct {
     }
 
     fn close(c: *Cast) !void {
+        if (c.still) |o| return c.closeStill(o);
         const end_at = c.t + hold;
         const o = c.out;
         const w = c.cols * cw + 2 * pad;
@@ -752,18 +812,13 @@ const Cast = struct {
         if (c.address != null) {
             // The next prompt, waiting.
             if (c.started) c.row += 1;
-            try c.reach(c.t);
-            try o.print("<text x=\"{d}\" y=\"{d}\" textLength=\"{d}\">&gt;&gt;&gt;</text>\n", .{ pad, pad + c.row * lh + baseline, 3 * cw });
-            try c.edge(c.t, prompt.len, c.row);
+            try c.prompted();
             try o.print("<g class=\"cu\"><rect width=\"{d}\" height=\"{d}\"/><path fill=\"{s}\" d=\"M{d} 0H{d}V{d}H-{d}V{d}H{d}Z\"/></g>\n", .{ cw, lh, bg, cw, 2 * w, h, 2 * w, lh, cw });
         } else try o.print("<path class=\"cu\" fill=\"{s}\" d=\"M0 0H{d}V{d}H-{d}V{d}H0Z\"/>\n", .{ bg, 2 * w, h, 2 * w, lh });
         try o.writeAll("</g></g>\n");
         if (c.address == null) try c.riffBelow();
 
-        // Spaces kept as a terminal keeps them, and every character its own
-        // glyph in its own cell. A wide character is a size smaller, as an
-        // emoji at the font's size stands taller than its row.
-        try o.writeAll("<style><![CDATA[text{white-space:pre;font-kerning:none;font-variant-ligatures:none}.w{font-size:14px}svg:active *{animation-play-state:paused}");
+        try o.writeAll("<style><![CDATA[" ++ text_css ++ "svg:active *{animation-play-state:paused}");
         try c.curtain.css(o, "cu", end_at);
         try c.scroll.css(o, "s", end_at);
         if (c.address == null) {
@@ -774,12 +829,68 @@ const Cast = struct {
         }
         try switches(o, "p", c.pages.items, end_at);
         try switches(o, "m", c.draft_pages.items, end_at);
+        try c.colours(o);
+        try o.writeAll("]]></style>\n</svg>\n");
+    }
+
+    /// The whole ledger at once, as tall as it is: no curtain and nothing
+    /// moving, the cursor where it was left, and a last 🙋 still unsent.
+    fn closeStill(c: *Cast, final: *std.Io.Writer) !void {
+        try c.page();
+        const o = c.out;
+        var rows: usize = undefined;
+        var above: usize = undefined;
+        if (c.address) |address| {
+            if (c.held) |h| {
+                if (c.started and !c.answering) c.row += 1;
+                try c.command(address, h.said, false);
+            } else {
+                if (c.started) c.row += 1;
+                try c.prompted();
+            }
+            try c.page();
+            const at = c.curtain.frames.items[c.curtain.frames.items.len - 1];
+            try o.print("<rect x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\"/>\n", .{ at.x, at.y, cw, lh });
+            try o.writeAll("</g></g>\n");
+            rows = c.row + 1;
+            above = rows;
+        } else {
+            above = if (c.started) c.row + 1 else 0;
+            try o.writeAll("</g></g>\n");
+            rows = above + 1 + try c.riffStill(o, pad + above * lh, if (c.held) |h| h.said else null);
+        }
+        try c.header(final, rows, above);
+        try final.writeAll(o.buffered());
+        try final.writeAll("<style><![CDATA[" ++ text_css);
+        try c.colours(final);
+        try final.writeAll("]]></style>\n</svg>\n");
+    }
+
+    /// Riff's status bar at `sy` and its editor below, holding `message` as
+    /// typed if there is one. Gives the editor's rows.
+    fn riffStill(c: *Cast, o: *std.Io.Writer, sy: usize, message: ?[]const u8) !usize {
+        const m = c.margin();
+        const ey = sy + lh;
+        const shown = if (message) |said| try c.messageRows(said) else &.{};
+        const e = @max(1, shown.len);
+        try o.print("<rect x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\" fill=\"" ++ grey ++ "\"/>\n", .{ pad + (m -| 1) * cw, ey, eighths(0, 1, cw), e * lh });
+        try c.bar(o, sy);
+        try c.statusText(o, if (message == null) waiting_empty else waiting_written, sy + baseline);
+        var g: Group = .init(c.arena);
+        for (shown, 0..) |row, j| try c.texts(&g, row, m, ey + j * lh);
+        try g.flush(o);
+        const x = if (shown.len > 0) px(m + shown[shown.len - 1].last, cw) else px(m, cw);
+        try o.print("<rect x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\"/>\n", .{ x, ey + (e - 1) * lh, cw, lh });
+        return e;
+    }
+
+    /// The `.fN` classes, a colour each.
+    fn colours(c: *Cast, o: *std.Io.Writer) !void {
         for (c.styles.items, 0..) |s, k| {
             try o.print(".f{d}{{", .{k});
             try s.css(o);
             try o.writeAll("}");
         }
-        try o.writeAll("]]></style>\n</svg>\n");
     }
 
     /// Each page switched on and off, as `.{prefix}K`.
@@ -801,7 +912,6 @@ const Cast = struct {
         const w = c.cols * cw + 2 * pad;
         const deep = 2 * c.rows * lh;
         const m = c.margin();
-        const inner = c.cols - (2 * m -| 1);
         const sy = pad + (c.rows - 2) * lh;
         const ey = c.editorTop();
         const x0 = pad + (m -| 1) * cw;
@@ -819,6 +929,18 @@ const Cast = struct {
 
         // The front: the status bar as riff draws it, and what it says.
         try o.writeAll("<g class=\"pn\">");
+        try c.bar(o, sy);
+        try o.writeAll("<g class=\"ss\">");
+        for (statuses, 0..) |s, k| try c.statusText(o, s, sy + k * c.apart() + baseline);
+        try o.writeAll("</g></g>\n");
+    }
+
+    /// Riff's status bar, its top at `sy`.
+    fn bar(c: *Cast, o: *std.Io.Writer, sy: usize) !void {
+        const m = c.margin();
+        const inner = c.cols - (2 * m -| 1);
+        const x0 = pad + (m -| 1) * cw;
+        const in_grey = " fill=\"" ++ grey ++ "\"";
         if (inner >= 8) {
             try drawShape(o, 0x2582, x0, sy, in_grey);
             try drawShape(o, 0x259F, x0 + cw, sy, in_grey);
@@ -826,10 +948,12 @@ const Cast = struct {
             try drawShape(o, 0x2599, x0 + (inner - 2) * cw, sy, in_grey);
             try drawShape(o, 0x2582, x0 + (inner - 1) * cw, sy, in_grey);
         } else try o.print("<rect x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\"{s}/>", .{ x0, sy, inner * cw, lh, in_grey });
-        try o.print("<g class=\"ss\" fill=\"{s}\">", .{bg});
-        for (statuses, 0..) |s, k|
-            try o.print("<text x=\"{d}\" y=\"{d}\">{s}</text>", .{ pad + (m + 1) * cw, sy + k * c.apart() + baseline, s[0..@min(s.len, c.cols -| 2 * m + 1 -| 4)] });
-        try o.writeAll("</g></g>\n");
+    }
+
+    /// What the status bar says, on its baseline at `y`.
+    fn statusText(c: *Cast, o: *std.Io.Writer, s: []const u8, y: usize) !void {
+        const m = c.margin();
+        try o.print("<text x=\"{d}\" y=\"{d}\" fill=\"{s}\">{s}</text>", .{ pad + (m + 1) * cw, y, bg, s[0..@min(s.len, c.cols -| 2 * m + 1 -| 4)] });
     }
 };
 

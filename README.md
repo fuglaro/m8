@@ -4,27 +4,14 @@
 A full agentic harness in under a megabyte, needing only what a shell already
 has like bash, sed, and curl.
 
-```
->>> m8 :crew/devyn -- 'One word -> do you like Haiku?'
-▐ 🤖:
-│ Yes.
-
-▐ 🧠:crew/devyn/+/swlyayqtjk
-
->>> m8 :crew/devyn -- 'Can you make me one?'
-▐ 🤖:
-│ Moonlight on still ponds
-│ Crickets stitch the dark with song
-│ Dawn waits behind hills
-
-▐ 🧠:crew/devyn/+/psbarddrym
-```
+*[Agent Definition](docs/examples/haiku/devyn.md)/[Full Ledger](docs/examples/haiku/devyn+.md)*
+[![Haiku Making](docs/examples/haiku/devyn.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/haiku/devyn.svg)
 
 It's flexible enough to run any chat-shaped model including the
 1979 text adventure Z-machine engine! Here's a transcript where
 the Zork-I game acts as the agent:
 
-*[Zork Agent Defintion](docs/examples/coop/zork.md)/[Full Ledger](docs/examples/coop/zork+.md)(slowed down for readability - click to open where you can hold down to pause)*
+*[Agent Defintion](docs/examples/coop/zork.md)/[Full Ledger](docs/examples/coop/zork+.md)(slowed down for readability - click to open where you can hold down to pause)*
 [![Zork](docs/examples/coop/zork.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/coop/zork.svg)
 
 In the transcript demo above, the player wasn't actually a human!
