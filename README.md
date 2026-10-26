@@ -22,19 +22,21 @@ has like bash, sed and curl.
 
 It's flexible enough to run any chat-shaped model including the
 1979 text adventure Z-machine engine! Here's a transcript where
-the Zork-I game is acting as the agent:
-[![Zork](docs/examples/coop/zork.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/coop/zork.svg)
-(slowed down for readability - click to open where you can hold down to pause)
+the Zork-I game acts as the agent:
 
-In that transcript above, the player wasn't a human... it was actually
-a GPT-6 Luna agent using Zork as a subagent reached through a tool.
-Here is the transcript where the Luna is being guided by the user:
+*(slowed down for readability - click to open where you can hold down to pause)*
+[![Zork](docs/examples/coop/zork.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/coop/zork.svg)
+
+In the transcript demo above, the player wasn't actually a human!
+It was really GPT-6-Luna using a Zork subagent (through a tool).
+Here is the transcript where the Luna agent is being guided by the user:
+
 [![Zork Player](docs/examples/coop/zork-player.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/coop/zork-player.svg)
 
-* Agent definitions:
+* Demo agent definitions:
   * [Zork-Player Agent](docs/examples/coop/zork-player.md)
   * [Zork Agent](docs/examples/coop/zork.md)
-* Full ledger:
+* Full demo ledgers:
   * [Zork-Player Ledger](docs/examples/coop/zork-player+.md)
   * [Zork Ledger](docs/examples/coop/zork+.md)
 
