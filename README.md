@@ -124,35 +124,9 @@ conversation:
 
 ```
 >>> m8 :crew/devyn
-▐ 🙋:
-│ can you write a haiku to scratch/haiku.md about having good mates?
-
-▐ 📲:edit,call_354d69588f1c4cd090828705078c4dca
-│ * path `"scratch/haiku.md"`
-│ * new_string
-│   ```text
-│   Good mates share the road
-│   Laughter warms the evening air
-│   Home is where we meet
-│
-│   ```
-▐ 📜:call_354d69588f1c4cd090828705078c4dca
-│ ```diff
-│ +Good mates share the road
-│ +Laughter warms the evening air
-│ +Home is where we meet
-│ ```
-▐ 🟢:call_354d69588f1c4cd090828705078c4dca
-
-▐ 🤖:
-│ Written to `scratch/haiku.md`.
-
-▐ 🧠:crew/devyn/+/fqwurujpru
-
-   ▂▟📲edit(path=scratch/haiku.md,new_string=Good mates sha …✥35_937▙▂
-   ██Waiting (enter:dispatch,alt-enter/ctrl-j:newline)...           ██
-   ▏Thanks! That's awes...
 ```
+*[Agent Definition](docs/examples/haiku/devyn.md)/[Full Ledger](docs/examples/haiku/devyn+.md)*
+[![Haiku Making](docs/examples/haiku/devyn-riff.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/haiku/devyn-riff.svg)
 
 An agent is a file in the same grammar. This one cannot widen what it may do,
 whatever it includes or is told:
