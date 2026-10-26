@@ -24,25 +24,19 @@ It's flexible enough to run any chat-shaped model including the
 1979 text adventure Z-machine engine! Here's a transcript where
 the Zork-I game acts as the agent:
 
-*(slowed down for readability - click to open where you can hold down to pause)*
+*[Zork Agent Defintion](docs/examples/coop/zork.md)/[Full Ledger](docs/examples/coop/zork+.md)(slowed down for readability - click to open where you can hold down to pause)*
 [![Zork](docs/examples/coop/zork.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/coop/zork.svg)
 
 In the transcript demo above, the player wasn't actually a human!
-It was really GPT-6-Luna using a Zork subagent (through a tool).
+It was really GPT-6-Luna playing a Zork subagent (through a tool).
 Here is the transcript where the Luna agent is being guided by the user:
 
+*[Agent Definition](docs/examples/coop/zork-player.md)/[Full Ledger](docs/examples/coop/zork-player+.md)*
 [![Zork Player](docs/examples/coop/zork-player.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/coop/zork-player.svg)
 
-* Demo agent definitions:
-  * [Zork-Player Agent](docs/examples/coop/zork-player.md)
-  * [Zork Agent](docs/examples/coop/zork.md)
-* Full demo ledgers:
-  * [Zork-Player Ledger](docs/examples/coop/zork-player+.md)
-  * [Zork Ledger](docs/examples/coop/zork+.md)
+If you inspect those [Agent Definition](docs/examples/coop/zork-player.md) and [Full Ledger](docs/examples/coop/zork-player+.md) links, you can see that the agent definition, the transcript, and the tool protocols are all one language - **"m8"** - rendered everywhere as markdown. It's all just well structured markdown, and there's little more to the TUI than that.
 
-Note:
-* Pre-release: open for comment, and still settling.
-* Working on m8 itself? Read [dev/STYLE_GUIDE.md](dev/STYLE_GUIDE.md) first.
+‼️ Pre-release: open for comment, and still settling / [Style Guide here](dev/STYLE_GUIDE.md) ‼️
 
 ## What it is
 
