@@ -122,9 +122,7 @@ m8 query :demo/critic//job "Review that."                  # the reply alone, as
 An address alone at a terminal opens `riff`, an editor pinned under the
 conversation:
 
-```
->>> m8 :crew/devyn
-```
+```>>> m8 :crew/devyn```
 *[Agent Definition](docs/examples/haiku/devyn.md)/[Full Ledger](docs/examples/haiku/devyn+.md)*
 [![Haiku Making](docs/examples/haiku/devyn-riff.svg)](https://raw.githubusercontent.com/fuglaro/m8/main/docs/examples/haiku/devyn-riff.svg)
 
