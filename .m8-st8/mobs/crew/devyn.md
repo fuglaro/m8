@@ -17,5 +17,4 @@
   >   The task to complete and any relevant scope or constraints.
   > * continue boolean
   >   Set true to continue the conversation; otherwise start fresh.
-
 * :toolbox::cody

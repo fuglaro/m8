@@ -19,11 +19,15 @@
 * :shield::freeze-toolbox
   > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
 
-* :shield::sandbox
+* :shield::workbench
   > :shield:freeze-toolbox
-  > :shield:secure private contain-writes no-loop no-edit-git no-edit-m8-st8
+  > :shield:secure contain-writes no-loop no-edit-git
   > :shield:contain-env
   > :shield:contain-home
+
+* :shield::sandbox
+  > :shield:workbench
+  > :shield:secure private no-edit-m8-st8
 
 * :shield::jail
   > :shield:sandbox

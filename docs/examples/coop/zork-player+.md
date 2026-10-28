@@ -14,6 +14,7 @@
   > `m8` `call` `--md` `m8` `query` `:games/zork` `{{command|}}`
   > * command string
   >   The command to give to the game. Say anything to get started.
+* :toolbox::zork
 
 * :toolbox::read_journal
   > > Read the contents of the journal.
@@ -25,6 +26,7 @@
   >   Page range to read e.g. "10-10" or "11-20" or "21-100", or
   >   "2@string_match" to read 2 pages starting at string_match.
   >   About 100 lines per page, fewer when lines are very long.
+* :toolbox::read_journal
 
 * :toolbox::edit_journal
   > > Edit the journal or add to it.
@@ -43,6 +45,7 @@
   >   Page range to scope the matches during replace e.g.
   >   "10-10" or "11-20" or "21-100", or "2@string_match" to
   >   scope within 2 pages starting at string match.
+* :toolbox::edit_journal
 
 * :toolbox::search_journal
   > > Grep search inside the journal.
@@ -53,13 +56,6 @@
   >   backrefs, lookaround, or multi-line matching).
   > * pages? string
   >   Paginate results to browse through many matches e.g. "11-20".
-
-* :toolbox::zork
-
-* :toolbox::read_journal
-
-* :toolbox::edit_journal
-
 * :toolbox::search_journal
 
 * :raising_hand::
