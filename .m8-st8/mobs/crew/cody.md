@@ -82,6 +82,7 @@
   > > TMPDIR holds a writable scratch space across calls.
   >
   > :shield:secure airgap
+  >
   > ```bash
   > set -m
   > bash -euo pipefail -c "$__command__" > \
