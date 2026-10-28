@@ -547,7 +547,6 @@ fn answer(
     const wrapped = try shield.wrap(arena, stood.wrappers, argv, ctx.self);
 
     var env: std.ArrayList(api.EnvVar) = .empty;
-    try env.appendSlice(arena, stood.env);
     // The mob's scratch and identity. Scratch is made by m8, so a tool
     // neither creates one nor finds a trailing slash on it.
     if (scratch.len > 0) try env.append(arena, .{ .key = "TMPDIR", .value = scratch });

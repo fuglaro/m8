@@ -13,7 +13,7 @@ Agent definition:
 ▐ 🧰:Tool Name
 │ │ Tool Description
 │
-│ 🛡️Shield Name
+│ 🛡️ShieldName
 │ `m8` `call` `cmd` `{{propertyname|--flag}}`
 │ * PropertyName string
 │   Property Description
@@ -40,7 +40,7 @@ Agent definition:
 
 ▐ 🧰:Tool Name
 
-▐ 🛡️:Shield Name
+▐ 🛡️:ShieldName
 
 ▐ 🧭:
 │ System Prompt
@@ -60,7 +60,7 @@ Agent definition:
 > * :toolbox::Tool Name
 >   > > Tool Description
 >   >
->   > :shield:Shield Name
+>   > :shield:ShieldName
 >   > `m8` `call` `cmd` `{{propertyname|--flag}}`
 >   > * PropertyName string
 >   >   Property Description
@@ -87,7 +87,7 @@ Agent definition:
 >
 > * :toolbox::Tool Name
 >
-> * :shield::Shield Name
+> * :shield::ShieldName
 >
 > * :compass::
 >   > System Prompt
@@ -100,6 +100,10 @@ Agent definition:
 > * :compass::
 >   > Included Agents inject Tools and System
 >   > Prompts.
+
+A shield activation is `ShieldName [Names...]`. The optional names replace its
+default identity argument and accumulate across activations; the wrapper runs
+once and receives the names as one space-separated argument. See [Shields](shields.md).
 
 Required top-level tool enums are checked before the command runs, using the
 converted argument strings (so `true` and `"true"` match the same enum item).

@@ -19,15 +19,16 @@ pub const command: api.Command = .{
 
 fn run(ctx: Ctx) !u8 {
     const w = try wrapping.cut(ctx.args);
+    const name = try api.component(ctx.arena, w.name);
 
     // Who it stands as, which is who it asks as and what its answer is
     // called. Run by hand there is no answer, which is a question nobody has
     // answered yet like any other.
-    const said = ctx.env.get(try std.fmt.allocPrint(ctx.arena, "{s}1_{s}", .{ api.exclamation, w.name }));
+    const said = ctx.env.get(try std.fmt.allocPrint(ctx.arena, "{s}1_{s}", .{ api.exclamation, name }));
 
     const answer = std.mem.trim(u8, said orelse {
         try ctx.err.print("{s}{s}{s}: run this? [yes/no]\n{s}\n", .{
-            api.ask_lead, api.asks_shield, w.name, try std.mem.join(ctx.arena, " ", w.argv),
+            api.ask_lead, api.asks_shield, name, try std.mem.join(ctx.arena, " ", w.argv),
         });
         return api.ask_exit;
     }, " \t\r\n");
@@ -47,8 +48,8 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     try out.writeAll(
         \\  m8 ask-shield NAME CMD [ARGS]
         \\
-        \\NAME is who it asks as, which is the shield's own name: every
-        \\shield is handed its name before the command it wraps.
+        \\NAME is who it asks as, made safe for question and answer IDs.
+        \\It defaults to the shield's identity; activation names override it.
         \\
         \\It stops with the command as a question, which the run that made
         \\the call puts to the person as a ❓. What they say next is the

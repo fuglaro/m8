@@ -211,8 +211,9 @@ conversation.
     after it.
 * A shield asks the same way, under its own name.
   * `QUESTION:shield_ask:` is `🛡️ask` asking.
-  * Every shield is handed its own name, `ask`, before
-    the command it wraps.
+  * Every shield receives one names argument before the command it wraps.
+    It defaults to the shield's identity (`ask` here); activation names
+    replace that default. `ask-shield` makes it safe for question/answer IDs.
 * The ❓ says who asked and of which call: `❓tool,c1`.
 * The run stops on the ❓.
   * Calls the model made alongside it are written down

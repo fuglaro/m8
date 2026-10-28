@@ -1,10 +1,5 @@
-//! `secure-shield` — run inside the sandbox profile with restrictions taken
-//! away.
-//!
-//! The other one that could not be written in the shell: this needs the
-//! profile that decides what a restriction means. Its restrictions arrive in
-//! `__secures__`, space separated, which is how a 🛡 hands over what was
-//! appended to its variable.
+//! `secure-shield` — combine the space-separated restriction names in its
+//! first argument into one sandbox profile, then run the wrapped command.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -25,9 +20,9 @@ fn run(ctx: Ctx) !u8 {
     const w = try wrapping.cut(ctx.args);
 
     var names: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.tokenizeAny(u8, ctx.env.get("__secures__") orelse "", " \t");
+    var it = std.mem.tokenizeAny(u8, w.name, " \t");
     while (it.next()) |name| try names.append(ctx.arena, name);
-    if (names.items.len == 0) return wrapping.through(ctx, w.argv, null);
+    if (names.items.len == 0) return wrapping.Error.UnknownRestriction;
 
     // A name with no line in the profile is refused. Not understanding what
     // was asked for is never a reason to apply less than was asked for.
@@ -60,14 +55,18 @@ fn run(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     _ = ctx;
     try out.writeAll(
-        \\  m8 secure-shield NAME CMD [ARGS]
+        \\  m8 secure-shield "NAMES" CMD [ARGS]
         \\
-        \\Restrictions come space separated in __secures__, which is how a
-        \\🛡 hands over what was appended to its variable:
+        \\NAMES is one argument containing space-separated restrictions.
+        \\They are combined into one sandbox profile before CMD runs:
+        \\
+        \\  m8 secure-shield "private airgap" bash -c 'ls'
+        \\
+        \\In a document, define the wrapper and activate it with names:
         \\
         \\  ▐ 🛡️:secure
         \\  │ `m8` `secure-shield`
-        \\  ▐ 🛡️:secure secures airgap
+        \\  ▐ 🛡️:secure private airgap
         \\
     );
     // Read from the same table validation uses, so help cannot drift from

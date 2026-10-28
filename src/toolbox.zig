@@ -79,9 +79,7 @@ pub const Tool = struct {
     /// Further 🛡 this tool stands inside, on top of whatever the agent
     /// already activated. It can only add — which is the whole rule.
     shields: []const shield.Activation = &.{},
-    /// A variable this tool adds to what its call is handed, from the value's
-    /// last fields. The same shape a 🛡 uses, for the same reason: something a
-    /// definition says once rather than a call having to carry it.
+    /// Definition-provided environment configuration, separate from call arguments.
     env_var: []const u8 = "",
     env_values: []const []const u8 = &.{},
     /// Definition-level variables, allowing one `:toolbox:` header per value.
@@ -143,8 +141,7 @@ fn property(arena: Allocator, rest: []const u8) !Property {
 
 /// Parse the content of a 🧰 whose value is `NAME` or `NAME VAR value...`.
 pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const u8) !Tool {
-    // The spaces after the name carry a variable and what to append to it,
-    // the shape a 🛡 has.
+    // The spaces after the name carry a variable and what to append to it.
     var rest = std.mem.tokenizeAny(u8, header, " \t");
     const name = rest.next() orelse "";
 
@@ -440,8 +437,7 @@ pub fn render(arena: Allocator, mode: Mode, t: Tool) ![]const u8 {
     }
     for (t.shields) |sh| {
         try w.print("{s}{s}", .{ sigil.Sigil.shield.text(mode), sh.name });
-        if (sh.env_var.len > 0) try w.print(" {s}", .{sh.env_var});
-        for (sh.values) |v| try w.print(" {s}", .{v});
+        for (sh.names) |n| try w.print(" {s}", .{n});
         try w.writeByte('\n');
     }
     switch (t.command) {
@@ -753,6 +749,8 @@ test "a tool survives being rendered and read back, in either spelling" {
     const src =
         \\`m8` `call` `bash` `{{cmd|-c}}`
         \\:shield:jail
+        \\:shield:secure contain-reads no-writes
+        \\:shield:check crew/reviewer
         \\* cmd string
         \\  What to run.
         \\  Two lines of it.
@@ -771,7 +769,11 @@ test "a tool survives being rendered and read back, in either spelling" {
         try testing.expectEqual(first.command.argv.len, again.command.argv.len);
         for (first.command.argv, again.command.argv) |x, y| try testing.expectEqualStrings(x, y);
         try testing.expectEqual(first.shields.len, again.shields.len);
-        for (first.shields, again.shields) |x, y| try testing.expectEqualStrings(x.name, y.name);
+        for (first.shields, again.shields) |x, y| {
+            try testing.expectEqualStrings(x.name, y.name);
+            try testing.expectEqual(x.names.len, y.names.len);
+            for (x.names, y.names) |xn, yn| try testing.expectEqualStrings(xn, yn);
+        }
         try testing.expectEqual(first.properties.len, again.properties.len);
         for (first.properties, again.properties) |x, y| {
             try testing.expectEqualStrings(x.name, y.name);

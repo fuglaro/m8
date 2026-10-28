@@ -1,21 +1,7 @@
-//! Shields: the wrapper a tool runs inside.
-//!
-//! A shield is not a program that decides to restrict a tool. It is the
-//! process the tool runs inside, so it holds exactly the tool's authority and
-//! there is no operation available to it for restoring a capability its own
-//! parent lacked. Widening is not declined here; it is unsayable. That is the
-//! same argument the README makes for a provider inheriting whatever m8 is
-//! already within, applied one level further down.
-//!
-//! Everything follows from it. Restriction is intersection, so the permitted
-//! set is the same however the wrappers stack and a repeat means nothing. A
-//! second definition of a name adds another wrapper rather than replacing one,
-//! so a mob you have not read can tighten what it was given and can never
-//! un-define it.
-//!
-//! With a block it is a definition; with a value alone it is an activation.
-//! Activation order is wrapping order — earlier is further out — which decides
-//! nothing about what is allowed and everything about what a person is shown.
+//! Shields turn activations into command prefixes. Each wrapper receives one
+//! names argument followed by the command it wraps. Bare activations use the
+//! shield's identity; explicit names replace that default and accumulate across
+//! activations. Each shield runs once, at its first activation's position.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -24,7 +10,6 @@ const doc = @import("m8/doc.zig");
 const sigil = @import("m8/sigil.zig");
 const markdown = @import("m8/markdown.zig");
 const Mode = sigil.Mode;
-const argname = @import("argname.zig");
 
 pub const Error = error{
     /// An activation named a shield nothing defines.
@@ -42,14 +27,12 @@ pub const Error = error{
     ShieldRunsTwice,
     /// A definition that contributes no command at all.
     EmptyShield,
-    BadEnvironmentName,
 };
 
-/// Which shield, and what it appends to which environment variable.
+/// A shield's identity and the names contributed to its wrapper.
 pub const Activation = struct {
     name: []const u8,
-    env_var: []const u8 = "",
-    values: []const []const u8 = &.{},
+    names: []const []const u8 = &.{},
 };
 
 /// One thing a definition contributes: a wrapper of its own, or another
@@ -72,10 +55,9 @@ pub const Runner = struct {
     argv: []const []const u8,
 };
 
-/// The wrappers, outermost first, and the environment they are handed.
+/// The wrappers, outermost first.
 pub const Resolved = struct {
     wrappers: []const []const []const u8 = &.{},
-    env: []const api.EnvVar = &.{},
 };
 
 /// What a document declared, and what it turned on.
@@ -122,22 +104,13 @@ pub fn project(
     return .{ .defs = defs.items, .runners = runners.items, .active = active.items };
 }
 
-fn envName(arena: Allocator, name: []const u8) (error{BadEnvironmentName} || Allocator.Error)![]const u8 {
-    return (try argname.envName(arena, name)) orelse error.BadEnvironmentName;
-}
-
-/// `NAME`, or `NAME VAR value...`. Space separated, so a value holds no space.
-///
-/// A variable no shell could spell is refused when the definition is read, as
-/// a 🧰's is — dropping it would run the tool without what it was told.
-pub fn parseValue(arena: Allocator, value: []const u8) (error{BadEnvironmentName} || Allocator.Error)!Activation {
+/// `SHIELD [NAMES...]`. Names are joined into one argument at resolution time.
+pub fn parseValue(arena: Allocator, value: []const u8) Allocator.Error!Activation {
     var it = std.mem.tokenizeAny(u8, value, " \t");
     const name = it.next() orelse return .{ .name = "" };
-    const raw_env_var = it.next() orelse return .{ .name = name };
-    const env_var = try envName(arena, raw_env_var);
-    var values: std.ArrayList([]const u8) = .empty;
-    while (it.next()) |v| try values.append(arena, v);
-    return .{ .name = name, .env_var = env_var, .values = values.items };
+    var names: std.ArrayList([]const u8) = .empty;
+    while (it.next()) |n| try names.append(arena, n);
+    return .{ .name = name, .names = names.items };
 }
 
 /// The code spans on a line, as an argv. Null when there are none, which is
@@ -208,50 +181,61 @@ pub fn through(
     return argv;
 }
 
-/// Flatten activations into the wrappers they stand for.
-///
-/// Every definition of a name contributes, in the order they were met, since a
-/// later one stacks a wrapper rather than replacing one. A name activated more
-/// than once still stands once, at its first activation, told everything
-/// every activation said. What comes back is outermost first.
+/// Flatten activations, then attach the collected names to each wrapper.
+/// Wrappers stay at their first activation's position, outermost first.
 pub fn resolve(
     arena: Allocator,
     defs: []const Definition,
     active: []const Activation,
 ) (Error || Allocator.Error)!Resolved {
-    var wrappers: std.ArrayList([]const []const u8) = .empty;
-    var vars: std.ArrayList(api.EnvVar) = .empty;
+    var wrappers: std.ArrayList(Pending) = .empty;
     var path: std.ArrayList([]const u8) = .empty;
-    var stood: std.ArrayList([]const u8) = .empty;
+    var stood: std.ArrayList(Collected) = .empty;
 
-    for (active) |a| try one(arena, defs, a, &wrappers, &vars, &path, &stood);
-    return .{ .wrappers = wrappers.items, .env = vars.items };
+    for (active) |a| try one(arena, defs, a, &wrappers, &path, &stood);
+    var out: std.ArrayList([]const []const u8) = .empty;
+    for (wrappers.items) |w| {
+        const collected = stood.items[w.shield];
+        const told = try arena.alloc([]const u8, w.argv.len + 1);
+        @memcpy(told[0..w.argv.len], w.argv);
+        told[w.argv.len] = if (collected.names.items.len > 0)
+            try std.mem.join(arena, " ", collected.names.items)
+        else
+            try api.component(arena, collected.name);
+        try out.append(arena, told);
+    }
+    return .{ .wrappers = out.items };
 }
+
+const Pending = struct {
+    argv: []const []const u8,
+    shield: usize,
+};
+
+const Collected = struct {
+    name: []const u8,
+    names: std.ArrayList([]const u8) = .empty,
+};
 
 fn one(
     arena: Allocator,
     defs: []const Definition,
     a: Activation,
-    wrappers: *std.ArrayList([]const []const u8),
-    vars: *std.ArrayList(api.EnvVar),
+    wrappers: *std.ArrayList(Pending),
     path: *std.ArrayList([]const u8),
-    stood: *std.ArrayList([]const u8),
+    stood: *std.ArrayList(Collected),
 ) (Error || Allocator.Error)!void {
     for (path.items) |seen| if (std.mem.eql(u8, seen, a.name)) return Error.ShieldLoops;
 
-    if (a.env_var.len > 0) {
-        const key = if (std.mem.startsWith(u8, a.env_var, "__") and std.mem.endsWith(u8, a.env_var, "__"))
-            try arena.dupe(u8, a.env_var)
-        else
-            try envName(arena, a.env_var);
-        try append(arena, vars, key, a.values);
-    }
-
-    // A shield stands once, where it was first activated. Activating it again
-    // has added to what it is told and has nothing else to add: every copy
-    // would read the same values and run the same command.
-    for (stood.items) |name| if (std.mem.eql(u8, name, a.name)) return;
-    try stood.append(arena, a.name);
+    // A repeat contributes names, but does not run or expand the shield again.
+    for (stood.items) |*had| if (std.mem.eql(u8, had.name, a.name)) {
+        try had.names.appendSlice(arena, a.names);
+        return;
+    };
+    const index = stood.items.len;
+    var collected: Collected = .{ .name = a.name };
+    try collected.names.appendSlice(arena, a.names);
+    try stood.append(arena, collected);
 
     var found = false;
     var ran = false;
@@ -263,36 +247,14 @@ fn one(
             .command => |argv| {
                 if (ran) return Error.ShieldRunsTwice;
                 ran = true;
-                // Every wrapper is told the name it stands as, first, and
-                // then the command it wraps. It is who a wrapper asks the
-                // person as, and made safe to be the folder that becomes.
-                const told = try arena.alloc([]const u8, argv.len + 1);
-                @memcpy(told[0..argv.len], argv);
-                told[argv.len] = try api.component(arena, a.name);
-                try wrappers.append(arena, told);
+                try wrappers.append(arena, .{ .argv = argv, .shield = index });
             },
-            .compose => |inner| try one(arena, defs, inner, wrappers, vars, path, stood),
+            .compose => |inner| try one(arena, defs, inner, wrappers, path, stood),
         };
     }
     path.items.len -= 1;
 
     if (!found) return Error.UnknownShield;
-}
-
-/// Values appended to a variable, space separated, in the order activated.
-fn append(
-    arena: Allocator,
-    vars: *std.ArrayList(api.EnvVar),
-    key: []const u8,
-    values: []const []const u8,
-) Allocator.Error!void {
-    if (values.len == 0) return;
-    const added = try std.mem.join(arena, " ", values);
-    for (vars.items) |*v| if (std.mem.eql(u8, v.key, key)) {
-        v.value = try std.fmt.allocPrint(arena, "{s} {s}", .{ v.value, added });
-        return;
-    };
-    try vars.append(arena, .{ .key = key, .value = added });
 }
 
 /// The command a tool actually runs: every wrapper, outermost first, and the
@@ -425,7 +387,7 @@ test "a name runs one command, so a second is refused rather than replacing it" 
     try testing.expectEqual(@as(usize, 2), got.wrappers.len);
 }
 
-test "shields compose, and what they append to a variable accumulates" {
+test "shields compose and contribute names to one wrapper" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
@@ -433,20 +395,18 @@ test "shields compose, and what they append to a variable accumulates" {
     const all = [_]Definition{
         .{ .name = "secure", .steps = &.{.{ .command = &.{ "m8", "secure-shield" } }} },
         .{ .name = "sandbox", .steps = &.{
-            .{ .compose = .{ .name = "secure", .env_var = "secures", .values = &.{ "private", "contain-writes" } } },
+            .{ .compose = .{ .name = "secure", .names = &.{ "private", "contain-writes" } } },
         } },
         .{ .name = "jail", .steps = &.{
             .{ .compose = .{ .name = "sandbox" } },
-            .{ .compose = .{ .name = "secure", .env_var = "secures", .values = &.{"airgap"} } },
+            .{ .compose = .{ .name = "secure", .names = &.{"airgap"} } },
         } },
     };
 
     const got = try resolve(arena, &all, &.{.{ .name = "jail" }});
     // `secure` is reached twice and stands once, told what both said.
     try testing.expectEqual(@as(usize, 1), got.wrappers.len);
-    try testing.expectEqual(@as(usize, 1), got.env.len);
-    try testing.expectEqualStrings("__secures__", got.env[0].key);
-    try testing.expectEqualStrings("private contain-writes airgap", got.env[0].value);
+    try expectArgv(got.wrappers[0], &.{ "m8", "secure-shield", "private contain-writes airgap" });
 }
 
 test "a shield that leads back to itself is a loop, and an unknown one is refused" {
@@ -486,31 +446,46 @@ test "activation order is wrapping order, and a repeat stands where the first di
     try testing.expectEqualStrings("ask", got.wrappers[1][0]);
 }
 
-test "a value carries a name, and optionally a variable and what to append" {
+test "an activation carries a shield identity and optional literal names" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
 
     const bare = try parseValue(arena, "ask");
     try testing.expectEqualStrings("ask", bare.name);
-    try testing.expectEqual(@as(usize, 0), bare.values.len);
+    try testing.expectEqual(@as(usize, 0), bare.names.len);
 
-    const with = try parseValue(arena, "secure secures airgap no-writes");
+    const with = try parseValue(arena, "secure  airgap\tno-writes");
     try testing.expectEqualStrings("secure", with.name);
-    try testing.expectEqualStrings("__secures__", with.env_var);
-    try testing.expectEqual(@as(usize, 2), with.values.len);
-    try testing.expectEqualStrings("no-writes", with.values[1]);
+    try expectArgv(with.names, &.{ "airgap", "no-writes" });
+    const check = try parseValue(arena, "check crew/reviewer");
+    try expectArgv(check.names, &.{"crew/reviewer"});
 }
 
-test "a variable no shell could spell is refused, not dropped" {
+test "explicit names replace the default and later activations append without moving the wrapper" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    try testing.expectError(Error.BadEnvironmentName, parseValue(arena, "sandbox byte-cap 20000"));
-    try testing.expectError(Error.BadEnvironmentName, parseValue(arena, "sandbox 2fast yes"));
-    // A logical name reaches the wrapper in the same spelling as a tool argument.
-    const reach = try parseValue(arena, "sandbox byte_cap 20000");
-    try testing.expectEqualStrings("__byte_cap__", reach.env_var);
+    const defs = [_]Definition{
+        .{ .name = "secure", .steps = &.{.{ .command = &.{ "m8", "secure-shield" } }} },
+        .{ .name = "ask", .steps = &.{.{ .command = &.{ "m8", "ask-shield" } }} },
+    };
+    const got = try resolve(arena, &defs, &.{
+        .{ .name = "secure" },
+        .{ .name = "ask" },
+        .{ .name = "secure", .names = &.{"private"} },
+        .{ .name = "secure" },
+        .{ .name = "secure", .names = &.{ "airgap", "no-writes" } },
+    });
+    try testing.expectEqual(@as(usize, 2), got.wrappers.len);
+    try expectArgv(got.wrappers[0], &.{ "m8", "secure-shield", "private airgap no-writes" });
+    try expectArgv(got.wrappers[1], &.{ "m8", "ask-shield", "ask" });
+    const full = try wrap(arena, got.wrappers, &.{ "echo", "hello" }, "/opt/m8");
+    try expectArgv(full, &.{ "/opt/m8", "secure-shield", "private airgap no-writes", "/opt/m8", "ask-shield", "ask", "echo", "hello" });
+
+    const check_defs = [_]Definition{.{ .name = "check", .steps = &.{.{ .command = &.{ "bash", "-c", "exec \"$@\"" } }} }};
+    const check = try resolve(arena, &check_defs, &.{try parseValue(arena, "check crew/reviewer")});
+    try testing.expectEqualStrings("crew/reviewer", check.wrappers[0][3]);
 }
 
 test "a wrapper opening with m8 reaches the m8 that is running" {

@@ -12,19 +12,15 @@
 * :shield::freeze-toolbox
 
 * :shield::workbench
-  > :shield:contain-writes
+  > :shield:secure contain-writes airgap no-loop no-edit-git
   > :shield:contain-home
   > :shield:contain-env
-  > :shield:airgap
-  > :shield:no-loop
-  > :shield:no-edit-git
 
 * :toolbox::list
   > > List the contents of a directory.
   >
   > :shield:workbench
-  > :shield:contain-reads
-  > :shield:no-writes
+  > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `read` `--` `{{path|}}`
   > * path string
   >   Path of the directory to inspect (relative, absolute, or ~).
@@ -36,8 +32,7 @@
   > > or a number of pages starting at a string match anchor.
   >
   > :shield:workbench
-  > :shield:contain-reads
-  > :shield:no-writes
+  > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `read` `--` `{{path|}}`
   > * path string
   >   Path of the file to read (relative, absolute, or ~).
@@ -54,7 +49,7 @@
   > > Pages may be used to scope matches.
   >
   > :shield:workbench
-  > :shield:contain-reads
+  > :shield:secure contain-reads
   > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
   > * path string
   >   Path of the file to edit or create (relative, absolute, or ~).
@@ -73,8 +68,7 @@
   > > Omitting regex will just glob files.
   >
   > :shield:workbench
-  > :shield:contain-reads
-  > :shield:no-writes
+  > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `{{glob}}`
   > * regex? string
   >   Regex to search with using a Perl-style pattern (no
@@ -93,6 +87,7 @@
 
 * :toolbox::bash
   > > Run a bash command.
+  > > TMPDIR holds a writable scratch space across calls.
   >
   > :shield:workbench
   > ```bash
@@ -129,7 +124,7 @@
   > > Images are shown as a JPEG with the long side at most 2048px.
   >
   > :shield:workbench
-  > :shield:contain-reads
+  > :shield:secure contain-reads
   > ```bash records
   > # Convert/copy file into m8-st8/mobs/MOB/.+/.uploads/see-FILE-CALLID.EXT* for uploading, or fail.
   > f=$__file__

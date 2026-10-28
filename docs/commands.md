@@ -546,7 +546,7 @@ m8 call --no-wrap PROG [ARGS]   one that writes its own records
   around `call` rather than asked about within it.
 
 ```bash
-__secures__="private airgap" m8 secure-shield secure bash -c "ls"
+m8 secure-shield "private airgap" bash -c "ls"
 ```
 
 Output is m8: what the program writes becomes a 🧾
