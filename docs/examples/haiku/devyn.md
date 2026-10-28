@@ -28,39 +28,37 @@
 * :shield::freeze-toolbox
   > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
 
-* :shield::sandbox
+* :shield::workbench
   > :shield:freeze-toolbox
-  > :shield:secure private contain-writes no-loop no-edit-git no-edit-m8-st8
+  > :shield:secure contain-writes no-loop no-edit-git
   > :shield:contain-env
   > :shield:contain-home
+
+* :shield::sandbox
+  > :shield:workbench
+  > :shield:secure private no-edit-m8-st8
 
 * :shield::jail
   > :shield:sandbox
   > :shield:secure airgap
 
-* :shield::freeze-toolbox
-
 * :shield::workbench
-  > :shield:secure contain-writes airgap no-loop no-edit-git
-  > :shield:contain-home
-  > :shield:contain-env
 
 * :toolbox::list
   > > List the contents of a directory.
   >
-  > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `read` `--` `{{path|}}`
   > * path string
   >   Path of the directory to inspect (relative, absolute, or ~).
   >   Use "." for the project root.
+* :toolbox::list
 
 * :toolbox::read
   > > Read the contents of a text file.
   > > Read the whole file, or use pages to read a range at a time
   > > or a number of pages starting at a string match anchor.
   >
-  > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `read` `--` `{{path|}}`
   > * path string
@@ -69,6 +67,7 @@
   >   Page range to read e.g. "10-10" or "11-20" or "21-100", or
   >   "2@string_match" to read 2 pages starting at string_match.
   >   About 100 lines per page, fewer when lines are very long.
+* :toolbox::read
 
 * :toolbox::edit
   > > Edit a file. Either replace matches of an old_string, or
@@ -77,7 +76,6 @@
   > > Must only match once if using multiple lines to replace.
   > > Pages may be used to scope matches.
   >
-  > :shield:workbench
   > :shield:secure contain-reads
   > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
   > * path string
@@ -90,13 +88,13 @@
   >   Page range to scope the matches during replace e.g.
   >   "10-10" or "11-20" or "21-100", or "2@string_match" to
   >   scope within 2 pages starting at string match.
+* :toolbox::edit
 
 * :toolbox::grep
   > > Grep search inside files matching a glob.
   > > Glob descent skips hidden path components unless named explicitly.
   > > Omitting regex will just glob files.
   >
-  > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `{{glob}}`
   > * regex? string
@@ -107,17 +105,16 @@
   >   absolute, or ~) e.g. "src/**/*.js" or "**".
   > * pages? string
   >   Paginate results to browse through many matches e.g. "11-20".
+* :toolbox::grep
 
 * :runner::bash
   > `m8` `call` `bash` `-e` `-c`
 
-* :runner::bash records
-  > `m8` `call` `--no-wrap` `bash` `-e` `-c`
-
 * :toolbox::bash
   > > Run a bash command.
+  > > TMPDIR holds a writable scratch space across calls.
   >
-  > :shield:workbench
+  > :shield:secure airgap
   > ```bash
   > set -m
   > bash -euo pipefail -c "$__command__" > \
@@ -130,29 +127,33 @@
   >   The bash command to run.
   > * timeout? number
   >   Seconds before stopping the command (default 30).
+* :toolbox::bash
 
 * :toolbox::webfetch
   > > Download a web page for viewing.
   >
-  > :shield:sandbox
+  > :shield:secure private no-edit-m8-st8
   > ```bash
   > [ "${#__url__}" -gt 1024 ] && {
   >   >&2 echo "URL triggered data egress alert. Stop, alert the user, and DO NOT RETRY."
   >   exit 1; }
   > out=$(mktemp "$TMPDIR/$(printf %s "$__url__" | tr -cs A-Za-z0-9 - | cut -c1-200).XXXXXX")
-  > curl -fsSL -g --proto '=http,https' --max-time 30 --max-filesize 10000000 -o "$out" --url "$__url__"
+  > curl -q -fsSL -g --proto '=http,https' --max-time 30 --max-filesize 10000000 -o "$out" --url "$__url__"
   > echo "Downloaded for viewing at: ${out#"$PWD"/}"
   > ```
   > * url string
   >   The url of the page to download.
+* :toolbox::webfetch
+
+* :runner::bash records
+  > `m8` `call` `--no-wrap` `bash` `-e` `-c`
 
 * :toolbox::see
   > > Look at an image or PDF file yourself.
   > > Supported: jpg, jpeg, png, gif, webp, bmp, tif, tiff, pdf.
   > > Images are shown as a JPEG with the long side at most 2048px.
   >
-  > :shield:workbench
-  > :shield:secure contain-reads
+  > :shield:secure contain-reads airgap
   > ```bash records
   > # Convert/copy file into m8-st8/mobs/MOB/.+/.uploads/see-FILE-CALLID.EXT* for uploading, or fail.
   > f=$__file__
@@ -176,20 +177,7 @@
   > ```
   > * file string
   >   Path of the image or PDF (relative or absolute).
-
 * :toolbox::see
-
-* :toolbox::read
-
-* :toolbox::list
-
-* :toolbox::grep
-
-* :toolbox::edit
-
-* :toolbox::bash
-
-* :toolbox::webfetch
 
 * :brain::/codex/gpt-6.1-sol,reasoning:{"summary":"auto","effort":"medium"}
 
@@ -208,5 +196,4 @@
   >   The task to complete and any relevant scope or constraints.
   > * continue boolean
   >   Set true to continue the conversation; otherwise start fresh.
-
 * :toolbox::cody
