@@ -48,7 +48,8 @@ fn run(ctx: Ctx) !u8 {
     const full = try sandbox.exec(ctx.arena, ctx.io, ctx.env, w.argv, names.items, tmp);
 
     var environ: ?*const std.process.Environ.Map = null;
-    if (made) environ = try api.childEnvironment(ctx.arena, ctx, &.{.{ .key = "TMPDIR", .value = tmp }});
+    if (made)
+        environ = try api.childEnvironment(ctx.arena, ctx, &.{.{ .key = "TMPDIR", .value = tmp }});
     return wrapping.through(ctx, full, environ);
 }
 

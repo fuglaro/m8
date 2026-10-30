@@ -86,10 +86,8 @@ fn run(ctx: Ctx) !u8 {
     // What was last shown outlives the look that showed it.
     var shown_buf: [std.fs.max_path_bytes]u8 = undefined;
     var shown: []const u8 = agent;
-    const look: doc.Look = .{
-        .width = highlight.terminalWidth(ctx.env),
-        .palette = if (ctx.mode == .m8) try config.highlights(ctx.arena, ctx.io, ctx.env) else .{},
-    };
+    var look: doc.Look = if (ctx.mode == .m8) try config.highlights(ctx.arena, ctx.io, ctx.env) else .{};
+    look.width = highlight.terminalWidth(ctx.env);
     var scratch: std.heap.ArenaAllocator = .init(ctx.arena);
     while (true) : (try ctx.io.sleep(pause, .awake)) {
         _ = scratch.reset(.retain_capacity);

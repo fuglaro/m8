@@ -17,6 +17,7 @@
 ;;                       revokes the blanket XPC lookup system.sb grants
 ;;
 ;; Filesystem writes
+;;   contain-writes-soft  as contain-writes, plus native Darwin user temp
 ;;   contain-writes       writes confined to cwd and TMP
 ;;   contain-writes-home  writes confined to cwd, TMP and HOME
 ;;   only-tmp-writes      writes confined to TMP
@@ -40,12 +41,14 @@
 ;;
 ;; TMP remains writable under contain-writes and only-tmp-writes, but not no-writes.
 
-;; Pass CWD, TMP (pre-created scratch), HOME, and GIT (nearest .git entry):
+;; Pass CWD, TMP (pre-created scratch), HOME, GIT (nearest .git entry),
+;; and DARWIN_USER_TEMP_DIR (resolved native user temp, or empty on failure):
 ;;   sandbox-exec -f resolved.sb \
 ;;    -D CWD="$(pwd)" \
 ;;    -D TMP="$TMPDIR" \
 ;;    -D HOME="$HOME" \
 ;;    -D GIT="/resolved/path/to/nearest/.git" \
+;;    -D DARWIN_USER_TEMP_DIR="$(getconf DARWIN_USER_TEMP_DIR)" \
 ;;    date
 
 (debug deny)
@@ -105,14 +108,20 @@
   (subpath "/Library/Frameworks"))    ;;!! !private
 
 (allow file-read* (subpath "/"))      ;;!! !private !contain-reads !contain-reads-home
-(allow file-write* (subpath "/"))     ;;!! !contain-writes !contain-writes-home !only-tmp-writes !no-writes
+(allow file-write* (subpath "/"))     ;;!! !contain-writes-soft !contain-writes !contain-writes-home !only-tmp-writes !no-writes
 
 ;; --- the real home directory ---
 ;; The home-aware restrictions leave these narrower allows behind. Every
 ;; stricter restriction tags them away, so combinations silently take the
 ;; most restrictive form.
 (allow file-read* (subpath (param "HOME")))  ;;!! !private !contain-reads
-(allow file-write* (subpath (param "HOME"))) ;;!! !contain-writes !only-tmp-writes !no-writes
+(allow file-write* (subpath (param "HOME"))) ;;!! !contain-writes-soft !contain-writes !only-tmp-writes !no-writes
+
+;; Native per-user temp is shared with other tools, unlike the mob's TMP.
+;; A failed lookup supplies an empty parameter and grants nothing.
+;; Strict write restrictions remove the entire exception.
+(if (not (string=? (param "DARWIN_USER_TEMP_DIR") "")) ;;!! !contain-writes !contain-writes-home !only-tmp-writes !no-writes
+  (allow file-write* (subpath (param "DARWIN_USER_TEMP_DIR")))) ;;!! !contain-writes !contain-writes-home !only-tmp-writes !no-writes
 
 ;; --- the temp directory ---
 (allow file-read* (subpath (param "TMP")))

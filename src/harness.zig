@@ -184,7 +184,7 @@ pub fn explain(err: *std.Io.Writer, name: []const u8, e: anyerror) !void {
             "m8: that ledger names a model but not whose; write it /PROVIDER/MODEL\n",
         ),
         error.InvalidName => try err.writeAll("m8: name an explicit mob/agent path; components cannot be empty or start with a period; use mob/agent//chat for subchats and /+/TURN for turns\n"),
-        error.CrossMobReference => try err.writeAll("m8: document references must stay inside their activated mob\n"),
+        error.CrossMobReference => try err.writeAll("m8: chat and turn references must stay inside their activated mob; compose other mobs through authored definitions\n"),
         error.NoDataHome => try err.writeAll("m8: set HOME or XDG_DATA_HOME for writable user/system mob state\n"),
         error.BadTui => try err.writeAll("m8: tui in core/config.json is a list of words, the command first\n"),
         error.NothingToReset => try err.writeAll(

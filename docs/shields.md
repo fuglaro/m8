@@ -120,21 +120,28 @@ shield activations**. It can be a wrapper, a composition, or both.
 This one just groups other shields:
 
 ```markdown
-* :shield::sandbox
-  > :shield:freeze-toolbox
-  > :shield:secure private contain-writes no-loop no-edit-git no-edit-m8-st8
+* :shield::workbench
+  > :shield:secure contain-writes-soft no-loop no-edit-git
   > :shield:contain-env
   > :shield:contain-home
 
+* :shield::sandbox
+  > :shield:workbench
+  > :shield:secure private no-edit-m8-st8
+  > :shield:freeze-toolbox
+
 * :shield::jail
   > :shield:sandbox
-  > :shield:secure airgap
+  > :shield:secure airgap contain-writes
 ```
 
-Activating `jail` expands `sandbox` and adds `airgap` to the same `secure`
-invocation. There is no need to define an alias for every restriction.
-Names belong to the shield they follow: names supplied to a composition are
-not automatically forwarded to its children.
+Activating `workbench` uses the softer write boundary: cwd, scratch (TMP), and
+macOS's native `DARWIN_USER_TEMP_DIR` are writable. `sandbox` inherits that
+write boundary and additionally restricts reads and protects configuration.
+Activating `jail` expands `sandbox` and adds `airgap` and strict
+`contain-writes` to the same `secure` invocation. There is no need to define an
+alias for every restriction. Names belong to the shield they follow: names
+supplied to a composition are not automatically forwarded to its children.
 
 The first wrapper encountered is outermost. With `secure` followed by `ask`,
 the command looks like this:
@@ -218,12 +225,23 @@ matters because separate `sandbox-exec` configurations cannot be nested. It
 requires macOS and `sandbox-exec`; unsupported platforms fail rather than run
 without protection.
 
+On macOS, the sandbox queries `getconf DARWIN_USER_TEMP_DIR` and resolves
+that directory for the `contain-writes-soft` allowance. Apple's developer-tool
+launchers use a shared cache there independently of `TMPDIR`. Lookup failure
+grants no extra access.
+
+Strict `contain-writes` keeps writes limited to cwd and scratch (TMP), even
+when combined with `contain-writes-soft`. Under strict containment, xcrun may
+emit cache-write complaints while still exiting successfully; no cache-control
+environment variable is injected.
+
 | Name | Restriction |
 |---|---|
 | `contain-reads` | Read only cwd, TMP, system and tool directories |
 | `contain-reads-home` | As above, with HOME readable too |
 | `private` | As `contain-reads`, without tool directories |
-| `contain-writes` | Write only cwd and TMP |
+| `contain-writes` | Write only cwd and scratch (TMP) |
+| `contain-writes-soft` | Write only cwd, scratch (TMP), and native `DARWIN_USER_TEMP_DIR` |
 | `contain-writes-home` | Write only cwd, TMP and HOME |
 | `only-tmp-writes` | Write only the current tool's TMP |
 | `no-writes` | No filesystem writes, including TMP |
@@ -243,11 +261,15 @@ filters tool output:
 
 ```markdown
 * :shield::freeze-toolbox
-  > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
+  > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" cat --pack | { grep -vE '^- :(toolbox|brain|books)::' || test "$?" -eq 1; } | "$M8" cat`
 ```
 
-That filter blocks returned tool definitions and the inclusion records that
-could bring in more tools. It does not block ordinary text.
+That filter buffers whole records before matching: `cat --pack` parses the input
+as m8 and puts each valid record on one physical line for `grep` to filter;
+the final `cat` normalizes retained records to block spelling, including plain
+sigils. It removes tool definitions and inclusion records that could bring in
+more tools; ordinary text remains. The status check accepts grep's status 1
+when there are no matching records, while preserving real grep errors.
 
 ## Ask a person or an agent
 

@@ -29,6 +29,11 @@ pub fn build(b: *std.Build) void {
         "no-curl-dep",
         "Use Zig's stdlib HTTP client instead of requiring curl at runtime",
     ) orelse false;
+    const system_config = b.option(
+        []const u8,
+        "system-config-dir",
+        "System config directory (default: /etc/m8-st8)",
+    ) orelse "/etc/m8-st8";
     const formats = wireFormats(b, small);
     const every = commands(b);
     const said_split = b.option(
@@ -47,7 +52,7 @@ pub fn build(b: *std.Build) void {
 
     // The launcher: every command but the ones named apart, reached by
     // calling it.
-    const exe = command(b, target, optimize, small, "m8", "src/main.zig", "", every, no_curl_dep, formats, split);
+    const exe = command(b, target, optimize, small, "m8", "src/main.zig", "", every, no_curl_dep, formats, split, system_config);
     b.getInstallStep().dependOn(install(b, target, exe, small));
 
     const run = b.addRunArtifact(exe);
@@ -59,7 +64,7 @@ pub fn build(b: *std.Build) void {
     var apart = std.mem.tokenizeAny(u8, split, ", ");
     while (apart.next()) |name| {
         if (!among(every, name)) std.process.fatal("-Dsplit: no command named '{s}'", .{name});
-        const leaf = command(b, target, optimize, small, b.fmt("m8-{s}", .{name}), "src/leaf.zig", name, every, no_curl_dep, formats, split);
+        const leaf = command(b, target, optimize, small, b.fmt("m8-{s}", .{name}), "src/leaf.zig", name, every, no_curl_dep, formats, split, system_config);
         b.getInstallStep().dependOn(install(b, target, leaf, small));
     }
 
@@ -72,7 +77,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     // The tests are of the sources, so they are handed every command.
-    tests.root_module.addOptions("build_options", options(b, "", every, no_curl_dep, formats, ""));
+    tests.root_module.addOptions("build_options", options(b, "", every, no_curl_dep, formats, "", system_config));
     b.step("test", "Run tests").dependOn(&b.addRunArtifact(tests).step);
 
     // A story file run straight through the machine, for working on the
@@ -103,6 +108,7 @@ fn command(
     no_curl_dep: bool,
     formats: Formats,
     split: []const u8,
+    system_config_dir: []const u8,
 ) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = name,
@@ -114,7 +120,7 @@ fn command(
             .strip = if (small) true else null,
         }),
     });
-    exe.root_module.addOptions("build_options", options(b, which, every, no_curl_dep, formats, split));
+    exe.root_module.addOptions("build_options", options(b, which, every, no_curl_dep, formats, split, system_config_dir));
     return exe;
 }
 
@@ -149,6 +155,7 @@ fn options(
     no_curl_dep: bool,
     formats: Formats,
     split: []const u8,
+    system_config_dir: []const u8,
 ) *std.Build.Step.Options {
     const o = b.addOptions();
     o.addOption([]const u8, "command", which);
@@ -158,6 +165,7 @@ fn options(
     o.addOption(bool, "format_openai_completions", formats.openai_completions);
     o.addOption(bool, "format_anthropic_messages", formats.anthropic_messages);
     o.addOption(bool, "format_openai_responses", formats.openai_responses);
+    o.addOption([]const u8, "system_config_dir", system_config_dir);
     return o;
 }
 

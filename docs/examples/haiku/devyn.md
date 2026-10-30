@@ -26,11 +26,11 @@
   > `bash` `-c` `HOME=$TMPDIR exec "$@"`
 
 * :shield::freeze-toolbox
-  > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
+  > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" cat --pack | { grep -vE '^- :(toolbox|brain|books)::' || test "$?" -eq 1; } | "$M8" cat`
 
 * :shield::workbench
   > :shield:freeze-toolbox
-  > :shield:secure contain-writes no-loop no-edit-git
+  > :shield:secure contain-writes-soft no-loop no-edit-git
   > :shield:contain-env
   > :shield:contain-home
 
@@ -40,13 +40,12 @@
 
 * :shield::jail
   > :shield:sandbox
-  > :shield:secure airgap
-
-* :shield::workbench
+  > :shield:secure airgap contain-writes
 
 * :toolbox::list
   > > List the contents of a directory.
   >
+  > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `read` `--` `{{path|}}`
   > * path string
@@ -59,6 +58,7 @@
   > > Read the whole file, or use pages to read a range at a time
   > > or a number of pages starting at a string match anchor.
   >
+  > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `read` `--` `{{path|}}`
   > * path string
@@ -76,6 +76,7 @@
   > > Must only match once if using multiple lines to replace.
   > > Pages may be used to scope matches.
   >
+  > :shield:workbench
   > :shield:secure contain-reads
   > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
   > * path string
@@ -95,6 +96,7 @@
   > > Glob descent skips hidden path components unless named explicitly.
   > > Omitting regex will just glob files.
   >
+  > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `{{glob}}`
   > * regex? string
@@ -114,6 +116,7 @@
   > > Run a bash command.
   > > TMPDIR holds a writable scratch space across calls.
   >
+  > :shield:workbench
   > :shield:secure airgap
   > ```bash
   > set -m
@@ -132,6 +135,7 @@
 * :toolbox::webfetch
   > > Download a web page for viewing.
   >
+  > :shield:workbench
   > :shield:secure private no-edit-m8-st8
   > ```bash
   > [ "${#__url__}" -gt 1024 ] && {
@@ -153,6 +157,7 @@
   > > Supported: jpg, jpeg, png, gif, webp, bmp, tif, tiff, pdf.
   > > Images are shown as a JPEG with the long side at most 2048px.
   >
+  > :shield:workbench
   > :shield:secure contain-reads airgap
   > ```bash records
   > # Convert/copy file into m8-st8/mobs/MOB/.+/.uploads/see-FILE-CALLID.EXT* for uploading, or fail.

@@ -81,7 +81,12 @@ fn run(ctx: Ctx) !u8 {
         }
     }
 
-    if (mode == .m8 and look.color) look.palette = try config.highlights(ctx.arena, ctx.io, ctx.env);
+    if (mode == .m8) {
+        const configured = try config.highlights(ctx.arena, ctx.io, ctx.env);
+        look.palette = configured.palette;
+        look.wrap_literal = configured.wrap_literal;
+        look.wrap_word = configured.wrap_word;
+    }
 
     var diag: doc.Diagnostic = .{};
     var p: doc.Parser = .{ .arena = ctx.arena, .diag = &diag };

@@ -73,7 +73,9 @@ m8 :demo/mathy/+/tduyxbutjb -- "Tell me more."
   nest, for example `mobs/demo/utils/mathy.md`, and path components cannot start
   with a period. `//` separates an authored agent path from a subchat path;
   `/+/TURN` names an immutable turn within either the main chat or a subchat.
-  References inside a document stay in that mob at its selected storage layer.
+  Authored definitions may include other mobs and resolve per file across
+  layers. Chats and turns stay mob-local. See
+  [Compose across layers](configs.md#compose-across-layers).
 * A 🧠 with a leading `/` names a model rather than an agent, for example
   `/local/Bonsai-8B,max_output_tokens:8192`. Put it in an agent definition
   to give it an address and a chat. See [Models](configs.md#models).
@@ -210,14 +212,20 @@ m8 watch :crew/cody//delegated                   a chat, as it moves
   * `--to :MOB/AGENT//CHAT` has it follow Y as named, unsettled:
     `m8 reset --to :demo/mathy :demo/mathy//aside` has aside follow mathy.
   * Something that would lead back to itself is refused.
-* `tail` writes the last record of a document, or with
-  `--sigil` the last of some kind.
-  * `--value` is the rest of its header line, and
-    `--block` is its block as the text it holds.
-  * A record with neither is an error, not an empty line.
-  * Nothing is resolved; `m8 encode` expands a 🧠 first.
-* `exclude --sigil S` writes a document back with every
-  record of the kinds named gone. See [Shields](shields.md).
+* `cat` reads a document and writes block markdown by default.
+  * `--pack` writes each record on one physical line for shell filters.
+  * Packed and block records may be mixed, and separator newlines are kept.
+  * `--unwrap` writes generic Markdown: record values become `# VALUE`
+    headings, and content is unquoted. Literal receipt content keeps its
+    four-space indent; packed records are decoded first.
+  * For example, select the final record and unwrap it:
+    `... | m8 cat --pack | grep '^-' | tail -n 1 | m8 cat --unwrap`.
+  * To select only robot records, use `grep '^- :robot::'` instead.
+  * For example, this selects packed calls and returns them as block records:
+    `... | m8 cat --pack | grep '^- :call::' | m8 cat`
+  * For example, this filters packed records and returns block records; the
+    status check accepts no matches without hiding grep errors:
+    `... | m8 cat --pack | { grep -vE '^- :(toolbox|brain|books)::' || test "$?" -eq 1; } | m8 cat`
 * `render` writes a document in the rendered spelling, and
   `render -r` writes markdown back, which is how to check
   that a document parses.
@@ -259,16 +267,16 @@ which is all a document needs:
 { m8 top :demo/tight-docs; m8 ref :demo/mathy "Tidy the README."; } | m8 send
 ```
 
-What `m8 :MOB/AGENT` writes ends on the 🧠 of the turn it kept,
-and `tail` is how that becomes what the next command is
-handed:
+What `m8 :MOB/AGENT` writes ends on the 🧠 of the turn it kept.
+Packing lets shell tools select that reference and extract its address:
 
 ```bash
-m8 ref ":$(m8 :demo/mathy -- hi | m8 tail --value)" "Review that." | m8 send
+turn=$(m8 :demo/mathy -- hi | m8 cat --pack | sed -n 's/^- :brain::/:/p' | tail -n 1)
+m8 ref "$turn" "Review that." | m8 send
 ```
 
-A turn `send` wrote was never kept and ends on no 🧠, so
-`tail --value` has nothing to hand on until it is tagged.
+A turn `send` wrote was never kept and ends on no turn reference;
+`tag` keeps it and writes that reference.
 
 Only the explicitly addressed chat moves. To resume it, name it again.
 

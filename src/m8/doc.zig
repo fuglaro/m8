@@ -86,13 +86,28 @@ pub fn bareLead(mode: Mode) []const u8 {
     return lead(mode)[0 .. lead(mode).len - 1];
 }
 
+fn packedHeader(raw: []const u8) []const u8 {
+    const arrow = "\u{21B5}";
+    var i: usize = 0;
+    while (i < raw.len) {
+        if (!std.mem.startsWith(u8, raw[i..], arrow)) {
+            i += 1;
+        } else {
+            i += arrow.len;
+            if (std.mem.startsWith(u8, raw[i..], arrow)) i += arrow.len else return raw[0 .. i - arrow.len];
+        }
+    }
+    return raw;
+}
+
 /// A header line read: its sigil and its value. Null when the line is not
 /// one, which includes a sigil without the `:` that ends it.
 pub const Header = struct { sigil: Sigil, value: []const u8 };
 
 pub fn headed(mode: Mode, line: []const u8) ?Header {
-    if (!std.mem.startsWith(u8, line, header(mode))) return null;
-    const rest = line[header(mode).len..];
+    const is_packed = mode == .md and std.mem.startsWith(u8, line, "- ");
+    if (!is_packed and !std.mem.startsWith(u8, line, header(mode))) return null;
+    const rest = if (is_packed) packedHeader(line[2..]) else line[header(mode).len..];
     const m = sigil.match(mode, rest) orelse return null;
     if (!std.mem.startsWith(u8, rest[m.len..], sigil_end)) return null;
     return .{ .sigil = m.sigil, .value = rest[m.len + sigil_end.len ..] };
@@ -134,6 +149,7 @@ pub const Diagnostic = struct {
 pub fn detect(src: []const u8) ?Mode {
     const line = firstLine(src) orelse return null;
     for ([_]Mode{ .m8, .md }) |m| if (headed(m, line) != null) return m;
+    if (std.mem.startsWith(u8, line, "- ")) return .md;
     return null;
 }
 
@@ -287,7 +303,46 @@ pub const Parser = struct {
         p.passing = true;
     }
 
+    fn packedRecord(p: *Parser, line: []const u8, h: anytype) !void {
+        var decoded: std.ArrayList(u8) = .empty;
+        try decoded.appendSlice(p.arena, header(.md));
+        const arrow = "\u{21B5}";
+        var i: usize = 2;
+        while (i < line.len) {
+            if (std.mem.startsWith(u8, line[i..], arrow)) {
+                i += arrow.len;
+                if (std.mem.startsWith(u8, line[i..], arrow)) {
+                    try decoded.appendSlice(p.arena, arrow);
+                    i += arrow.len;
+                } else try decoded.append(p.arena, '\n');
+            } else {
+                try decoded.append(p.arena, line[i]);
+                i += 1;
+            }
+        }
+        var lines = std.mem.splitScalar(u8, decoded.items, '\n');
+        const first = lines.next() orelse return error.NotADocument;
+        if (headed(.md, first) == null) return error.NotADocument;
+        try p.wholeBlock(first, h);
+        while (lines.next()) |part| {
+            // A packed physical line describes exactly one record; blank
+            // separators and another header cannot be smuggled into it.
+            if (part.len == 0 or headed(.md, part) != null) return error.UnexpectedLine;
+            if (!std.mem.startsWith(u8, part, lead(.md)) and
+                !std.mem.eql(u8, part, bareLead(.md))) return error.UnexpectedLine;
+            try p.wholeBlock(part, h);
+        }
+        if (p.cur != null) try h.end();
+        p.cur = null;
+        p.open = false;
+    }
+
     fn whole(p: *Parser, line: []const u8, h: anytype) !void {
+        if (std.mem.startsWith(u8, line, "- ")) return p.packedRecord(line, h);
+        return p.wholeBlock(line, h);
+    }
+
+    fn wholeBlock(p: *Parser, line: []const u8, h: anytype) !void {
         const line_no = p.line_no;
         if (line.len == 0) {
             p.open = false;
@@ -398,7 +453,55 @@ pub fn write(w: *std.Io.Writer, mode: Mode, r: Record) std.Io.Writer.Error!void 
     }
 }
 
-/// Write one record, its content highlighted as markdown when it is.
+/// Write one record in packed markdown spelling. Literal arrows are doubled;
+/// line breaks inside the record become single arrows.
+pub fn writePacked(w: *std.Io.Writer, r: Record) std.Io.Writer.Error!void {
+    try w.writeAll("- ");
+    try w.writeAll(r.sigil.text(.md));
+    try w.writeAll(sigil_end);
+    try writePackedEscaped(w, r.value);
+    if (r.content) |content| {
+        const arrow = "\u{21B5}";
+        try w.writeAll(arrow);
+        var it = std.mem.splitScalar(u8, content, '\n');
+        var first = true;
+        while (it.next()) |line| {
+            if (!first) try w.writeAll(arrow);
+            first = false;
+            if (line.len == 0) {
+                try w.writeAll(bareLead(.md));
+            } else {
+                try w.writeAll(lead(.md));
+                try w.writeAll(r.sigil.indent());
+                try writePackedEscaped(w, line);
+            }
+        }
+    }
+    try w.writeByte('\n');
+}
+
+fn writePackedEscaped(w: *std.Io.Writer, bytes: []const u8) std.Io.Writer.Error!void {
+    const arrow = "\u{21B5}";
+    var i: usize = 0;
+    while (i < bytes.len) {
+        if (std.mem.startsWith(u8, bytes[i..], arrow)) {
+            try w.writeAll(arrow ++ arrow);
+            i += arrow.len;
+        } else {
+            try w.writeByte(bytes[i]);
+            i += 1;
+        }
+    }
+}
+
+/// Pack records for callers that need the compact markdown spelling.
+pub fn pack(w: *std.Io.Writer, records: []const Record) std.Io.Writer.Error!void {
+    for (records, 0..) |r, i| {
+        if (i > 0) try w.writeByte('\n');
+        try writePacked(w, r);
+    }
+}
+
 pub fn writeLooking(w: *std.Io.Writer, mode: Mode, look: ?Look, r: Record) std.Io.Writer.Error!void {
     const c = r.content orelse return write(w, mode, r);
     if (looked(mode, look, r.sigil) == null) return write(w, mode, r);
@@ -495,6 +598,51 @@ pub const ContentWriter = struct {
 
 const testing = std.testing;
 
+test "packed escaping covers header, arrow runs, empty lines, and byte streaming" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const expected: Record = .{ .sigil = .result, .value = "head ↵↵ value", .content = "↵↵\n\n  indented\n↵" };
+    var out: std.Io.Writer.Allocating = .init(arena);
+    try writePacked(&out.writer, expected);
+    const encoded = out.written();
+    var diag: Diagnostic = .{};
+    const got = try parse(arena, encoded[0 .. encoded.len - 1], &diag);
+    try testing.expectEqual(@as(usize, 1), got.len);
+    try testing.expectEqualStrings(expected.value, got[0].value);
+    try testing.expectEqualStrings(expected.content.?, got[0].content.?);
+    var p: Parser = .{ .arena = arena, .diag = &diag };
+    var c: Collect = .{ .arena = arena };
+    for (encoded[0 .. encoded.len - 1]) |b| try p.feed(&.{b}, &c);
+    try p.finish(&c);
+    try testing.expectEqual(@as(usize, 1), c.records.items.len);
+    try testing.expectEqualStrings(expected.value, c.records.items[0].value);
+    try testing.expectEqualStrings(expected.content.?, c.records.items[0].content.?);
+    try testing.expectEqual(Mode.md, detect(encoded).?);
+    try testing.expect(headed(.md, encoded[0 .. encoded.len - 1]) != null);
+}
+
+test "packed physical lines reject blank separators and second records" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.UnexpectedLine, parse(a.allocator(), "- :compass::↵\n", &diag));
+    try testing.expectError(error.UnexpectedLine, parse(a.allocator(), "- :compass::↵* :brain::x\n", &diag));
+    try testing.expectError(error.NotADocument, parse(a.allocator(), "- not a header\n", &diag));
+}
+
+test "packed records round trip with mixed block spelling" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    var diag: Diagnostic = .{};
+    const src = "- :compass::↵  > hi↵  > literal ↵↵ arrow\n\n* :brain::x\n";
+    const records = try parse(a.allocator(), src, &diag);
+    try testing.expectEqual(@as(usize, 2), records.len);
+    try testing.expectEqualStrings("hi\nliteral ↵ arrow", records[0].content.?);
+    var out: std.Io.Writer.Allocating = .init(a.allocator());
+    try writePacked(&out.writer, records[0]);
+    try testing.expectEqualStrings("- :compass::↵  > hi↵  > literal ↵↵ arrow\n", out.written());
+}
 test "a record is a header and its content" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();

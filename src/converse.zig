@@ -183,10 +183,9 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // Records normally get a blank line, so writing one has to know what came
     // before it. Some records belong together and are shown touching. A
     // terminal is shown every 📜, 🤖, 💭 and 📲 highlighted as markdown.
-    var shown: Shown = .{ .look = if (mode == .m8) .{
-        .width = highlight.terminalWidth(ctx.env),
-        .palette = try config.highlights(ctx.arena, ctx.io, ctx.env),
-    } else null };
+    var look: doc.Look = if (mode == .m8) try config.highlights(ctx.arena, ctx.io, ctx.env) else .{};
+    look.width = highlight.terminalWidth(ctx.env);
+    var shown: Shown = .{ .look = if (mode == .m8) look else null };
     var status: Status = .{ .err = if (level > 0 and !opts.echo_given) ctx.err else null };
     if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);
 

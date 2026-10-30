@@ -37,9 +37,13 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  m8 ref :demo/mathy "hi" | m8 send | m8 tag :demo/mathy
         \\
-        \\That is what `m8 :demo/mathy -- hi` does. `m8 tail --block` is the reply
-        \\alone and `m8 render` is the turn as a person reads it. `m8 --help`
-        \\says what a provider is.
+        \\That is what `m8 :demo/mathy -- hi` does. Shell filters select records
+        \\in packed form; `m8 cat --unwrap` turns them into ordinary Markdown.
+        \\`m8 render` is the turn as a person reads it. `m8 --help` says what
+        \\a provider is.
+        \\
+        \\  m8 ref :demo/mathy "hi" | m8 send | m8 cat --pack |
+        \\      grep '^- :robot::' | tail -n 1 | m8 cat --unwrap
         \\
     );
 }

@@ -6,7 +6,7 @@ There are three layers, ordered project → user → system:
   only when registered with `m8 register`; ancestor projects are not additional
   overlay layers. `m8 register -l` lists candidates and their trust status.
 * `$XDG_CONFIG_HOME/m8-st8/`, defaulting to `~/.config/m8-st8/`.
-* `/etc/m8-st8/`.
+* `/etc/m8-st8/`, built in at compile time (configurable with `-Dsystem-config-dir` at build time).
 
 Registration is machine-local and records canonical paths in the user's
 private config registry. A cloned project does not become trusted merely by
@@ -28,7 +28,7 @@ missing keys do not fall through to another layer.
 For example:
 
 ```json
-{ "highlights": "quote:fgt4bg255+i_!/,list:fg244,table:pipe:fgt8" }
+{ "highlights": "quote:fgt4bg255+i_!/,list:fg244,table:pipe:fgt8,wrap:literal:70,wrap:word:90" }
 ```
 
 Highlight entries are comma-separated `name:style` pairs. Names include `quote`,
@@ -45,12 +45,37 @@ Styles are read left to right; bold and faint are mutually exclusive, with
 the last taking effect. Duplicate entries also use the last value. Each
 supplied style replaces that style; unspecified styles retain defaults.
 
+Wrapping thresholds share the same comma-separated string:
+
+* `wrap:literal:70` breaks before an opening inline code span at 70% full.
+* `wrap:word:90` breaks before a new word at 90% full.
+* These are the defaults; each accepts an integer from 0 to 100.
+  * `0` disables that early-break rule, not ordinary hard wrapping.
+  * `100` waits until the content area is full.
+* Percentages use terminal cells after the repeated quote and indent prefix.
+  * Thresholds round up to a whole cell; a nonzero threshold is at least one.
+  * The first content on a line never causes an early break.
+* Early breaks are streaming guesses, not a guarantee that a span will fit.
+  * Code spans stay whole and can overflow; tables and literal blocks keep
+    their own layout.
+  * Existing spaces are preserved, including spaces before an inserted break.
+* Wrapping needs a known terminal width and enabled reflow.
+  * `render --parsable` disables it; `--no-highlight` only disables colour.
+
 ## Mobs
 
-A mob is the unit of document resolution and state ownership. The **first
-`mobs/NAME/` directory** in the eligible stack selects that entire mob. An empty
-directory deliberately blocks lower layers. Missing agents, chats or turns
-never cause per-file fallback into another copy of the mob.
+A mob keeps related agents and their conversations together. Definitions and
+state have different lookup rules:
+
+* **Definitions:** take the first matching file, searching project → user →
+  system. A missing definition falls through to the next layer.
+* **State:** the first `mobs/NAME/` directory places the mob. Chats, turns and
+  workspace stay at that layer; they never fall through.
+
+An empty project mob directory is enough to keep conversations in the project,
+even when every agent definition comes from the user or system layer. Creating
+it starts a separate home for those conversations; it does not move or resume
+state from a higher layer.
 
 ```
 .m8-st8/
@@ -78,11 +103,45 @@ reserved `_/` directory beneath the agent's generated state, keeping it
 separate from nested authored agents. `/+/TURN` names a turn in that chat.
 The movable pointer is still stored as `+.md`; chat addresses need no trailing `/+`.
 
-Once a mob is selected, document references are pinned to that mob and layer.
-Cross-mob 🧠/📚 references are forbidden. Copy a shared definition into each mob
-that needs it. A tool can explicitly invoke another mob using a new command,
-such as `m8 query :other/reviewer MESSAGE`; that activation operates in its own
-mob. This is command composition, not a document inclusion.
+## Compose across layers
+
+An authored agent can include definitions from another mob with 🧠 or 📚.
+Nothing makes the included file a special kind of agent: a mob used only for
+shared instructions or tools is still an ordinary mob.
+
+Each reference searches from the project layer again. A project definition can
+therefore customize a dependency used by a user- or system-level definition.
+The included definition does not change where the caller's state lives.
+
+A direct reference to the same name and part instead searches **above the
+current definition's layer**. This lets a definition build on its higher-level
+namesake. For example, a project `mobs/team/dev.md` can contain:
+
+```markdown
+* :brain::team/dev
+
+* :compass::
+  > Follow this project's conventions.
+```
+
+The first record includes the user definition of `team/dev`, or the system
+one if no user definition exists. A user definition can do the same to build on
+the system definition. If no higher definition exists, the reference is a
+missing agent. An indirect return to the same file and part is still a loop.
+A body referring to its own 📚 top uses ordinary lookup: the two parts are
+separate.
+
+Chats and turns do not gain cross-mob lookup. References from a chat or turn
+stay within its mob, and an authored agent cannot include another mob's chat
+or turn. To operate on another mob's conversation, invoke a separate command.
+
+## Agents as commands
+
+A tool can invoke another mob with a command such as
+`m8 query :other/reviewer MESSAGE`. That activation has its own mob state.
+A tool can also resolve a shared document and emit its contents: what the tool
+returned is then recorded in the conversation, rather than a live reference
+that could change on a later read.
 
 An agent needs no special way to spawn another: a 🧰 whose command invokes
 an agent is a subagent, running inside that tool's shields.
@@ -96,8 +155,8 @@ an agent is a subagent, running inside that tool's shields.
 
 ## State and workspace locations
 
-Project mobs keep writable state beside their definitions. User and system
-mobs keep it under `$XDG_DATA_HOME/m8-st8/`, defaulting to
+Project mobs keep writable state inside their project mob directory. User and
+system mobs keep it under `$XDG_DATA_HOME/m8-st8/`, defaulting to
 `~/.local/share/m8-st8/`:
 
 ```
@@ -109,13 +168,14 @@ mobs keep it under `$XDG_DATA_HOME/m8-st8/`, defaulting to
 <data>/m8-st8/system/mobs/demo/.mob-space/
 ```
 
-Here `<data>` is `XDG_DATA_HOME` or `~/.local/share`. The authored mob's source
-layer selects its state location; relocated state is never searched as an
-independent overlay. A user mob shadowing a system mob has separate state.
+Here `<data>` is `XDG_DATA_HOME` or `~/.local/share`. The nearest mob directory
+selects the state location, regardless of which layers supply its definitions.
+Relocated state is never searched as an independent overlay. A user mob placed
+ahead of a system mob has separate state.
 
 Tools and provider stages receive:
 
-* `M8_MOB_ST8_DIR`: absolute owning **definition config root**.
+* `M8_MOB_ST8_DIR`: absolute config root containing the nearest mob directory.
 * `M8_MOB_DIR`: absolute `.chats` state directory. Uploads go in
   `$M8_MOB_DIR/.uploads/`.
 * `TMPDIR`: the pre-created, persistent sibling `.mob-space/` workspace.
@@ -145,8 +205,8 @@ with `mobs/*/.chats/` and `mobs/*/.mob-space/` in `.m8-st8/.gitignore`.
 * There is no global/main pointer. Bare `m8` shows help; to resume a chat,
   explicitly name it with `m8 :MOB/AGENT` (or its subchat address).
 
-Inclusion and lineage are still expanded in record order with loop detection,
-not an arbitrary depth limit. Their references must remain inside one mob.
+Inclusion and lineage expand in record order with loop detection, not an
+arbitrary depth limit. Authored inclusions can cross mobs; lineage cannot.
 
 ## Models
 

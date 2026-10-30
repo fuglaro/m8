@@ -11,6 +11,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const highlight = @import("m8/highlight.zig");
+const build_options = @import("build_options");
 
 pub const max_file = 4 * 1024 * 1024;
 
@@ -101,8 +102,8 @@ pub const user_dir_name = "m8-st8";
 
 /// What an administrator puts beneath everyone, and so the last searched. Its
 /// Authored mobs and core resources are read here; writable system-mob state
-/// lives under the user's XDG data home, never under /etc.
-pub const system_dir = "/etc/m8-st8";
+/// lives under the user's XDG data home, never under the system config.
+pub const system_dir = build_options.system_config_dir;
 
 /// Where something new is kept: the nearest directory, unless the only one
 /// there is the system's.
@@ -374,12 +375,15 @@ pub fn where(arena: Allocator, io: std.Io, dirs: Dirs, rel: []const u8) !?[]cons
         const tail = rel[5..];
         const slash = std.mem.indexOfScalar(u8, tail, '/') orelse return null;
         const mob = tail[0..slash];
-        const selected = (try mobSelection(arena, io, dirs, try std.fmt.allocPrint(arena, "{s}/lookup", .{mob}))) orelse return null;
-        const root = if (std.mem.startsWith(u8, tail[slash + 1 ..], state_dir ++ "/"))
-            try stateRoot(arena, dirs, selected.root)
-        else
-            selected.root;
-        return if (hasFile(io, try std.fs.path.join(arena, &.{ root, rel }))) root else null;
+        const is_state = std.mem.startsWith(u8, tail[slash + 1 ..], state_dir ++ "/");
+        if (is_state) {
+            const selected = (try mobSelection(arena, io, dirs, try std.fmt.allocPrint(arena, "{s}/lookup", .{mob}))) orelse return null;
+            const root = try stateRoot(arena, dirs, selected.root);
+            return if (hasFile(io, try std.fs.path.join(arena, &.{ root, rel }))) root else null;
+        }
+        // Authored files overlay independently of the layer that owns state.
+        for (dirs.roots) |root| if (hasFile(io, try std.fs.path.join(arena, &.{ root, rel }))) return root;
+        return null;
     }
     for (dirs.roots) |dir| {
         if (hasFile(io, try std.fs.path.join(arena, &.{ dir, rel }))) return dir;
@@ -404,10 +408,7 @@ fn stateRoot(arena: Allocator, dirs: Dirs, root: []const u8) ![]const u8 {
 
 pub fn pin(arena: Allocator, io: std.Io, dirs: Dirs, name: []const u8) !Dirs {
     const selected = (try mobSelection(arena, io, dirs, name)) orelse return error.UnknownAgent;
-    const roots = try arena.alloc([]const u8, 1);
-    roots[0] = selected.root;
     var pinned = dirs;
-    pinned.roots = roots;
     pinned.mob = selected.name;
     return pinned;
 }
@@ -419,8 +420,12 @@ pub fn mobHome(arena: Allocator, io: std.Io, dirs: Dirs, name: []const u8) !?[]c
 }
 
 pub fn filePath(arena: Allocator, io: std.Io, dirs: Dirs, name: []const u8) ![]const u8 {
+    if (!isStateName(name)) {
+        const found = (try definition(arena, io, dirs, name, null)) orelse return error.UnknownAgent;
+        return std.fs.path.join(arena, &.{ found.root, try nameFile(arena, name) });
+    }
     const selected = (try mobSelection(arena, io, dirs, name)) orelse return error.UnknownAgent;
-    const root = if (isStateName(name)) try stateRoot(arena, dirs, selected.root) else selected.root;
+    const root = try stateRoot(arena, dirs, selected.root);
     return std.fs.path.join(arena, &.{ root, try nameFile(arena, name) });
 }
 
@@ -473,6 +478,26 @@ pub fn mobTmp(
     const real = try std.Io.Dir.cwd().realPathFileAlloc(io, tmp, arena);
     return std.mem.trimEnd(u8, real, "/");
 }
+
+pub const Definition = struct { root: []const u8, bytes: []const u8 };
+
+/// Read an authored definition, optionally starting strictly above `after`.
+pub fn definition(arena: Allocator, io: std.Io, dirs: Dirs, name: []const u8, after: ?[]const u8) !?Definition {
+    const rel = try nameFile(arena, name);
+    var past = after == null;
+    for (dirs.roots) |root| {
+        if (!past) {
+            if (std.mem.eql(u8, root, after.?)) past = true;
+            continue;
+        }
+        const path = try std.fs.path.join(arena, &.{ root, rel });
+        if (!hasFile(io, path)) continue;
+        return .{ .root = root, .bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file)) };
+    }
+    return null;
+}
+
+pub const DefinitionError = @typeInfo(@typeInfo(@TypeOf(definition)).@"fn".return_type.?).error_union.error_set;
 
 /// Read a file from the nearest config directory that has one.
 pub fn read(arena: Allocator, io: std.Io, dirs: Dirs, rel: []const u8) !?[]const u8 {
@@ -536,23 +561,22 @@ pub fn tui(
     return null;
 }
 
-/// The markdown highlight palette from the nearest core/config.json that
-/// names `highlights`. An absent key uses the default; there is no key merging.
+/// The markdown styles and wrapping from the nearest core/config.json.
+/// An absent key uses the defaults; there is no key merging.
 pub fn highlights(
     arena: Allocator,
     io: std.Io,
     env: *const std.process.Environ.Map,
-) !highlight.Palette {
-    var palette: highlight.Palette = .{};
+) !highlight.Options {
+    var look: highlight.Options = .{};
     if (try core(arena, io, env, "config.json")) |bytes| {
         const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
-        if (parsed != .object) return palette;
-        const value = parsed.object.get("highlights") orelse return palette;
+        if (parsed != .object) return look;
+        const value = parsed.object.get("highlights") orelse return look;
         if (value != .string) return Error.BadHighlight;
-        highlight.parsePalette(&palette, value.string) catch return Error.BadHighlight;
-        return palette;
+        highlight.parseHighlights(&look, value.string) catch return Error.BadHighlight;
     }
-    return palette;
+    return look;
 }
 
 const testing = std.testing;
@@ -792,11 +816,15 @@ test "core config is selected per file, never by absent keys" {
     try env.put(dirs_var, try std.mem.join(arena, ":", &.{ near, far }));
 
     var p = try highlights(arena, t.io, &env);
-    try testing.expectEqual(@as(?u16, 245), p.quote.fg);
-    try t.write(arena, "near/core/config.json", "{\"highlights\":\"list:fg2\"}");
+    try testing.expectEqual(@as(?u16, 245), p.palette.quote.fg);
+    try testing.expectEqual(@as(u8, 70), p.wrap_literal);
+    try testing.expectEqual(@as(u8, 90), p.wrap_word);
+    try t.write(arena, "near/core/config.json", "{\"highlights\":\"list:fg2,wrap:literal:0,wrap:word:100\"}");
     p = try highlights(arena, t.io, &env);
-    try testing.expectEqual(@as(?u16, 2), p.list.fg);
-    try testing.expectEqual(@as(?u16, 245), p.quote.fg);
+    try testing.expectEqual(@as(u8, 0), p.wrap_literal);
+    try testing.expectEqual(@as(u8, 100), p.wrap_word);
+    try testing.expectEqual(@as(?u16, 2), p.palette.list.fg);
+    try testing.expectEqual(@as(?u16, 245), p.palette.quote.fg);
 }
 
 test "highlight config rejects wrong value types and invalid style specs" {
@@ -896,7 +924,7 @@ test "children use the validated inherited list without a registry" {
     try testing.expectError(error.NotDir, discover(arena, io, &parent));
 }
 
-test "a mob directory owns every lookup, including an empty shadow" {
+test "a mob directory owns state placement while definitions overlay independently" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -911,10 +939,10 @@ test "a mob directory owns every lookup, including an empty shadow" {
     try t.write(arena, "far/mobs/team/.chats/agent/+.md", "far state");
     try testing.expectEqualStrings("far", (try read(arena, t.io, dirs, try nameFile(arena, "team/agent"))).?);
     try std.Io.Dir.cwd().createDirPath(t.io, try t.join(arena, "near/mobs/team"));
-    try testing.expect((try read(arena, t.io, dirs, try nameFile(arena, "team/agent"))) == null);
+    try testing.expectEqualStrings("far", (try read(arena, t.io, dirs, try nameFile(arena, "team/agent"))).?);
     try testing.expect((try read(arena, t.io, dirs, try nameFile(arena, "team/agent/+"))) == null);
     try t.write(arena, "near/mobs/team/other.md", "near");
-    try testing.expect((try read(arena, t.io, dirs, try nameFile(arena, "team/agent"))) == null);
+    try testing.expectEqualStrings("far", (try read(arena, t.io, dirs, try nameFile(arena, "team/agent"))).?);
     try testing.expectEqualStrings("near", (try read(arena, t.io, dirs, try nameFile(arena, "team/other"))).?);
     try testing.expectEqualStrings(try t.join(arena, "near/mobs/team/.chats/other/+.md"), try filePath(arena, t.io, dirs, "team/other/+"));
 }
@@ -946,13 +974,13 @@ test "user and system mob state follows its authored layer into XDG data" {
     try testing.expectEqualStrings(try t.join(arena, "data/system/mobs/base/.mob-space"), (try mobTmp(arena, t.io, dirs, "base/agent")).?);
     try session.unpoint(arena, t.io, dirs, "team/agent/+");
     try testing.expectEqualStrings("team/agent", try session.head(arena, t.io, dirs, "team/agent"));
-    // A new empty user mob shadows system definitions and their relocated state.
+    // A new empty user mob owns state placement while definitions still fall through.
     try std.Io.Dir.cwd().createDirPath(t.io, try t.join(arena, "user/mobs/base"));
-    try testing.expect((try read(arena, t.io, dirs, try nameFile(arena, "base/agent"))) == null);
+    try testing.expectEqualStrings("system definition", (try read(arena, t.io, dirs, try nameFile(arena, "base/agent"))).?);
     try testing.expectEqualStrings(try t.join(arena, "data/user/mobs/base/.chats/agent/+.md"), try filePath(arena, t.io, dirs, "base/agent/+"));
 }
 
-test "pinned mob lookup keeps its layer and refuses another mob" {
+test "pin preserves roots for authored overlays while refusing another mob's state" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -968,9 +996,9 @@ test "pinned mob lookup keeps its layer and refuses another mob" {
     const dirs: Dirs = .{ .roots = &.{ near, far } };
     const pinned = try pin(arena, t.io, dirs, "team/agent");
     try t.write(arena, "near/mobs/team/helper.md", "new shadow");
-    try testing.expectEqualStrings("far helper", (try read(arena, t.io, pinned, try nameFile(arena, "team/helper"))).?);
-    try testing.expectError(error.CrossMobReference, read(arena, t.io, pinned, try nameFile(arena, "other/agent")));
-    try testing.expectEqualStrings("other agent", (try read(arena, t.io, dirs, try nameFile(arena, "other/agent"))).?);
+    try testing.expectEqualStrings("new shadow", (try read(arena, t.io, pinned, try nameFile(arena, "team/helper"))).?);
+    try testing.expectEqualStrings("other agent", (try read(arena, t.io, pinned, try nameFile(arena, "other/agent"))).?);
+    try testing.expectError(error.CrossMobReference, read(arena, t.io, pinned, try nameFile(arena, "other/agent/+")));
 }
 
 test "provider filename selects a whole entry, without merging fields" {

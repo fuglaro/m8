@@ -224,7 +224,8 @@ fn run(ctx: Ctx) !u8 {
         }
     }
 
-    const look: doc.Look = .{ .width = cols, .palette = try config.highlights(ctx.arena, ctx.io, ctx.env) };
+    var look = try config.highlights(ctx.arena, ctx.io, ctx.env);
+    look.width = cols;
     var c: Cast = try .init(ctx.arena, ctx.out, look, speeds, cols, rows);
     c.address = address;
     c.snips = snips;

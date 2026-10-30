@@ -41,6 +41,7 @@ pub const all = [_]Restriction{
     .{ .name = "contain-reads", .summary = "no reading outside cwd, TMP, system and tool dirs" },
     .{ .name = "contain-reads-home", .summary = "as above, with HOME readable too" },
     .{ .name = "private", .summary = "as contain-reads, and tool dirs go too" },
+    .{ .name = "contain-writes-soft", .summary = "writes confined to cwd, TMP and native Darwin user temp" },
     .{ .name = "contain-writes", .summary = "writes confined to cwd and TMP" },
     .{ .name = "contain-writes-home", .summary = "writes confined to cwd, TMP and HOME" },
     .{ .name = "only-tmp-writes", .summary = "writes confined to the current tool's TMP" },
@@ -114,6 +115,26 @@ pub fn gitEntry(arena: Allocator, io: std.Io, cwd: []const u8) !?[]const u8 {
     }
 }
 
+/// Resolve the OS-owned native temp directory, never a caller-supplied override.
+/// Failure grants no extra access. TMPDIR is intentionally not used: xcrun
+/// consults the native directory even when the child has private scratch.
+pub fn nativeTemp(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) ![]const u8 {
+    const result = std.process.run(arena, io, .{
+        .argv = &.{ "/usr/bin/getconf", "DARWIN_USER_TEMP_DIR" },
+        .environ_map = env,
+    }) catch return "";
+    switch (result.term) {
+        .exited => |code| if (code != 0) return "",
+        else => return "",
+    }
+    const path = std.mem.trim(u8, result.stdout, " \t\r\n");
+    if (!std.fs.path.isAbsolute(path)) return "";
+    const canonical = std.Io.Dir.cwd().realPathFileAlloc(io, path, arena) catch return "";
+    // Never turn a malformed lookup into a global write grant.
+    if (std.mem.eql(u8, canonical, "/")) return "";
+    return canonical;
+}
+
 /// `sandbox-exec -p <resolved> -D ... -- argv`
 /// The profile is handed over as text rather than written to a temporary file.
 pub fn exec(
@@ -156,6 +177,8 @@ pub fn exec(
         try std.fmt.allocPrint(arena, "CWD={s}", .{cwd}),
         "-D",
         try std.fmt.allocPrint(arena, "TMP={s}", .{tmp}),
+        "-D",
+        try std.fmt.allocPrint(arena, "DARWIN_USER_TEMP_DIR={s}", .{try nativeTemp(arena, io, env)}),
         "-D",
         try std.fmt.allocPrint(arena, "HOME={s}", .{home}),
         "-D",
@@ -585,6 +608,10 @@ fn canApplySandbox(io: std.Io) !bool {
 }
 
 fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []const u8, script: []const u8) !bool {
+    return sandboxAllowsNative(gpa, io, dir, active, script, null);
+}
+
+fn sandboxAllowsNative(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []const u8, script: []const u8, native: ?[]const u8) !bool {
     var a: std.heap.ArenaAllocator = .init(gpa);
     defer a.deinit();
     const arena = a.allocator();
@@ -605,13 +632,14 @@ fn sandboxAllows(gpa: Allocator, io: std.Io, dir: []const u8, active: []const []
 
     var child = try std.process.spawn(io, .{
         .argv = &.{
-            "sandbox-exec",                                             "-f",
-            path,                                                       "-D",
-            try std.fmt.allocPrint(arena, "CWD={s}", .{dir}),           "-D",
-            try std.fmt.allocPrint(arena, "TMP={s}", .{tmp}),           "-D",
-            try std.fmt.allocPrint(arena, "HOME={s}", .{dir}),          "-D",
-            try std.fmt.allocPrint(arena, "GIT={s}", .{git orelse ""}), "/bin/sh",
-            "-c",                                                       script,
+            "sandbox-exec",                                                                                              "-f",
+            path,                                                                                                        "-D",
+            try std.fmt.allocPrint(arena, "CWD={s}", .{dir}),                                                            "-D",
+            try std.fmt.allocPrint(arena, "TMP={s}", .{tmp}),                                                            "-D",
+            try std.fmt.allocPrint(arena, "DARWIN_USER_TEMP_DIR={s}", .{native orelse try nativeTemp(arena, io, &env)}), "-D",
+            try std.fmt.allocPrint(arena, "HOME={s}", .{dir}),                                                           "-D",
+            try std.fmt.allocPrint(arena, "GIT={s}", .{git orelse ""}),                                                  "/bin/sh",
+            "-c",                                                                                                        script,
         },
         .cwd = .{ .path = dir },
         .stdout = .ignore,
@@ -687,4 +715,49 @@ test "the table is atoms, so a level is a composition and not an entry" {
         try testing.expect(find(n) == null);
     for ([_][]const u8{ "private", "airgap", "no-edit-git" }) |n|
         try testing.expect(find(n) != null);
+}
+
+test "soft write containment retains only native temp beyond strict containment" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const native_write = "(allow file-write* (subpath (param \"DARWIN_USER_TEMP_DIR\")))";
+    const soft = try res(arena, &.{"contain-writes-soft"});
+    try testing.expect(std.mem.indexOf(u8, soft, native_write) != null);
+    try testing.expect(std.mem.indexOf(u8, soft, "(allow file-write* (subpath \"/\"))") == null);
+    try testing.expect(std.mem.indexOf(u8, soft, "(allow file-write* (subpath (param \"HOME\")))") == null);
+    try testing.expect(std.mem.indexOf(u8, soft, "(allow file-write* (subpath (param \"CWD\")))") != null);
+    try testing.expect(std.mem.indexOf(u8, soft, "(allow file-write* (subpath (param \"TMP\")))") != null);
+    for ([_][]const u8{ "contain-writes", "contain-writes-home", "only-tmp-writes", "no-writes" }) |strict| {
+        const combined = try res(arena, &.{ "contain-writes-soft", strict });
+        try testing.expect(std.mem.indexOf(u8, combined, native_write) == null);
+        try testing.expectEqualStrings(combined, try res(arena, &.{ strict, "contain-writes-soft" }));
+    }
+    const strict = try res(arena, &.{"contain-writes"});
+    try testing.expectEqualStrings(strict, try res(arena, &.{ "contain-writes-soft", "contain-writes" }));
+}
+
+test "soft containment permits a separate native temp but strict restrictions revoke it" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    if (!try canApplySandbox(io)) return error.SkipZigTest;
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const root = try scratch(arena, io, "m8-native-temp");
+    defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+    const cwd = try std.fs.path.join(arena, &.{ root, "cwd" });
+    const native = try std.fs.path.join(arena, &.{ root, "native" });
+    const outside = try std.fs.path.join(arena, &.{ root, "outside" });
+    for ([_][]const u8{ cwd, native, outside }) |path| try std.Io.Dir.cwd().createDirPath(io, path);
+    const write_native = "echo cache > ../native/xcrun_db-test && mv ../native/xcrun_db-test ../native/xcrun_db && rm ../native/xcrun_db";
+    try testing.expect(try sandboxAllowsNative(arena, io, cwd, &.{"contain-writes-soft"}, write_native, native));
+    try testing.expect(!try sandboxAllowsNative(arena, io, cwd, &.{"contain-writes-soft"}, "echo bad > ../outside/file", native));
+    try testing.expect(!try sandboxAllowsNative(arena, io, cwd, &.{"contain-writes-soft"}, write_native, ""));
+    for ([_][]const u8{ "contain-writes", "only-tmp-writes", "no-writes" }) |strict| {
+        try testing.expect(!try sandboxAllowsNative(arena, io, cwd, &.{ "contain-writes-soft", strict }, write_native, native));
+    }
+    try testing.expect(try sandboxAllowsNative(arena, io, cwd, &.{ "contain-writes-soft", "contain-writes" }, "echo ok > file && echo ok > tool-scratch/file", native));
 }

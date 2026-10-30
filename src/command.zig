@@ -19,13 +19,12 @@ pub const Takes = api.Takes;
 /// Every command there is, as the modules that hold them.
 const every = .{
     @import("command/at.zig"),
+    @import("command/cat.zig"),
     @import("command/ref.zig"),
     @import("command/send.zig"),
     @import("command/tag.zig"),
     @import("command/query.zig"),
     @import("command/reset.zig"),
-    @import("command/tail.zig"),
-    @import("command/exclude.zig"),
     @import("command/render.zig"),
     @import("command/cast.zig"),
     @import("command/encode.zig"),

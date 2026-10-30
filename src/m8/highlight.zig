@@ -30,8 +30,10 @@
 //!   coloured a line at a time; `json` gets best-effort key, string, atom and
 //!   separator highlighting, without validating its contents.
 //! * A quote or list marker is coloured, and nothing after it.
-//! * A line that runs past the terminal is broken there, the next carrying
-//!   the line's quote and indent, except inside a code span.
+//! * Text breaks early before a code span or word near the terminal edge,
+//!   at configurable percentages of the width after its quote and indent.
+//!   A line that still runs past the terminal is broken there, the next
+//!   carrying the line's quote and indent, except inside a code span.
 //! * A line indented four spaces past any list item it is in is literal,
 //!   which is how a provider says that what it hands over is not markdown.
 //!   One continuing a paragraph is still the paragraph.
@@ -129,9 +131,36 @@ pub const Options = struct {
     /// The terminal's width in cells, or 0 for none known.
     width: usize = 0,
     palette: Palette = .{},
+    /// Proactively break before a code span or word at this percentage of
+    /// the content width. Zero disables that rule; literal interiors stay whole.
+    wrap_literal: u8 = 70,
+    wrap_word: u8 = 90,
     /// The caller already knows this is literal content, not markdown.
     literal: bool = false,
 };
+
+/// Apply the styles and wrapping thresholds in a highlights setting.
+pub fn parseHighlights(opts: *Options, text: []const u8) error{BadHighlight}!void {
+    if (text.len == 0) return;
+    var entries = std.mem.splitScalar(u8, text, ',');
+    while (entries.next()) |entry| {
+        if (entry.len == 0) return error.BadHighlight;
+        if (std.mem.startsWith(u8, entry, "wrap:")) {
+            const colon = std.mem.lastIndexOfScalar(u8, entry, ':') orelse return error.BadHighlight;
+            const name = entry[0..colon];
+            const value = entry[colon + 1 ..];
+            if (value.len == 0) return error.BadHighlight;
+            for (value) |c| if (!std.ascii.isDigit(c)) return error.BadHighlight;
+            const percent = std.fmt.parseInt(u8, value, 10) catch return error.BadHighlight;
+            if (percent > 100) return error.BadHighlight;
+            if (std.mem.eql(u8, name, "wrap:literal")) {
+                opts.wrap_literal = percent;
+            } else if (std.mem.eql(u8, name, "wrap:word")) {
+                opts.wrap_word = percent;
+            } else return error.BadHighlight;
+        } else try parsePalette(&opts.palette, entry);
+    }
+}
 
 /// Apply compact style entries. Each entry replaces the prior style for its name.
 pub fn parsePalette(p: *Palette, text: []const u8) error{BadHighlight}!void {
@@ -508,6 +537,7 @@ pub const Highlighter = struct {
         }
         if (h.code > 0) return h.emit(c, h.current());
         if (b == '|' and h.kind == .row) return h.pipe();
+        if (h.prev == .space and b != ' ' and b != '\t') try h.wrapBefore(h.opts.wrap_word);
         if (b == '[') h.bracket = true;
         if (b == '(' and h.last == ']' and h.bracket) h.link = true;
         try h.emit(c, h.current());
@@ -534,12 +564,16 @@ pub const Highlighter = struct {
                 try h.emitRun(c, n, h.current());
                 h.code = 0;
             } else {
-                if (h.code == 0 and h.prev != .word and next != 0) h.code = n;
+                if (h.code == 0 and h.prev != .word and next != 0) {
+                    try h.wrapBefore(h.opts.wrap_literal);
+                    h.code = n;
+                }
                 try h.emitRun(c, n, h.current());
             }
             return;
         }
 
+        if (h.prev == .space and next != 0 and next != ' ' and next != '\t') try h.wrapBefore(h.opts.wrap_word);
         var strong = h.strong;
         var emphasis = h.emphasis;
         var struck = h.struck;
@@ -678,6 +712,24 @@ pub const Highlighter = struct {
         }
     }
 
+    /// A streaming guess, relative to the space left after the repeated prefix.
+    fn wrapBefore(h: *Highlighter, percent: u8) Error!void {
+        const floor = h.lead_cells + h.cont_n;
+        if (!h.opts.reflow or h.kind != .text or percent == 0 or
+            h.opts.width <= floor or h.col <= floor) return;
+        const available = h.opts.width - floor;
+        const threshold = available / 100 * percent + (available % 100 * percent + 99) / 100;
+        if (h.col - floor >= threshold) try h.breakLine();
+    }
+
+    fn breakLine(h: *Highlighter) Error!void {
+        try h.set(.{});
+        try h.out.writeByte('\n');
+        try h.out.writeAll(h.lead);
+        try h.out.writeAll(h.cont[0..h.cont_n]);
+        h.col = h.lead_cells + h.cont_n;
+    }
+
     /// One character, breaking the line first when it would not fit. What
     /// opens the broken line is plain, and the style carries on after it.
     fn emit(h: *Highlighter, c: []const u8, s: Style) Error!void {
@@ -687,11 +739,7 @@ pub const Highlighter = struct {
         if (h.opts.reflow and h.opts.width > 0 and h.kind == .text and h.code == 0 and
             h.col + cells > h.opts.width and h.col > floor)
         {
-            try h.set(.{});
-            try h.out.writeByte('\n');
-            try h.out.writeAll(h.lead);
-            try h.out.writeAll(h.cont[0..h.cont_n]);
-            h.col = floor;
+            try h.breakLine();
         }
         try h.set(s);
         try h.out.writeAll(c);
@@ -966,4 +1014,76 @@ test "a code span is never broken, and what follows it is" {
 
 test "wide characters count as two" {
     try expectShown("ab\n漢c", "ab漢c", .{ .color = false, .width = 3 });
+}
+
+test "highlights accepts percentages alongside styles" {
+    var opts: Options = .{};
+    try testing.expectEqual(@as(u8, 70), opts.wrap_literal);
+    try testing.expectEqual(@as(u8, 90), opts.wrap_word);
+    try parseHighlights(&opts, "quote:fg4,wrap:literal:0,wrap:word:100");
+    try testing.expectEqual(@as(?u16, 4), opts.palette.quote.fg);
+    try testing.expectEqual(@as(u8, 0), opts.wrap_literal);
+    try testing.expectEqual(@as(u8, 100), opts.wrap_word);
+    try parseHighlights(&opts, "wrap:word:1,wrap:word:90");
+    try testing.expectEqual(@as(u8, 90), opts.wrap_word);
+    for ([_][]const u8{ "wrap:word:101", "wrap:literal:256", "wrap:word:-1", "wrap:word:+1", "wrap:word:", "wrap:word:1%", "wrap:table:70", "wrap:70", "wrap:word:2," }) |bad| {
+        try testing.expectError(error.BadHighlight, parseHighlights(&opts, bad));
+    }
+}
+
+test "words and code spans break early at independent thresholds" {
+    try expectShown("abcdefgh \nword", "abcdefgh word", .{ .color = false, .width = 10 });
+    try expectShown("abcdef \n`long literal`", "abcdef `long literal`", .{ .color = false, .width = 10 });
+    try expectShown("abcde `long literal`", "abcde `long literal`", .{ .color = false, .width = 10 });
+    try expectShown("abcdefgh \n**word**", "abcdefgh **word**", .{ .color = false, .width = 10 });
+    try expectShown("abcdefgh w\nord", "abcdefgh word", .{ .color = false, .width = 10, .wrap_word = 0 });
+    try expectShown("abcdef `long literal`", "abcdef `long literal`", .{ .color = false, .width = 10, .wrap_literal = 0 });
+    // The closing delimiter and words inside a code span are never candidates.
+    try expectShown("`a very long literal`", "`a very long literal`", .{ .color = false, .width = 4 });
+    try expectShown("abcdef \n``long ` literal``", "abcdef ``long ` literal``", .{ .color = false, .width = 10 });
+}
+
+test "thresholds use the content width after quotes lists and caller lead" {
+    const got = try shown("> - abcde `literal`", .{ .color = false, .width = 14 }, "| ");
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("> - abcde \n| >   `literal`", got);
+    try expectShown("> `literal`", "> `literal`", .{ .color = false, .width = 3, .wrap_literal = 1 });
+    try expectShown("> w", "> w", .{ .color = false, .width = 2, .wrap_word = 1 });
+}
+
+test "percentages round up and count terminal cells" {
+    // 70% of nine is 6.3: six cells do not trigger, seven do.
+    try expectShown("abcde `x`", "abcde `x`", .{ .color = false, .width = 9 });
+    try expectShown("abcdef \n`x`", "abcdef `x`", .{ .color = false, .width = 9 });
+    try expectShown("a \nb", "a b", .{ .color = false, .width = 40, .wrap_word = 1 });
+    try expectShown("漢 \n字", "漢 字", .{ .color = false, .width = 40, .wrap_word = 1 });
+    try expectShown("漢", "漢", .{ .color = false, .width = 1, .wrap_word = 1 });
+    try expectShown("abcdefghi \n`x`", "abcdefghi `x`", .{ .color = false, .width = 10, .wrap_literal = 100 });
+    try expectShown("abcdefgh `x`", "abcdefgh `x`", .{ .color = false, .width = 10, .wrap_literal = 100 });
+    try expectShown("abcdefghi \nx", "abcdefghi x", .{ .color = false, .width = 10, .wrap_word = 100 });
+}
+
+test "proactive wrapping respects reflow and leaves tables and blocks alone" {
+    const src = "abcdefgh `long literal` word";
+    try expectShown(src, src, .{ .color = false, .width = 10, .reflow = false });
+    try expectShown(src, src, .{ .color = false });
+    try expectShown("    abcdefgh word", "    abcdefgh word", .{ .color = false, .width = 10 });
+    try expectShown("| abcdefgh word  |", "| abcdefgh word |", .{ .color = false, .width = 10 });
+    try expectShown("```\nabcdefgh word\n```", "```\nabcdefgh word\n```", .{ .color = false, .width = 10 });
+}
+
+test "early breaks preserve styles across streamed delimiters" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var h: Highlighter = .init(&out.writer, .{ .color = false, .width = 10 }, "");
+    for ([_][]const u8{ "abcdef ", "`", "`", "long ", "literal", "`", "`" }) |chunk| try h.write(chunk);
+    try h.finish();
+    try testing.expectEqualStrings("abcdef \n``long literal``", out.written());
+    try expectShown("abcdef \n{38;5;180}`literal`{}", "abcdef `literal`", .{ .width = 10 });
+    try expectShown("{1;38;5;231}**abcdef {}\n{1;38;5;231}word**{}", "**abcdef word**", .{ .width = 10 });
+}
+
+test "one percent of a thousand cells is ten cells" {
+    try expectShown("abcdefgh x", "abcdefgh x", .{ .color = false, .width = 1000, .wrap_word = 1 });
+    try expectShown("abcdefghi \nx", "abcdefghi x", .{ .color = false, .width = 1000, .wrap_word = 1 });
 }

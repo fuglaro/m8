@@ -10,9 +10,10 @@
 //! from this, and only such a projection may lose anything.
 //!
 //! Two different things are written that same way. A 🧠 naming an authored
-//! agent is an inclusion within a mob; a 🧠 naming a generated one is lineage,
-//! the turn this turn continues. Includes and turns can form arbitrarily long
-//! chains within their mob; depth alone is not a fault.
+//! agent is a definition inclusion, which may cross mob boundaries; generated
+//! turns and chats are state and remain confined to the activated mob. A 🧠
+//! naming a generated one is lineage, the turn this turn continues. Chains can
+//! be arbitrarily long; depth alone is not a fault.
 //!
 //! The one fault either can have is a loop, and a loop is not a depth. It is a
 //! name met twice on the way to itself — so that is what is looked for, and
@@ -37,8 +38,7 @@ pub const Error = error{
     InvalidName,
     CrossMobReference,
     NoDataHome,
-    /// An agent includes one that leads back to it. A mob may include a mob
-    /// nobody has read, so this is the one that happens by accident.
+    /// An authored include leads back to the same physical definition.
     IncludeLoops,
     /// A turn names one that already leads back to it. Only a hand-edited
     /// file can be shaped like that, since m8 writes a parent that existed
@@ -51,7 +51,7 @@ pub const Error = error{
     TopUnclosed,
 };
 
-pub const ExpandError = Error || session.ReadError || toolbox.Error || std.Io.Writer.Error;
+pub const ExpandError = Error || session.ReadError || toolbox.Error || std.Io.Writer.Error || config.DefinitionError;
 
 pub const Ledger = struct {
     records: []const doc.Record = &.{},
@@ -146,6 +146,11 @@ const Frame = struct {
     name: []const u8 = "",
     /// The first origin anything under it settled on.
     origin: []const u8 = "",
+    /// Config root that supplied an authored definition, if any.
+    source_root: []const u8 = "",
+    /// This frame is a chat or turn; references made directly from it must
+    /// stay inside the activated mob. Authored includes have their own scope.
+    state_context: bool = false,
     /// Which half was asked for, which is also which path it is on.
     part: Part = .body,
 };
@@ -158,7 +163,8 @@ pub fn expand(
     name: []const u8,
 ) ExpandError!Ledger {
     const scoped = try config.pin(arena, io, dirs, name);
-    const src = (try source(arena, io, scoped, name)) orelse return Error.UnknownAgent;
+    const definition = if (session.isChat(name)) null else try config.definition(arena, io, scoped, name, null);
+    const src = if (definition) |d| d.bytes else (try source(arena, io, scoped, name)) orelse return Error.UnknownAgent;
 
     var diag: doc.Diagnostic = .{};
     const parsed = try doc.parse(arena, src, &diag);
@@ -166,6 +172,8 @@ pub fn expand(
         .records = (try Split.of(parsed)).body,
         .mode = doc.detect(src) orelse .md,
         .name = name,
+        .source_root = if (definition) |d| d.root else "",
+        .state_context = session.isGenerated(name) or session.isChat(name),
     }, .{});
 }
 
@@ -219,12 +227,10 @@ pub fn expandUntil(
 /// this costs is a frame, which is a slice and two numbers, and what it bounds
 /// is memory rather than anything m8 has an opinion about.
 ///
-/// That stack is also the path, so what is on it is exactly what a name may
-/// not name again. That is the whole of it: no count, no ceiling, and nothing
-/// to choose a number for. `on_path` is pushed and popped with the frames
-/// rather than remembering everywhere the walk has been, because a name met
-/// twice side by side is a document used twice — met twice along one path it
-/// is a loop, and a loop is the only thing that has no end.
+/// That stack is also the path: a physical definition (name, source root,
+/// and part) may not be reached again. Same-spelled files in higher layers
+/// remain distinct, allowing direct customization chains while preserving
+/// indirect-cycle detection.
 fn walk(
     arena: Allocator,
     io: std.Io,
@@ -235,13 +241,11 @@ fn walk(
     var scoped = dirs;
     var out: std.ArrayList(doc.Record) = .empty;
     var stack: std.ArrayList(Frame) = .empty;
-    // One path per half. A file's top and its body are disjoint, so a body
-    // that names its own top is a reference and not a loop; the two would be
-    // indistinguishable on one path.
+    // One path map per document half. Keys include the physical source root,
+    // so same-name overlay layers can wrap without making cycle checks linear.
     var paths: [2]std.StringHashMapUnmanaged(void) = .{ .empty, .empty };
-
     try stack.append(arena, root);
-    if (root.name.len > 0) try paths[@intFromEnum(root.part)].put(arena, root.name, {});
+    if (root.name.len > 0) try paths[@intFromEnum(root.part)].put(arena, try pathKey(arena, root.name, root.source_root), {});
 
     var origin: []const u8 = "";
     while (stack.items.len > 0) {
@@ -260,7 +264,7 @@ fn walk(
                 top.name
             else
                 top.origin;
-            if (top.name.len > 0) _ = paths[@intFromEnum(top.part)].remove(top.name);
+            if (top.name.len > 0) _ = paths[@intFromEnum(top.part)].remove(try pathKey(arena, top.name, top.source_root));
             stack.items.len -= 1;
 
             if (stack.items.len == 0) {
@@ -287,7 +291,10 @@ fn walk(
         // up to decide which, so a name that is not there is a missing agent
         // rather than a model nobody configured.
         if ((r.sigil == .agent or r.sigil == .skill) and !model.is(r.value)) {
-            scoped = try config.pin(arena, io, scoped, r.value);
+            const state_target = session.isGenerated(r.value) or session.isChat(r.value);
+            if (state_target or top.state_context or (scoped.mob == null and config.authored(r.value))) {
+                scoped = try config.pin(arena, io, scoped, r.value);
+            }
         }
         const want: Part = switch (r.sigil) {
             .agent => if (model.is(r.value) or breaks.at(r.value)) {
@@ -301,15 +308,19 @@ fn walk(
             },
         };
 
-        // Already on the way here, so following it would be following it
-        // again. Which kind it is decides only what to call it: lineage is
-        // the turn this one continues, and an inclusion stays inside the same mob.
-        if (paths[@intFromEnum(want)].contains(r.value)) return if (session.isGenerated(r.value))
-            Error.LineageLoops
+        const direct_self = std.mem.eql(u8, r.value, top.name) and top.source_root.len > 0 and want == top.part;
+        const definition = if (config.authored(r.value))
+            try config.definition(arena, io, scoped, r.value, if (direct_self) top.source_root else null)
         else
-            Error.IncludeLoops;
+            null;
+        const src = if (definition) |d| d.bytes else if (config.authored(r.value))
+            return Error.UnknownAgent
+        else
+            (try source(arena, io, scoped, r.value)) orelse return Error.UnknownAgent;
+        const next_root = if (definition) |d| d.root else "";
 
-        const src = (try source(arena, io, scoped, r.value)) orelse return Error.UnknownAgent;
+        const identity = try pathKey(arena, r.value, next_root);
+        if (paths[@intFromEnum(want)].contains(identity)) return if (session.isGenerated(r.value)) Error.LineageLoops else Error.IncludeLoops;
         var diag: doc.Diagnostic = .{};
         const parsed = try doc.parse(arena, src, &diag);
         const next: Frame = .{
@@ -317,15 +328,21 @@ fn walk(
             .mode = doc.detect(src) orelse .md,
             .name = r.value,
             .part = want,
+            .source_root = next_root,
+            .state_context = session.isGenerated(r.value) or session.isChat(r.value),
         };
 
         // Nothing above is read again after this: appending may move the
         // frames, and `top` is a pointer into them.
-        try paths[@intFromEnum(want)].put(arena, next.name, {});
+        try paths[@intFromEnum(want)].put(arena, identity, {});
         try stack.append(arena, next);
     }
 
     return .{ .records = out.items, .origin = origin };
+}
+
+fn pathKey(arena: Allocator, name: []const u8, root: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}\x00{s}", .{ root, name });
 }
 
 /// Nested content carries the quote of the document it sat in, and a ledger
@@ -750,7 +767,9 @@ test "an agent that includes one leading back to it says so" {
 
     const dirs = [_][]const u8{f.dir};
     try testing.expectError(Error.IncludeLoops, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/ping"));
-    try testing.expectError(Error.IncludeLoops, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/selfy"));
+    // A same-layer self-reference is a customization request; with no more
+    // distant definition to wrap, lookup is exhausted.
+    try testing.expectError(Error.UnknownAgent, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/selfy"));
     try testing.expectError(Error.UnknownAgent, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/nosuch"));
 }
 
@@ -1027,7 +1046,7 @@ test "a top that names its own top is a loop; a body naming it is not" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    try testing.expectError(Error.IncludeLoops, expandRecords(arena, f.io, config.Dirs{ .roots = &dirs }, &.{
+    try testing.expectError(Error.UnknownAgent, expandRecords(arena, f.io, config.Dirs{ .roots = &dirs }, &.{
         .{ .sigil = .skill, .value = "test/selfish" },
     }, .md));
 
@@ -1131,12 +1150,33 @@ test "document expansion stays inside the activated mob, while another activatio
     _ = try expand(arena, f.io, dirs, "first/agent");
     // A separate invocation may activate the other mob normally.
     _ = try expand(arena, f.io, dirs, "second/agent");
+    _ = try expand(arena, f.io, dirs, "first/agent");
     try f.agent(arena, "first/agent.md", "* :brain::second/agent\n");
-    try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, "first/agent"));
+    _ = try expand(arena, f.io, dirs, "first/agent");
     try f.agent(arena, "first/agent.md", "* :books::second/agent\n");
-    try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, "first/agent"));
+    _ = try expand(arena, f.io, dirs, "first/agent");
     try f.agent(arena, "first/helper/+/turn.md", "* :brain::second/agent\n");
     try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, "first/helper/+/turn"));
+    // Even through a shared authored definition, state references stay scoped
+    // to the turn's activated mob.
+    try f.agent(arena, "first/helper.md", "* :brain::second/helper\n");
+    try f.agent(arena, "second/helper.md", "* :brain::second/agent/+\n");
+    try f.agent(arena, "first/helper/+/from-shared.md", "* :brain::first/helper\n");
+    try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, "first/helper/+/from-shared"));
+    try f.agent(arena, "first/chatty.md", "* :brain::second/agent//job\n");
+    try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, "first/chatty"));
+    try f.agent(arena, "first/agent.md", "* :brain::first/helper\n");
+    try f.agent(arena, "first/helper.md", "* :brain::second/agent\n");
+    const chat_turn = "first/agent//resume/+/turn";
+    try session.write(arena, f.io, dirs, chat_turn, &.{.{ .sigil = .agent, .value = "first/agent" }});
+    try session.point(arena, f.io, dirs, "first/agent//resume/+", chat_turn);
+    const resumed = try expand(arena, f.io, dirs, "first/agent//resume");
+    try testing.expectEqualStrings("/local/tiny", resumed.records[0].value);
+
+    const foreign_turn = "first/agent/+/foreign";
+    try f.agent(arena, "first/agent/+/foreign.md", "* :brain::second/agent\n");
+    try testing.expectError(error.CrossMobReference, expand(arena, f.io, dirs, foreign_turn));
+
     try f.agent(arena, "first/helper/+.md", "* :brain::second/agent/+\n");
     try testing.expectError(error.CrossMobReference, session.head(arena, f.io, dirs, "first/helper"));
 }
@@ -1169,4 +1209,62 @@ test "double-slash chat references expand and settle, keeping turns and snips ap
     try testing.expectEqualStrings("hello", continued.records[2].content.?);
     const nested = try expand(arena, f.io, dirs, "crew/cody/delegated");
     try testing.expectEqualStrings("other", (try runsOn(arena, nested.records)).?.name);
+}
+
+test "same-name definitions wrap through layers while references restart nearest-first" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-self-wrap-layers");
+    defer f.deinit(arena);
+    const near = try std.fs.path.join(arena, &.{ f.dir, "near" });
+    const middle = try std.fs.path.join(arena, &.{ f.dir, "middle" });
+    const far = try std.fs.path.join(arena, &.{ f.dir, "far" });
+    const dirs = config.Dirs{ .roots = &.{ near, middle, far } };
+
+    const near_agent = try std.fs.path.join(arena, &.{ near, "mobs/team/agent.md" });
+    try std.Io.Dir.cwd().createDirPath(f.io, std.fs.path.dirname(near_agent).?);
+    try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = near_agent, .data = "* :brain::team/agent\n* :compass::\n  > wrapper\n" });
+    const middle_agent = try std.fs.path.join(arena, &.{ middle, "mobs/team/agent.md" });
+    try std.Io.Dir.cwd().createDirPath(f.io, std.fs.path.dirname(middle_agent).?);
+    try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = middle_agent, .data = "* :brain::team/agent\n* :brain::team/helper\n* :compass::\n  > wrapper\n" });
+    const far_agent = try std.fs.path.join(arena, &.{ far, "mobs/team/agent.md" });
+    try std.Io.Dir.cwd().createDirPath(f.io, std.fs.path.dirname(far_agent).?);
+    try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = far_agent, .data = "* :brain::/local/tiny\n* :compass::\n  > base\n" });
+    // The middle file's unrelated include restarts at the nearest root.
+    const near_helper = try std.fs.path.join(arena, &.{ near, "mobs/team/helper.md" });
+    try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = near_helper, .data = "* :compass::\n  > nearest helper\n" });
+    const wrapped = try expand(arena, f.io, dirs, "team/agent");
+    try testing.expectEqual(@as(usize, 5), wrapped.records.len);
+    try testing.expectEqualStrings("/local/tiny", wrapped.records[0].value);
+    try testing.expectEqualStrings("base", wrapped.records[1].content.?);
+    try testing.expectEqualStrings("nearest helper", wrapped.records[2].content.?);
+    try testing.expectEqualStrings("wrapper", wrapped.records[3].content.?);
+    try testing.expectEqualStrings("wrapper", wrapped.records[4].content.?);
+}
+
+test "indirect same-name layer return is a cycle and empty nearest mob owns state" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-layer-cycle");
+    defer f.deinit(arena);
+    const near = try std.fs.path.join(arena, &.{ f.dir, "near" });
+    const far = try std.fs.path.join(arena, &.{ f.dir, "far" });
+    const dirs = config.Dirs{ .roots = &.{ near, far } };
+    const cycle = try std.fs.path.join(arena, &.{ far, "mobs/team/agent.md" });
+    try std.Io.Dir.cwd().createDirPath(f.io, std.fs.path.dirname(cycle).?);
+    try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = cycle, .data = "* :brain::team/helper\n" });
+    const helper = try std.fs.path.join(arena, &.{ far, "mobs/team/helper.md" });
+    try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = helper, .data = "* :brain::team/agent\n" });
+    const overlay = try std.fs.path.join(arena, &.{ near, "mobs/team/agent.md" });
+    try std.Io.Dir.cwd().createDirPath(f.io, std.fs.path.dirname(overlay).?);
+    try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = overlay, .data = "* :brain::team/agent\n" });
+    try testing.expectError(Error.IncludeLoops, expand(arena, f.io, dirs, "team/agent"));
+    try std.Io.Dir.cwd().createDirPath(f.io, try std.fs.path.join(arena, &.{ near, "mobs/team" }));
+    try testing.expect((try config.read(arena, f.io, dirs, try config.nameFile(arena, "team/agent/+"))) == null);
 }

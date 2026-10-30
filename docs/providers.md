@@ -89,6 +89,9 @@ one's input:
 * m8 reads the turn out, as m8.
 * With no `encode` or `parse`, `cmd` is handed m8 and
   answers in it, as `toy` does.
+* The harness normalizes packed records into block spelling before handing
+  the ledger to a provider command or its encoder.
+  * Third-party providers and encoders support only the block form.
 * Which apis there are is no list m8 holds.
   The ones it ships are `m8 encode` and `m8 parse`,
   named the way a command of your own would be.

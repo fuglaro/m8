@@ -43,8 +43,8 @@ carrying a stack it has no business carrying.
   standard-library HTTP client in that command instead.
 
 Nothing about the command line changes with what is built
-where. Symlink `m8-tail` to a binary that holds `tail` and
-it *is* `m8-tail`, the way busybox is: same output, same
+where. Symlink `m8-cat` to a binary that holds `cat` and
+it *is* `m8-cat`, the way busybox is: same output, same
 status.
 
 The url transport is another build-time choice:
@@ -122,8 +122,23 @@ zig build -Dcore=true       # minimal, with riff apart
 ```
 
 * Each only chooses what `small`, `formats` and `split`
-  default to, so any of those can still be said.
+  defaults to, so any of those can still be said.
 * With `riff` nowhere, an address alone at a terminal says
   its one message the plain way.
 * `zig build test` is of the sources: it is handed every
   command whatever is built apart.
+
+## System config directory
+
+The system configuration directory is `/etc/m8-st8/` by default, but can be
+configured at build time:
+
+```bash
+# Use a custom system config directory.
+zig build -Dsystem-config-dir=/opt/m8-system
+```
+
+This is the directory where an administrator places shared agents and core
+resources for all users on the system. It is searched last, after project
+and user configuration. A project does not become trusted merely by existing
+beneath this directory; it still needs to be registered with `m8 register`.

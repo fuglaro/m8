@@ -17,18 +17,18 @@
   > `bash` `-c` `HOME=$TMPDIR exec "$@"`
 
 * :shield::freeze-toolbox
-  > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" exclude --sigil toolbox --sigil brain --sigil books`
+  > `bash` `-euo` `pipefail` `-c` `"$@" | "$M8" cat --pack | { grep -vE '^- :(toolbox|brain|books)::' || test "$?" -eq 1; } | "$M8" cat`
 
 * :shield::workbench
-  > :shield:freeze-toolbox
-  > :shield:secure contain-writes no-loop no-edit-git
+  > :shield:secure contain-writes-soft no-loop no-edit-git
   > :shield:contain-env
   > :shield:contain-home
 
 * :shield::sandbox
   > :shield:workbench
   > :shield:secure private no-edit-m8-st8
+  > :shield:freeze-toolbox
 
 * :shield::jail
   > :shield:sandbox
-  > :shield:secure airgap
+  > :shield:secure airgap contain-writes

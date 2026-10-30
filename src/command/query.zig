@@ -1,10 +1,14 @@
 //! `query` — say something to a chat, and answer with what it said back.
 //!
-//!     m8 ref :MOB/AGENT//CHAT MESSAGE | m8 send | m8 tag :MOB/AGENT//CHAT |
-//!         m8 encode | m8 tail --sigil robot --sigil question --block
+//! Its shell-shaped counterpart selects the last reply or question in a turn:
 //!
-//! is what this does, written once. It is one process, so the run is tagged
-//! as it goes and a run that dies keeps everything up to where it died.
+//!     m8 :MOB/AGENT//CHAT -- MESSAGE | m8 cat --pack |
+//!         grep -E '^- :(robot|question)::' | tail -n 1 | m8 cat --unwrap
+//!
+//! Query returns text without headings, and only accepts an answer from this
+//! run rather than falling back to an earlier reply in the ledger. It is one
+//! process, so the run is tagged as it goes and a run that dies keeps everything
+//! up to where it died.
 //!
 //! It is the form of the address prompt that something with parameters calls: an
 //! address, then the message as one argument, and options in front where a
@@ -67,10 +71,13 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\neither a reply nor a question is
         \\an error, and says so on stderr.
         \\
-        \\It is a pipeline written once:
+        \\The shell-shaped counterpart selects the last reply or question:
         \\
-        \\  m8 ref :demo/mathy "hi" | m8 send | m8 tag :demo/mathy |
-        \\      m8 encode | m8 tail --sigil robot --sigil question --block
+        \\  m8 :demo/mathy -- "hi" | m8 cat --pack |
+        \\      grep -E '^- :(robot|question)::' | tail -n 1 | m8 cat --unwrap
+        \\
+        \\Unlike that filter over the ledger, query accepts only this run's
+        \\answer, and returns text without headings for header values.
         \\
     );
 }

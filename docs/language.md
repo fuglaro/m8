@@ -339,6 +339,50 @@ means is decided by the sigil above it.
 A \r immediately before a \n is stripped, exactly
 one, so \r\r\n ends content in a literal \r.
 
+## Packed spelling
+
+* Packed spelling keeps each record on one physical line.
+  * Its header starts with `- ` instead of `* `.
+  * Each physical newline inside a record becomes `↵`;
+    quote prefixes and indentation are retained.
+  * A literal `↵` is written `↵↵`, including in header values.
+  * The physical newline ending a packed record is framing, not content.
+* For example, these records carry the same content:
+
+```text
+* :robot::
+  > first
+  > second
+
+- :robot::↵  > first↵  > second
+```
+
+* Packed and block records may be mixed in one markdown document.
+  * Separator newlines between records are unchanged by `m8 cat`.
+  * An unpacked record's literal arrows need no escaping.
+
+* Providers receive only block spelling.
+  * The harness normalizes packed records before invoking a provider or encoder.
+
+## Unwrapped projection
+
+* `m8 cat --unwrap` projects records to ordinary Markdown.
+  * A nonempty value becomes a `# VALUE` heading.
+  * Content follows the heading after a blank line, without its quote framing.
+  * No value means no heading; no content means just the heading.
+  * Literal receipt content keeps its four-space indent.
+  * Packed records are decoded before projection.
+  * Adjacent records are separated by a blank line.
+* This is a reading format, not parsable m8 syntax.
+* A question such as `- :question::tool,call_123↵  > Which directory?`
+  becomes:
+
+```markdown
+# tool,call_123
+
+Which directory?
+```
+
 ## Sigils
 
 Every sigil has two spellings, an emoji and a plain

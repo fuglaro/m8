@@ -295,10 +295,10 @@ test "a line of inline code is an argv, and prose is not" {
     defer a.deinit();
     const arena = a.allocator();
 
-    const argv = (try inlineArgv(arena, "`bash` `-euo` `pipefail` `-c` `\"$0\" \"$@\" | m8 exclude`")).?;
+    const argv = (try inlineArgv(arena, "`bash` `-euo` `pipefail` `-c` `\"$0\" \"$@\" | m8 cat --pack`")).?;
     try testing.expectEqual(@as(usize, 5), argv.len);
     try testing.expectEqualStrings("bash", argv[0]);
-    try testing.expectEqualStrings("\"$0\" \"$@\" | m8 exclude", argv[4]);
+    try testing.expectEqualStrings("\"$0\" \"$@\" | m8 cat --pack", argv[4]);
 
     try testing.expect((try inlineArgv(arena, "just some words")) == null);
 }
@@ -497,12 +497,12 @@ test "a wrapper opening with m8 reaches the m8 that is running" {
         &.{ "m8", "ask-shield", "ask" },
         // Only the first word, and only of a wrapper. An `m8` that is an
         // argument is somebody's argument.
-        &.{ "bash", "-c", "m8 exclude --sigil toolbox" },
+        &.{ "bash", "-c", "m8 cat --pack | grep -v '^- :toolbox::' | m8 cat" },
     };
     const full = try wrap(arena, &wrappers, &.{ "m8", "call", "m8", "munge" }, "/opt/m8/bin/m8");
     try testing.expectEqualStrings("/opt/m8/bin/m8", full[0]);
     try testing.expectEqualStrings("bash", full[3]);
-    try testing.expectEqualStrings("m8 exclude --sigil toolbox", full[5]);
+    try testing.expectEqualStrings("m8 cat --pack | grep -v '^- :toolbox::' | m8 cat", full[5]);
     // The tool's own command follows the same rule: its first word, and no
     // other.
     try testing.expectEqualStrings("/opt/m8/bin/m8", full[6]);
@@ -515,7 +515,7 @@ test "a wrapper resolves m8 only in executable position" {
     const arena = a.allocator();
 
     const self = "/opt/m8/bin/m8";
-    const script = "\"$0\" \"$@\" | \"$M8\" exclude --sigil toolbox";
+    const script = "\"$0\" \"$@\" | \"$M8\" cat --pack | { grep -v '^- :toolbox::' || test \"$?\" -eq 1; } | \"$M8\" cat";
     const wrappers = [_][]const []const u8{
         &.{ "m8", "ask-shield", "ask" },
         &.{ "bash", "-c", script },

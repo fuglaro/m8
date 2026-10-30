@@ -280,6 +280,27 @@ pub fn stages(
 /// What a stage says on stderr is held until the turn is in. A provider that
 /// answered has it passed on as it was said, and one that failed has it
 /// given as the reason.
+///
+/// Packed records are an editing spelling, not provider input. Expand them to
+/// the ordinary markdown ledger at the process boundary.
+fn providerInput(arena: Allocator, input: []const u8) ![]const u8 {
+    var lines = std.mem.splitScalar(u8, input, '\n');
+    var has_packed = false;
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "- ")) {
+            has_packed = true;
+            break;
+        }
+    }
+    if (!has_packed) return input;
+
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(arena, input, &diag);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    for (records) |record| try doc.write(&out.writer, .md, record);
+    return out.written();
+}
+
 pub fn run(
     arena: Allocator,
     io: std.Io,
@@ -289,6 +310,7 @@ pub fn run(
     sink: codec.Sink,
     err: *std.Io.Writer,
 ) !codec.Reply {
+    const request = try providerInput(arena, ledger);
     const names = [_][]const u8{ "encode", "cmd", "parse" };
     const argvs = [_]?[]const []const u8{ s.encode, s.cmd, s.parse };
     var children: [3]?std.process.Child = @splat(null);
@@ -315,7 +337,7 @@ pub fn run(
 
     var write_buf: [16 * 1024]u8 = undefined;
     var w = first.?.writerStreaming(io, &write_buf);
-    try w.interface.writeAll(ledger);
+    try w.interface.writeAll(request);
     try w.interface.flush();
     first.?.close(io);
 
@@ -547,6 +569,30 @@ const Collect = struct {
     }
 };
 
+test "packed input is expanded before the provider command" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const io = threaded.io();
+
+    var thrown: std.Io.Writer.Allocating = .init(arena);
+    var collect: Collect = .{ .arena = arena };
+    _ = try run(
+        arena,
+        io,
+        .{
+            .cmd = &.{ "/bin/sh", "-c", "if grep -q '^- '; then exit 9; fi; printf '* :robot::\n  > got expanded input\n'" },
+        },
+        null,
+        "- :raising_hand::↵  > ask\n",
+        collect.sink(),
+        &thrown.writer,
+    );
+    try testing.expectEqualStrings("got expanded input", try collect.got.said(arena));
+}
+
 test "a provider is a command: what it writes is the answer" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
@@ -685,4 +731,16 @@ test "everything the entry said reaches the command, and nothing else does" {
         &thrown.writer,
     );
     try testing.expectEqualStrings("http://x/v1/chat/completions", try collect.got.said(arena));
+}
+
+test "provider input normalizes mixed records and preserves literal arrows" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const input = "* :brain::model\n\n- :raising_hand::↵  > literal ↵↵↵  > next\n";
+    try testing.expectEqualStrings(
+        "* :brain::model\n* :raising_hand::\n  > literal ↵\n  > next\n",
+        try providerInput(a.allocator(), input),
+    );
+    const block = "* :robot::\n  > literal ↵\n";
+    try testing.expectEqualStrings(block, try providerInput(a.allocator(), block));
 }

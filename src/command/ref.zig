@@ -61,10 +61,11 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  { m8 ref :demo/mathy; echo "* :brain::/local/tiny"; } | m8 send
         \\
-        \\What `m8 :demo/x` wrote ends on the 🧠 of the turn it kept, and `m8 tail`
-        \\takes that out:
+        \\What `m8 :demo/x` wrote ends on the 🧠 of the turn it kept.
+        \\Pack the records, select that reference and strip its header:
         \\
-        \\  m8 ref ":$(m8 :demo/x -- hi | m8 tail --value)" "review that" | m8 send
+        \\  turn=$(m8 :demo/x -- hi | m8 cat --pack | sed -n 's/^- :brain::/:/p' | tail -n 1)
+        \\  m8 ref "$turn" "review that" | m8 send
         \\
     );
 }
