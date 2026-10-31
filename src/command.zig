@@ -21,7 +21,6 @@ const every = .{
     @import("command/cat.zig"),
     @import("command/send.zig"),
     @import("command/tag.zig"),
-    @import("command/reset.zig"),
     @import("command/render.zig"),
     @import("command/cast.zig"),
     @import("command/encode.zig"),

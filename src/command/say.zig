@@ -147,8 +147,10 @@ fn run(given: Ctx) !u8 {
         try ctx.err.writeAll("m8 say: say something after the address, or read prose with -i\n");
         return 1;
     }
-    if (terminal and ctx.mode == .m8 and !o.answer and !o.unwrap) {
-        try ctx.out.writeAll("  \n");
+    // Rendered submissions belong in scrollback even when stdin is a pipe
+    // (as it is under riff). Only the padding is for terminal input echo.
+    if (ctx.mode == .m8 and !o.answer and !o.unwrap) {
+        if (terminal) try ctx.out.writeAll("  \n");
         try doc.write(ctx.out, .m8, said.?);
         try ctx.out.flush();
     }

@@ -149,41 +149,6 @@ pub fn exists(arena: Allocator, io: std.Io, dirs: config.Dirs, name: []const u8)
     return (try config.where(arena, io, dirs, try config.nameFile(arena, name))) != null;
 }
 
-/// Whether reading `from` would come to read `ptr`.
-///
-/// A pointer may name another pointer, and that is the one way a chain of
-/// them can close on itself. Asked before `ptr` is pointed at `from`, so the
-/// loop is refused rather than found later by whoever reads it. The walk is
-/// the one `head` makes: a chat with no pointer of its own is read through
-/// the nearest one above it.
-pub fn leadsTo(
-    arena: Allocator,
-    io: std.Io,
-    dirs: config.Dirs,
-    from: []const u8,
-    ptr: []const u8,
-) ReadError!bool {
-    var at = from;
-    // Nothing else writes a pointer to a pointer, so a chain this long is a
-    // loop that was written by hand.
-    var steps: usize = 0;
-    while (steps < 4096) : (steps += 1) {
-        if (isChat(at)) at = try pointerOf(arena, at);
-        if (!isPointer(at)) return false;
-        if (std.mem.eql(u8, at, ptr)) return true;
-        var chat = chatOf(at);
-        at = while (true) {
-            const p = try pointerOf(arena, chat);
-            if (std.mem.eql(u8, p, ptr)) return true;
-            if (try deref(arena, io, dirs, p)) |got| break got;
-            if (try isAgent(arena, io, dirs, chat)) return false;
-            if (std.mem.indexOf(u8, chat, "//") == null) return false;
-            chat = try parentChat(arena, chat);
-        };
-    }
-    return true;
-}
-
 /// Where a chat has got to.
 ///
 /// A chat with no pointer of its own reads as its parent's head, which is the
@@ -500,7 +465,6 @@ test "a chat with no pointer reads as its parent's head" {
     try testing.expectEqualStrings("mob/agent/nested", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent/nested"));
     try testing.expectEqualStrings("mob/agent/nested", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent/nested//forked"));
     try testing.expectError(error.UnknownAgent, head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent/missing"));
-    try testing.expect(!try leadsTo(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent/missing/+", "mob/agent/+"));
 
     try f.write(arena, "mob/agent//c1/+.md", "* :brain::mob/agent//c1/+/two\n");
     try testing.expectEqualStrings("mob/agent//c1/+/two", try head(arena, f.io, config.Dirs{ .roots = &dirs }, "mob/agent//c1/sub"));

@@ -15,6 +15,16 @@ unset M8_ST8_USER_ROOT M8_ST8_DATA_ROOT
 m8=${M8_BIN:-"$repo/zig-out/bin/m8"}
 "$m8" say --answer --unwrap :demo/echo hello > "$root/reply"
 grep -q hello "$root/reply"
+# Riff pipes each submission to `say -r -i`: rendered output must retain
+# the submission even though stdin (and, here, stdout) is not a terminal.
+printf 'riff submission\n' | "$m8" say -r -i --no-advance :demo/echo > "$root/rendered"
+grep -q '🙋' "$root/rendered"
+grep -q 'riff submission' "$root/rendered"
+# Explicit reply-only and unwrapped presentations must not gain a prompt.
+printf 'riff answer\n' | "$m8" say -r -i --no-advance --answer :demo/echo > "$root/answer"
+if grep -q '🙋' "$root/answer"; then exit 1; fi
+printf 'riff unwrap\n' | "$m8" say -i --no-advance --unwrap :demo/echo > "$root/unwrap"
+if grep -q '🙋\|:raising_hand:' "$root/unwrap"; then exit 1; fi
 cp "$root/project/mobs/demo/.chats/echo/+.md" "$root/pointer"
 turns_before=$(find "$root/project/mobs/demo/.chats/echo/+" -type f | wc -l | tr -d ' ')
 "$m8" say --no-advance --answer --unwrap :demo/echo stateless > "$root/stateless"
@@ -24,14 +34,23 @@ turns_after=$(find "$root/project/mobs/demo/.chats/echo/+" -type f | wc -l | tr 
 test "$turns_after" -gt "$turns_before"
 test -f "$root/project/mobs/demo/.chats/echo/+.md"
 test -d "$root/project/mobs/demo/.mob-space"
-"$m8" reset --to :/toy/echo :demo/echo
 rm -rf "$root/project/mobs/demo/.mob-space"
 "$m8" say --answer --unwrap :demo/echo model-head > "$root/model-head"
 grep -q model-head "$root/model-head"
 test -d "$root/project/mobs/demo/.mob-space"
 "$m8" say --answer --unwrap :demo/echo//job next > "$root/subreply"
 test -f "$root/project/mobs/demo/.chats/echo/_/job/+.md"
-"$m8" reset --new :demo/echo//job
+"$m8" say :demo/echo//job-
+test ! -f "$root/project/mobs/demo/.chats/echo/_/job/+.md"
+"$m8" say --new :demo/echo//job
+test -f "$root/project/mobs/demo/.chats/echo/_/job/+.md"
+grep -q 'demo/echo' "$root/project/mobs/demo/.chats/echo/_/job/+.md"
+# The bare address shorthand reaches the same promptless reset.
+"$m8" :demo/echo//job- </dev/null
+test ! -f "$root/project/mobs/demo/.chats/echo/_/job/+.md"
+"$m8" say --answer --unwrap :demo/echo//job again > "$root/subreply"
+"$m8" :demo/echo//job-- </dev/null
+grep -qx '\* :brain::demo/echo' "$root/project/mobs/demo/.chats/echo/_/job/+.md"
 "$m8" say --answer --unwrap :useronly/echo relocated > "$root/userreply"
 grep -q relocated "$root/userreply"
 test -f "$root/data/m8-st8/user/mobs/useronly/.chats/echo/+.md"

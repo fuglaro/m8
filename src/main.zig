@@ -141,16 +141,10 @@ pub fn main(init: std.process.Init) !u8 {
             try err.flush();
             return 1;
         }
-        // Preserve reset-only address shorthand without treating it as a run.
-        // A suffix with a prompt remains a `say` starting-point selector.
-        if (line.len == 1 and (std.mem.endsWith(u8, body, "-") or std.mem.endsWith(u8, body, "--"))) {
-            const is_new = std.mem.endsWith(u8, body, "--");
-            const name = body[0 .. body.len - if (is_new) @as(usize, 2) else 1];
-            const word_reset = try std.mem.concat(arena, u8, &.{ ":", name });
-            line = if (is_new)
-                &.{ "reset", "--new", word_reset }
-            else
-                &.{ "reset", word_reset };
+        // A lone reset suffix is a promptless `say`, so it never waits on
+        // stdin. A suffix with a prompt is a starting-point selector.
+        if (line.len == 1 and std.mem.endsWith(u8, body, "-")) {
+            line = &.{ "say", word };
             break :shorthand;
         }
         if (line.len <= 1 and !std.mem.endsWith(u8, word, "-") and

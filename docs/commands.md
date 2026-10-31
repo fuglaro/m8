@@ -162,10 +162,10 @@ m8 watch :crew/cody//delegated
 * `send` runs a ledger and writes the turn without keeping it.
 * `tag :MOB/AGENT` keeps a turn and points the chat at it.
   * `--no-advance` keeps the turn and moves nothing.
-* `reset :MOB/AGENT` takes a chat's pointer away, so it reads as its parent again.
-  * `--new` starts it from the agent it is under, whatever the chats above it
-    have got to.
-  * `--to :MOB/AGENT//CHAT` has it follow Y as named, unsettled.
+* Promptless `say CHAT-` takes the chat's pointer away, so it reads as its
+  parent again; `say --parent CHAT` is the equivalent spelling.
+  * `say CHAT--` starts it from the authored agent, whatever its chats have got
+    to; `say --new CHAT` is the equivalent spelling.
 * `cat` reads a document and writes block markdown by default.
   * `--pack` writes each record on one physical line for shell filters.
   * `--unwrap` writes generic Markdown: record values become `# VALUE`

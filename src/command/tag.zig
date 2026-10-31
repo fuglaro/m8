@@ -61,7 +61,7 @@ fn run(ctx: Ctx) !u8 {
     if (a.suffix != .none) {
         try ctx.err.writeAll(
             "m8 tag: the address carries no `:` or `-`; " ++
-                "those are `m8 tag --no-advance` and `m8 reset`\n",
+                "those are `m8 tag --no-advance` and `m8 say CHAT-` (or `say --parent CHAT`)\n",
         );
         return 1;
     }

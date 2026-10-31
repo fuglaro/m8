@@ -31,8 +31,6 @@ pub const Error = error{
     NothingToReset,
     /// A turn that was named and is not there.
     UnknownTurn,
-    /// A pointer told to follow something that leads back to it.
-    FollowLoops,
 };
 
 /// Anything a diagnosis needs that an error name cannot carry.
@@ -255,35 +253,6 @@ pub fn renew(arena: Allocator, io: std.Io, dirs: config.Dirs, a: Address) !void 
     try session.point(arena, io, dirs, ptr, agent);
 }
 
-/// Point a chat at `target` as it is named.
-///
-/// Nothing is settled, which is the difference from tagging a 🧠: a chat
-/// named here is followed, so what points at it reads as wherever that chat
-/// gets to. The target must belong to the same mob.
-///
-/// A pointer that names a pointer is the one place a loop can be written, so
-/// one that would lead back to itself is refused before it is.
-pub fn follow(
-    arena: Allocator,
-    io: std.Io,
-    dirs: config.Dirs,
-    a: Address,
-    target: Address,
-) !void {
-    const ptr = switch (a.kind) {
-        .chat => try session.pointerOf(arena, a.name),
-        .model, .turn => return Error.NothingToReset,
-    };
-    const scoped = try config.pin(arena, io, dirs, a.name);
-    if (target.kind != .model) _ = try config.pin(arena, io, scoped, target.name);
-    const named = switch (target.kind) {
-        .chat => try session.pointerOf(arena, target.name),
-        .model, .turn => target.name,
-    };
-    if (try session.leadsTo(arena, io, dirs, named, ptr)) return Error.FollowLoops;
-    try session.point(arena, io, dirs, ptr, named);
-}
-
 /// Keep `records` as a turn tagged at `a`, and move what `a` moves.
 ///
 /// A document that is one 🧠 and nothing else already names a turn, so it is
@@ -441,29 +410,4 @@ test "tagging, side questions, subchat inheritance and reset retain explicit cha
     var err: std.Io.Writer.Allocating = .init(arena);
     const missing = try resolve(arena, f.io, dirs, ":mob/agent/+/missing", &d);
     try testing.expectError(error.Said, found(arena, f.io, dirs, missing, &err.writer));
-}
-
-test "chat following stays inside a mob and refuses cycles" {
-    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
-    defer threaded.deinit();
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-    const f = try Fixture.init(arena, &threaded, "m8-address-follow");
-    defer f.deinit();
-    try f.write(arena, "mob/agent", "* :brain::/local/tiny\n");
-    try f.write(arena, "other/agent", "* :brain::/local/tiny\n");
-    const dirs: config.Dirs = .{ .roots = &.{f.dir} };
-    var d: Diagnostic = .{};
-    const one = try resolve(arena, f.io, dirs, ":mob/agent//one", &d);
-    const two = try resolve(arena, f.io, dirs, ":mob/agent//two", &d);
-    try follow(arena, f.io, dirs, two, one);
-    try testing.expectError(Error.FollowLoops, follow(arena, f.io, dirs, one, two));
-    try testing.expectError(Error.FollowLoops, follow(arena, f.io, dirs, one, one));
-    const other = try resolve(arena, f.io, dirs, ":other/agent", &d);
-    try testing.expectError(error.CrossMobReference, follow(arena, f.io, dirs, one, other));
-    const model_target = try resolve(arena, f.io, dirs, ":/local/tiny", &d);
-    try follow(arena, f.io, dirs, one, model_target);
-    try testing.expectEqualStrings("/local/tiny", try read(arena, f.io, dirs, one));
-    try testing.expectError(error.CrossMobReference, tag(arena, f.io, dirs, one, &.{.{ .sigil = .agent, .value = "other/agent" }}, .{}));
 }

@@ -181,7 +181,7 @@ See: PLAN_AGENTS_*.md
 - Agent definitions, transcripts, wire requests, tool exchanges, and policies share one markdown-compatible grammar.
 - Commands compose as stdin/stdout filters; tools and providers are ordinary commands.
 - Chats are movable refs (`+.md`); immutable turns live under `+/`, similar to Git refs and objects.
-- Core flow: `ref → send → tag`, with `encode`, `parse`, `query`, `render`, `tail`, and `reset` as composable pieces.
+- Core flow: `ref → send → tag`, with `encode`, `parse`, `query`, `render`, and `tail` as composable pieces; promptless `say CHAT-` / `say CHAT--` handle chat resets.
 - Sigils define records such as 🧠, 🙋, 🤖, 💭, 📲, 🧾, 🟢, 🚫, 🧰, and  .
 - Shields restrict tools by process wrapping and compose through intersection.
 - Config resolves nearest-first through `.m8-st8/` and XDG config.
