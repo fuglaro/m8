@@ -1,24 +1,22 @@
 //! m8 — a composable shell harness.
 //!
-//!     m8 [:MOB/AGENT[:|-|--] [-p] [-v] [-- PROMPT]]
+//!     m8 [:MOB/AGENT[:|-|--] [-r] [-v] [-- PROMPT]]
 //!     m8 COMMAND [ARGS]
 //!
-//! `:MOB/AGENT` sits where a command would. Address shorthand supplies `at`
-//! with one prompt argument after `--`; a bare `m8` shows the overview.
+//! `:MOB/AGENT` sits where a command would. Address shorthand supplies `say`
+//! with an optional prompt after `--`; a bare `m8` shows the overview.
 //! There is no implicit/global chat selection.
 //!
-//! Every command is `m8 COMMAND ARGS` with stdin, and resolves whatever it
-//! names itself: `m8 ref :demo/mathy`. So there is one kind of command, and `at`
-//! is the pipeline of them written once.
+//! `say` handles a complete run, while ordinary commands remain composable
+//! filters that read stdin and write stdout.
 //!
 //! `--help` is a process-level option: `m8 --help` is the overview and
 //! `m8 COMMAND --help` is that command's page. It is read before a command's
 //! own arguments, so no command has to remember to answer it and no two answer
 //! it differently.
 //!
-//! `at` writes a terminal the rendered spelling and everything else
-//! markdown. A command writes markdown whatever stdout is, and `m8 render` is
-//! how a document becomes the rendered spelling.
+//! `say -r` writes the rendered spelling; ordinary commands write markdown.
+//! `m8 render` gives any document its rendered spelling.
 //!
 //! Everything the process does hangs off one arena. A run is short: read a
 //! document, transform it, write it, exit. Nothing outlives that, so nothing
@@ -39,36 +37,33 @@ fn overview(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 - the composable agentic shell harness
         \\
-        \\  m8 :MOB/AGENT[:|-|--] [-p] [-v] [-- REQUEST_MESSAGE]
+        \\  m8 :MOB/AGENT[:|-|--] [-r] [-v] [-- PROMPT]
         \\  m8 COMMAND [ARGS]
         \\
-        \\:MOB/AGENT sends a REQUEST_MESSAGE or stdin, and is short for `m8 at`.
-        \\Put `--` before a request supplied as command-line arguments. `-p`
-        \\renders and streams the reply even when stdout is not a terminal.
-        \\`-v` says on stderr what the run is doing: a thought opening, a tool
-        \\called.
+        \\:MOB/AGENT is shorthand for `m8 say -i`: prompt text and stdin
+        \\prose are submitted. Put -- before a prompt given as arguments.
+        \\Use -r to render off-terminal and -v for progress on stderr.
         \\
         \\:demo/mathy talks to that agent's own chat and moves it on.
         \\An address is always explicit: bare m8 shows this page, not a chat.
         \\A subchat forks from its parent; `:` asks without advancing it,
-        \\`-` resets to its parent, and `--` resets to its authored agent.
-        \\The prompt separator is a separate `--` after the address.
+        \\`-` resets to its parent, and `--` resets to its authored agent
+        \\when no prompt is supplied. The prompt separator is a separate `--`
+        \\after the address.
         \\
-        \\An address alone at a terminal opens the `tui` core/config.json names,
-        \\with the address after it. With none named it is riff, sending each
-        \\message with `m8 at -p -v :MOB/AGENT`.
+        \\An address alone at a terminal opens the configured `tui`; by default
+        \\it is riff, sending each message with `m8 say -r -v -i :MOB/AGENT`.
         \\
         \\  m8 :demo/mathy -- "Tell me about the Riemann Sphere."
         \\  m8 :demo/mathy -- "Tell me more."
         \\  m8 :demo/mathy//aside -- "A different thought."
         \\
-        \\Every command reads stdin and writes stdout, so the same thing is a
-        \\pipeline too. A command writes markdown whatever stdout is, and takes
-        \\options where address shorthand takes marks:
+        \\Commands compose through stdin and stdout. Use `say --no-send` to
+        \\build a read-only request for composition; say does not infer
+        \\documents from stdin:
         \\
-        \\  m8 ref :demo/mathy "And in one sentence?" | m8 send | m8 tag :demo/mathy
-        \\  m8 ref :demo/mathy | m8 encode openai-completions >request.json
-        \\  m8 query :demo/mathy "And in one sentence?"
+        \\  m8 say --no-send :demo/mathy | m8 encode openai-completions >request.json
+        \\  m8 say --answer :demo/mathy "And in one sentence?"
         \\
         \\A provider is a file core/providers/NAME.json. Its `cmd`, `encode`,
         \\`parse` and `models` are commands. Other nameable values reach them
@@ -129,8 +124,8 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
 
-    // An explicit address is shorthand for `at`. Its grammar is
-    // resolved here so that `at` stays one plain form.
+    // An explicit address is shorthand for `say`. Its grammar is
+    // resolved here so that `say` stays one plain form.
     var line: []const []const u8 = @ptrCast(args);
     if (line.len == 0) {
         try overview(out);
@@ -138,7 +133,7 @@ pub fn main(init: std.process.Init) !u8 {
         try out.flush();
         return 0;
     }
-    if (address.isAddress(line[0])) {
+    if (address.isAddress(line[0])) shorthand: {
         const word: []const u8 = line[0];
         const body = address.body(word) orelse "";
         if (body.len == 0 or std.mem.eql(u8, body, ":") or std.mem.eql(u8, body, "-") or std.mem.eql(u8, body, "--")) {
@@ -146,12 +141,24 @@ pub fn main(init: std.process.Init) !u8 {
             try err.flush();
             return 1;
         }
+        // Preserve reset-only address shorthand without treating it as a run.
+        // A suffix with a prompt remains a `say` starting-point selector.
+        if (line.len == 1 and (std.mem.endsWith(u8, body, "-") or std.mem.endsWith(u8, body, "--"))) {
+            const is_new = std.mem.endsWith(u8, body, "--");
+            const name = body[0 .. body.len - if (is_new) @as(usize, 2) else 1];
+            const word_reset = try std.mem.concat(arena, u8, &.{ ":", name });
+            line = if (is_new)
+                &.{ "reset", "--new", word_reset }
+            else
+                &.{ "reset", word_reset };
+            break :shorthand;
+        }
         if (line.len <= 1 and !std.mem.endsWith(u8, word, "-") and
             try std.Io.File.stdin().isTty(io) and try std.Io.File.stdout().isTty(io))
         tui: {
             // Check the address before a configured tui or riff can take over
             // the process. In particular, those interactive paths otherwise
-            // bypass `at`'s normal ref validation.
+            // bypass `say`'s normal ref validation.
             const checked: anyerror![]const u8 = preflight: {
                 const dirs = try config.discover(arena, io, init.environ_map);
                 const a = address.typed(arena, io, dirs, word, err) catch |e| break :preflight e;
@@ -177,24 +184,27 @@ pub fn main(init: std.process.Init) !u8 {
             // A build without riff still answers, one message at a time.
             if (command.find("riff") == null and
                 try launch.beside(arena, io, self, command.prefix ++ "riff") == null) break :tui;
-            return launch.become(io, &.{ self, "riff", "-s", "2", self, "at", "-p", "-v", word });
+            return launch.become(io, &.{ self, "riff", "-s", "2", self, "say", "-r", "-v", "-i", word });
         }
-        var at: std.ArrayList([]const u8) = .empty;
-        try at.append(arena, "at");
+        var say: std.ArrayList([]const u8) = .empty;
+        try say.append(arena, "say");
         var rest = line[@min(1, line.len)..];
-        while (rest.len > 0 and (std.mem.eql(u8, rest[0], "-p") or
+        while (rest.len > 0 and (std.mem.eql(u8, rest[0], "-r") or
             std.mem.eql(u8, rest[0], "-v") or std.mem.eql(u8, rest[0], "-vv"))) : (rest = rest[1..])
-            try at.append(arena, rest[0]);
-        try at.append(arena, word);
+            try say.append(arena, rest[0]);
+        // A supplied prompt needs no terminal submission. Redirected prose
+        // still follows it; without a prompt, a terminal may collect one.
+        if (rest.len <= 1 or !try std.Io.File.stdin().isTty(io)) try say.append(arena, "-i");
+        try say.append(arena, word);
         if (rest.len > 0) {
             if (!std.mem.eql(u8, rest[0], "--")) {
                 try err.writeAll("m8: put -- before what you want to say\n");
                 try err.flush();
                 return 1;
             }
-            if (rest.len > 1) try at.append(arena, try std.mem.join(arena, " ", rest[1..]));
+            if (rest.len > 1) try say.append(arena, try std.mem.join(arena, " ", rest[1..]));
         }
-        line = at.items;
+        line = say.items;
     }
 
     const cmd_args = line[1..];

@@ -114,9 +114,9 @@ cat .m8-st8/mobs/demo/.chats/mathy/+/tduyxbutjb.md
 The same thing is a pipeline, and each step can be had on its own:
 
 ```bash
-m8 ref :demo/mathy hi | m8 send | m8 tag :demo/mathy     # what m8 :demo/mathy -- hi does
-m8 ref :demo/mathy | m8 encode openai-responses            # the request a model would see
-m8 query :demo/critic//job "Review that."                  # the reply alone, as text
+m8 say --no-send :demo/mathy hi | m8 send | m8 tag :demo/mathy  # what m8 say :demo/mathy hi does
+m8 say --no-send :demo/mathy | m8 encode openai-responses       # the request a model would see
+m8 say --answer --unwrap :demo/critic//job "Review that."       # reply text
 ```
 
 An address alone at a terminal opens `riff`, an editor pinned under the

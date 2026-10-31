@@ -8,7 +8,7 @@
   > `m8` `secure-shield`
 
 * :shield::check
-  > `bash` `-e` `-c` `said=$("$M8" query --no-advance ":$0" "$*"); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"`
+  > `bash` `-e` `-c` `said=$("$M8" say --no-advance --answer --unwrap ":$0" "$*"); [ "$(printf %s "$said" | tr A-Z a-z)" = allow ] || { echo "Failed agentic check: $said" >&2; exit 1; }; exec "$@"`
 
 * :shield::contain-env
   > `bash` `-c` `for v in $(compgen -e); do case $v in __*|M8|M8_*|TMPDIR|PATH|HOME|LANG|LC_*|TERM|COLORTERM|NO_COLOR|CLICOLOR|COLUMNS|LINES|TZ) ;; *) unset "$v";; esac; done; exec "$@"`

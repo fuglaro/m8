@@ -97,7 +97,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\The ledger arrives on stdin, with every 🧠 expanded into what it
         \\names. What comes out is one api's view of it.
         \\
-        \\  m8 ref :demo/mathy | m8 encode m8 >ledger.md
+        \\  m8 say --no-send :demo/mathy | m8 encode m8 >ledger.md
         \\  m8 encode openai-completions <ledger.md >request.json
         \\
         \\Encoding is total and loses whatever the target cannot say, which is
@@ -111,8 +111,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\expanding it, so what comes out is the ledger from there on. NAME is
         \\what a 🧠 says: a turn, or an agent.
         \\
-        \\  m8 ref :demo/mathy | m8 encode --break mathy/+/tduyxbutjb
-        \\  m8 ref :demo/mathy | m8 encode --break mathy     the chat, without its agent
+        \\  m8 say --no-send :demo/mathy | m8 encode --break mathy/+/tduyxbutjb
+        \\  m8 say --no-send :demo/mathy | m8 encode --break mathy     the chat, without its agent
         \\
         \\A request needs no provider, because the ledger carries the model and
         \\its parameters — so one can be built for a provider m8 has never been

@@ -32,9 +32,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\pointed at it and nothing is written. Anything else is kept as a new
         \\turn and pointed at. What comes out is the 🧠 now pointed at.
         \\
-        \\  m8 ref :demo/mathy "hi" | m8 send | m8 tag :demo/mathy    carry mathy on
-        \\  m8 ref :demo/mathy | m8 tag :demo/mathy//aside             fork a chat
-        \\  m8 ref :demo/mathy "hi" | m8 send | m8 tag :demo/mathy//other   keep a run elsewhere
+        \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy    carry mathy on
+        \\  m8 say --no-send :demo/mathy | m8 tag :demo/mathy//aside             fork a chat
+        \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy//other   keep a run elsewhere
         \\
         \\  :demo/agent//chat  the turn goes in the chat, and its pointer advances
         \\  :MOB/AGENT/+/TURN   a turn goes beside its parent

@@ -621,7 +621,7 @@ about itself, rather than what it says.
 Two sigils reach into another file and the mark decides
 which half comes back. 🧠 wants what the file says; 📚
 wants what it says about itself. On the command line
-those are `m8 ref :MOB/AGENT` and `m8 top :MOB/AGENT`.
+those are `m8 say --no-send :MOB/AGENT` and `m8 top :MOB/AGENT`.
 
 A file with no 🔝 is all body and has no top at all, so
 📚 naming one yields nothing rather than the whole of

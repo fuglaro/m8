@@ -23,14 +23,14 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 top @SKILL
+        \\  m8 top :MOB/AGENT
         \\
         \\Writes a 📚 naming SKILL, and nothing else. A 📚 expands to the
         \\file's top — what sits between its two 🔝 — so that is what joins
         \\a ledger it is written into.
         \\
         \\  m8 top :demo/tight-docs | m8 :demo/mathy -- "tidy the README"
-        \\  { m8 top :demo/tight-docs; m8 ref :demo/mathy "tidy the README"; } | m8 send
+        \\  { m8 top :demo/tight-docs; m8 say --no-send :demo/mathy "tidy the README"; } | m8 send
         \\
         \\It goes straight to the agent's own file. A chat has no top, and
         \\neither has a model.

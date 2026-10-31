@@ -22,7 +22,7 @@
   > > Give Cody a bounded task with clear objectives, scope, and constraints,
   > > or continue=true to give feedback on the previous task.
   >
-  > `m8` `call` `--md` `m8` `query` `{{continue!--new}}` `:crew/cody//delegated` `{{task|}}`
+  > `m8` `call` `--md` `m8` `say` `--answer` `--unwrap` `{{continue!--new}}` `:crew/cody//delegated` `{{task|}}`
   > * task string
   >   The task to complete and any relevant scope or constraints.
   > * continue boolean

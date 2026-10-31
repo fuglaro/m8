@@ -1,7 +1,7 @@
 # Commands
 
 ```bash
-m8 [:MOB/AGENT[:|-|--] [-p] [-v] [-- PROMPT]]
+m8 [:MOB/AGENT[:|-|--] [-r] [-v] [-- PROMPT]]
 m8 COMMAND [ARGS]
 ```
 
@@ -49,10 +49,10 @@ m8 :demo/mathy/+/tduyxbutjb -- "Tell me more."
 ▐ 🧠:demo/mathy/+/ypfpkuimzg
 ```
 
-* `:MOB/AGENT` sits where a command would and is shorthand for `at`.
-  A prompt supplied as arguments follows `--`; its words are joined with a
-  space. `m8 :demo/mathy -p -- tell me` is
-  `m8 at -p :demo/mathy "tell me"`.
+* `:MOB/AGENT` sits where a command would as convenience shorthand for `say`.
+  The launcher form puts `--` after the address and joins following words as
+  the prompt. Explicit `say` takes one quoted prompt argument without a separator:
+  `m8 say :demo/mathy "tell me"`.
 * A bare `m8` shows help. There is no global/default chat and no `@` address.
 * An address explicitly names an agent's chat, a subchat, or an immutable turn:
   ```
@@ -65,10 +65,10 @@ m8 :demo/mathy/+/tduyxbutjb -- "Tell me more."
 * `:brain:` and 🧠 also mark an address, so a printed reference can be pasted back.
 * A trailing `:` asks without advancing the chat. `-` resets it to its parent;
   `--` resets it to its authored agent, regardless of its parent's head.
-  The separate `--` after an address remains the prompt separator.
-* `m8 :demo/mathy -- hi` is the one-process form of
-  `m8 ref :demo/mathy hi | m8 send | m8 tag :demo/mathy`, with replies
-  streamed and progress kept incrementally. No other chat is implicitly moved.
+  In launcher shorthand only, a separate `--` after the address introduces
+  prompt words. Explicit `say` takes one quoted prompt argument directly.
+* Compose the addressed run from filters when needed:
+  `m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy`.
 * Every agent belongs to one mob: `mobs/demo/mathy.md`. Agent definitions may
   nest, for example `mobs/demo/utils/mathy.md`, and path components cannot start
   with a period. `//` separates an authored agent path from a subchat path;
@@ -81,9 +81,9 @@ m8 :demo/mathy/+/tduyxbutjb -- "Tell me more."
   to give it an address and a chat. See [Models](configs.md#models).
 * State is written to the selected mob's storage, not the nearest arbitrary
   config folder. See [Configs](configs.md).
-* At a terminal, an address alone opens the configured UI. `-p` renders and
-  streams a single submission even through a pipe. Ordinary filters always
-  write markdown; `m8 render` gives any document its rendered spelling.
+* At a terminal, an address alone opens the configured UI. `say -r` renders
+  and streams even when stdout is not a terminal. Ordinary filters write
+  markdown; `m8 render` gives any document its rendered spelling.
   * Rendered 📜, 🤖, 💭 and 📲 text is highlighted as markdown, without
     leaving anything out. Non-markdown text indented four spaces is shown as is.
     Wide lines wrap with their quote and indent carried along.
@@ -103,8 +103,9 @@ m8 munge --help            one tool and all its operations
 A leading `--help` is m8's rather than any command's, so no
 command has to parse it and no two answer it differently.
 It is the only help option; `-h` remains an ordinary argument.
-The words after an address are prose after the required `--`, so a
-`--help` among them is said rather than read.
+In launcher shorthand, words after the address require `--`; in explicit
+`say`, the prompt is one quoted argument. A prompt beginning with `--help` is
+prose rather than help.
 
 A page you asked for is written to stdout, where it can
 be paged and piped. A page handed back instead of what
@@ -113,170 +114,75 @@ of a document.
 
 ## Assembling
 
-`m8 :MOB/AGENT` builds a ledger from three things: what
-the address reads as, whatever was piped in, and the
-prompt, in that order.
-
-```
-nothing piped   ADDRESS → prompt
-m8 piped        ADDRESS → the document → prompt
-anything else   ADDRESS → prompt, then the text
-```
-
-One rule is behind all three: what arrived is added to,
-and nothing else is. A document piped in is records
-already, so it follows the address as it is — which is
-how a model piped in after a chat takes it over, since
-the last model named is the one that answers. Anything
-else piped in is prose rather than context — it is what
-somebody would have typed after the address — so it
-joins the prompt.
+`say` reads an addressed conversation and an optional prompt. It reads stdin
+only with `-i`, appending that prose after the prompt; otherwise stdin is
+untouched. It does not infer m8 documents from stdin.
 
 ```bash
-cat notes.txt | m8 :demo/pagey -- "Summarize:"               # one 🙋, prompt first
-echo "* :brain::/local/tiny" | m8 :demo/mathy -- "Quickly?"
-m8 top :demo/tight-docs | m8 :demo/mathy -- "Tidy the README."
+m8 say :demo/pagey "Summarize this:"
+m8 say -i :demo/pagey "Summarize this:" <notes.txt
+m8 say --no-send :demo/mathy | m8 encode openai-responses
 ```
 
-Piping is not required, and neither is a prompt when
-something was piped. With neither, at a terminal, the
-address alone opens a conversation with it: `m8 :demo/mathy`
-is `m8 riff m8 at -p -v :demo/mathy`. See [Riffing](#riffing).
-
-What opens is the `tui` in `core/config.json`:
+With no prompt and no explicit input, an address at a terminal opens the
+configured UI. By default this is riff, which submits each message with
+`m8 say -r -v -i :MOB/AGENT`.
 
 ```json
-{ "tui": ["m8", "riff", "m8", "at", "-p", "-v"] }
+{ "tui": ["m8", "riff", "m8", "say", "-r", "-v", "-i"] }
 ```
 
-* The address is appended to it.
-* An `m8` first is this m8.
-* That value is also the default, for when nothing names one.
-* A build without riff says the message the plain way.
-
-`-p` after the address is one message the plain way: a
-terminal collects lines until Ctrl-D, then shows the
-submitted 🙋 before waiting for the reply; Ctrl-D before
-anything was entered quietly cancels. An empty
-non-terminal input still has nothing to say, and m8 says
-so.
-
-A document is told from prose by its first line alone,
-so one that opens like a document and then goes wrong is
-an error rather than a prompt.
+`-r` renders and streams even when stdout is not a terminal. A document follows
+an address only when explicitly composed, for example with `say --no-send`
+and `send`.
 
 ## Composing
 
-Every command reads stdin and writes stdout, and the
-ones that take an address resolve it themselves. So
-what `m8 :MOB/AGENT` does is a pipeline too, and each step can be
-had on its own:
+Commands compose through stdin and stdout. Commands that take an address
+resolve it themselves. `say` combines address resolution, optional prompt and
+stdin prose, model execution, and chat advancement in one operation.
 
 ```bash
-m8 ref :demo/mathy hi | m8 send | m8 tag :demo/mathy      what m8 :demo/mathy -- hi does
-m8 ref :demo/mathy | m8 tag :demo/mathy//aside             fork, with nothing said
-m8 ref :demo/mathy hi | m8 send | m8 tag :demo/mathy//other     keep a run somewhere else
-m8 ref :demo/mathy | m8 encode >.m8-st8/mobs/demo/notes.md        a chat, flattened into an agent
-m8 ref :demo/mathy | m8 encode | m8 render           a chat, as a person reads it
-m8 query :demo/critic//job "Review that."             the reply alone, as text
-m8 watch :crew/cody//delegated                   a chat, as it moves
+m8 say :demo/mathy "Tell me more."
+m8 say -r -i :demo/mathy "Summarize this:" <notes.txt
+m8 say --no-send :demo/mathy | m8 encode openai-responses
+m8 say --answer --unwrap :demo/critic//job "Review that."
+m8 watch :crew/cody//delegated
 ```
 
-* `ref :MOB/AGENT` writes the 🧠 that X reads as now.
-  * It names the turn rather than the chat, so it is a
-    snapshot that stays put when the chat moves on.
-  * It is a reference and not a copy, which is what lets
-    `tag` point at it without keeping it again.
-  * What it names is looked for: a turn or an agent that
-    is not there is an error, not a 🧠 for nothing.
-  * One argument after the address is a message, and follows
-    as a 🙋 — or as the ❗ a chat waiting on a question is owed.
-  * `--piped` reads stdin as prose and says that too.
-    Without it stdin is left alone, so a `ref` run by a
-    tool never waits on a pipe that is not its own.
-* `send` runs a ledger and writes the turn: the ledger
-  as it arrived and whatever the run added. It keeps
-  nothing, so one run can be kept wherever it is
-  tagged, or nowhere.
-* `tag :MOB/AGENT` keeps a turn and points X at it.
-  * A document that is one 🧠 already names a turn and is
-    pointed at without writing anything.
-  * Anything else is kept as a new turn.
-  * Its output is the 🧠 now pointed at, and nothing
-    else — a ref was written, and that is its receipt.
+* `--no-send` emits the reference and optional submission without running or
+  changing a chat.
+* `--answer` selects a reply or question from this run; pair it with `--unwrap`
+  for plain answer text.
+* `-i` explicitly adds stdin as prose. Without it stdin is untouched.
+* `--no-advance`, `--new`, and `--parent` control whether a run moves a chat and
+  where it starts. Address suffixes provide the same starting choices; use
+  `--chat` instead of a `//` suffix, never with an address suffix.
+
+* `send` runs a ledger and writes the turn without keeping it.
+* `tag :MOB/AGENT` keeps a turn and points the chat at it.
   * `--no-advance` keeps the turn and moves nothing.
-* `reset :MOB/AGENT` takes a chat's pointer away, so it reads as
-  its parent again.
-  * `--new` starts it from the agent it is under, whatever
-    the chats above it have got to.
-  * `--to :MOB/AGENT//CHAT` has it follow Y as named, unsettled:
-    `m8 reset --to :demo/mathy :demo/mathy//aside` has aside follow mathy.
-  * Something that would lead back to itself is refused.
+* `reset :MOB/AGENT` takes a chat's pointer away, so it reads as its parent again.
+  * `--new` starts it from the agent it is under, whatever the chats above it
+    have got to.
+  * `--to :MOB/AGENT//CHAT` has it follow Y as named, unsettled.
 * `cat` reads a document and writes block markdown by default.
   * `--pack` writes each record on one physical line for shell filters.
-  * Packed and block records may be mixed, and separator newlines are kept.
   * `--unwrap` writes generic Markdown: record values become `# VALUE`
-    headings, and content is unquoted. Literal receipt content keeps its
-    four-space indent; packed records are decoded first.
-  * For example, select the final record and unwrap it:
-    `... | m8 cat --pack | grep '^-' | tail -n 1 | m8 cat --unwrap`.
-  * To select only robot records, use `grep '^- :robot::'` instead.
-  * For example, this selects packed calls and returns them as block records:
-    `... | m8 cat --pack | grep '^- :call::' | m8 cat`
-  * For example, this filters packed records and returns block records; the
-    status check accepts no matches without hiding grep errors:
-    `... | m8 cat --pack | { grep -vE '^- :(toolbox|brain|books)::' || test "$?" -eq 1; } | m8 cat`
+    headings, and content is unquoted.
 * `render` writes a document in the rendered spelling, and
-  `render -r` writes markdown back, which is how to check
-  that a document parses.
-  * `--parsable` breaks no line and pads no table, so a copy
-    off the terminal parses again.
-  * `--no-highlight` writes no colour.
-  * It writes as it reads, so it can sit at the end of
-    anything still talking.
-* `query :MOB/AGENT MESSAGE` is the pipeline written once more,
-  for whatever has parameters rather than a command line.
-  * It says the message, runs, keeps the run, and writes
-    the reply or the question as text.
-  * `-v` says on stderr what the run is doing, and `-vv`
-    writes the whole turn there.
-  * `--no-advance`, `--new` and `--parent` say where it
-    starts and whether anything moves.
-  * `--no-store` keeps nothing, so nothing moves either.
-  * `--piped` reads stdin as prose, as it does for `ref`.
-* `watch :MOB/AGENT` writes a chat out as it moves, which is how to
-  look on at one something else is running.
-  * Each piece opens with the 🧠 it continues.
-  * A chat that is reset starts over under its agent's 🧠.
-  * It arrives a turn at a time: a reply once it is whole,
-    and a call once it is answered.
-  * Only the chat's own pointer is read, so a chat with none
-    is waited on rather than shown as the chat above it.
-  * A snip stays the 🧠 that names it.
-  * New `::stats::` lines from the chat's advisory `+.log`
-    go to stderr; ledger output remains stdout. Existing
-    stats are not replayed. Watch still polls the pointer.
-* `top :MOB/AGENT` is `ref`'s twin for 📚: it names a file for
-  what it says about itself, and nothing else. See [Tops](language.md#tops).
+  `render -r` writes markdown back.
+* `watch :MOB/AGENT` writes a chat out as it moves.
+* `top :MOB/AGENT` writes a file's self-reference. See [Tops](language.md#tops).
 
-A document follows an address by being written after it,
-which is all a document needs:
+A document follows an address by being written after it:
 
 ```bash
-{ m8 ref :demo/mathy hi; echo "* :brain::/local/tiny"; } | m8 send
-{ m8 top :demo/tight-docs; m8 ref :demo/mathy "Tidy the README."; } | m8 send
+{ m8 say --no-send :demo/mathy; echo "* :brain::/local/tiny"; } | m8 send
+{ m8 top :demo/tight-docs; m8 say --no-send :demo/mathy "Tidy the README."; } | m8 send
 ```
 
 What `m8 :MOB/AGENT` writes ends on the 🧠 of the turn it kept.
-Packing lets shell tools select that reference and extract its address:
-
-```bash
-turn=$(m8 :demo/mathy -- hi | m8 cat --pack | sed -n 's/^- :brain::/:/p' | tail -n 1)
-m8 ref "$turn" "Review that." | m8 send
-```
-
-A turn `send` wrote was never kept and ends on no turn reference;
-`tag` keeps it and writes that reference.
 
 Only the explicitly addressed chat moves. To resume it, name it again.
 
@@ -284,7 +190,7 @@ Only the explicitly addressed chat moves. To resume it, name it again.
 
 ```bash
 m8 riff CMD [ARGS]         an editor pinned under CMD's output
-m8 :demo/mathy                  at a terminal: m8 riff m8 at -p -v :demo/mathy
+m8 :demo/mathy                  at a terminal: m8 riff m8 say -r -v -i :demo/mathy
 m8 riff -c python3 -i -u -q    one Python, a message at a time
 m8 riff -c -s 2 python3 -i -u -q    with its last error above its prompt
 ```
@@ -360,8 +266,8 @@ much a riff as a chat is.
 animated SVG: a session a README can carry.
 
 ```bash
-m8 ref :games/zork | m8 encode | m8 cast >zork.svg
-m8 ref :games/zork | m8 encode | m8 cast --size 100x30 --speed 40l,🤖60w >zork.svg
+m8 say --no-send :games/zork | m8 encode | m8 cast >zork.svg
+m8 say --no-send :games/zork | m8 encode | m8 cast --size 100x30 --speed 40l,🤖60w >zork.svg
 ```
 
 * A small build has it beside `m8` as `m8-cast`, since no
@@ -434,12 +340,12 @@ name any of them. With no format named, `m8 encode` uses
 how a chat becomes one flat document.
 
 ```bash
-m8 ref :demo/mathy | m8 encode m8
-m8 ref :demo/mathy | m8 encode m8 >full-ledger-copy.md
+m8 say --no-send :demo/mathy | m8 encode m8
+m8 say --no-send :demo/mathy | m8 encode m8 >full-ledger-copy.md
 ```
 
 ```bash
-m8 ref :demo/mathy | m8 encode openai-completions
+m8 say --no-send :demo/mathy | m8 encode openai-completions
 m8 encode openai-completions <full-ledger-copy.md >openai.json
 ```
 
@@ -448,8 +354,8 @@ rather than expanding it, so what comes out is the ledger
 from there on.
 
 ```bash
-m8 ref :demo/mathy | m8 encode --break mathy/+/tduyxbutjb
-m8 ref :demo/mathy | m8 encode --break mathy     # the chat, without its agent
+m8 say --no-send :demo/mathy | m8 encode --break mathy/+/tduyxbutjb
+m8 say --no-send :demo/mathy | m8 encode --break mathy     # the chat, without its agent
 ```
 
 * NAME is what a 🧠 says: a turn, or an agent.
@@ -515,7 +421,7 @@ one. With it, the whole loop is something you can watch
 happen:
 
 ```bash
-m8 ref :demo/mathy "Say hi." \
+m8 say --no-send :demo/mathy "Say hi." \
   | m8 encode openai-responses \
   | M8_PROVIDER_URL=http://127.0.0.1:8000/v1/responses m8 url-provider \
   | m8 parse openai-responses

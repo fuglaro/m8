@@ -1,8 +1,7 @@
 //! The command registry. Adding a command means adding one line here.
 //!
-//! Every command is `m8 CMD [ARGS]` with stdin, and resolves whatever it names
-//! itself. `@` is not among them: it is launcher shorthand for `at`, the
-//! pipeline of these written once.
+//! Every command resolves whatever it names itself. An address in the
+//! command position is launcher shorthand for `say`.
 //!
 //! The registry is written as modules rather than as command values, because
 //! a module is what carries whatever is under it. From that, `tree` names
@@ -18,12 +17,10 @@ pub const Takes = api.Takes;
 
 /// Every command there is, as the modules that hold them.
 const every = .{
-    @import("command/at.zig"),
+    @import("command/say.zig"),
     @import("command/cat.zig"),
-    @import("command/ref.zig"),
     @import("command/send.zig"),
     @import("command/tag.zig"),
-    @import("command/query.zig"),
     @import("command/reset.zig"),
     @import("command/render.zig"),
     @import("command/cast.zig"),
@@ -111,7 +108,10 @@ pub fn byProgram(name: []const u8) ?Command {
 const testing = std.testing;
 
 test "a command is found by name" {
-    try testing.expect(find("ref") != null);
+    try testing.expect(find("say") != null);
+    try testing.expect(find("at") == null);
+    try testing.expect(find("ref") == null);
+    try testing.expect(find("query") == null);
     try testing.expect(find("call") != null);
     try testing.expect(find("munge") != null);
     try testing.expect(find("--") == null);

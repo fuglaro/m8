@@ -13,9 +13,9 @@ pub const Suffix = enum {
     none,
     /// `:` — ask, and move no pointer.
     oneshot,
-    /// `-` — take the chat's pointer away, so it reads as its parent.
+    /// `-` — start from the chat's parent.
     reset,
-    /// `--` — take the chat's pointer away, so it reads as its agent.
+    /// `--` — start from the authored agent.
     reset_new,
 };
 

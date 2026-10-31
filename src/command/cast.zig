@@ -64,7 +64,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\seconds and plays again. CSS is all it uses, so it plays wherever an
         \\image does, a README included.
         \\
-        \\  m8 ref :games/zork | m8 encode | m8 cast >zork.svg
+        \\  m8 say --no-send :games/zork | m8 encode | m8 cast >zork.svg
         \\
         \\--size is the terminal, 80x24 unless said.
         \\

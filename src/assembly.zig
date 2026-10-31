@@ -1,77 +1,15 @@
-//! Assembling a ledger: what an address reads as, whatever was piped in, and
-//! the prompt, in that order. This is the address prompt's; `m8 ref` is the same
-//! with nothing piped but prose.
-//!
-//!   nothing piped   LEAD → prompt
-//!   m8 piped        LEAD → the document → prompt
-//!   anything else   LEAD → prompt, with the text after it
-//!
-//! One rule is behind all of it — what arrived is added to, and nothing else
-//! is. A document that arrived is records already, so it follows the lead as
-//! it is. Anything else piped in is prose rather than context — it is what
-//! somebody would have typed after the address — so it joins the prompt.
-//!
-//! The order is the order it was written. A 🧭 that ends up after a 🙋 stays
-//! there; putting it first is the business of whichever api encoding is about
-//! to want it that way. So is which model it runs on: the last one named, so
-//! a model piped in after a chat is the one that answers.
-//!
-//! Nothing here reads the disk. What an address reads as is `address`'s
-//! business, and it arrives here as the record it settled on.
+//! Join an optional prompt with explicitly supplied stdin prose as one record.
+//! When the conversation is waiting on a question, that record answers it.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const doc = @import("m8/doc.zig");
-const ledger = @import("ledger.zig");
-
-pub const Assembled = struct {
-    /// The ledger, in the spelling every file is written in.
-    document: []const u8 = "",
-    /// Whether anything was piped in or typed. An address on its own is not
-    /// something to say.
-    said_nothing: bool = true,
-};
-
-/// A document is told from prose by its first line alone, so one that opens
-/// like a document and then goes wrong is an error rather than a prompt.
-pub fn assemble(
-    arena: Allocator,
-    lead: []const doc.Record,
-    prompt: []const u8,
-    piped: []const u8,
-    /// The call the lead is waiting on the person for, when it ends in a ❓.
-    asked: ?[]const u8,
-) !Assembled {
-    const is_document = piped.len > 0 and doc.detect(piped) != null;
-    // Kept as it was said. Whitespace is part of that, and a ledger that
-    // tidied it would no longer be what happened.
-    const prose = if (is_document) "" else piped;
-
-    var records: std.ArrayList(doc.Record) = .empty;
-    try records.appendSlice(arena, lead);
-
-    if (is_document) {
-        var diag: doc.Diagnostic = .{};
-        try records.appendSlice(arena, try doc.parse(arena, piped, &diag));
-    }
-
-    // Said to a ledger that ends in a question, it is the answer to it.
-    const waiting = ledger.asking(records.items) orelse if (is_document) null else asked;
-    if (try said(arena, prompt, prose, waiting)) |r| try records.append(arena, r);
-
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    try doc.writeAll(&buf.writer, .md, records.items);
-    return .{
-        .document = buf.written(),
-        .said_nothing = piped.len == 0 and prompt.len == 0,
-    };
-}
 
 /// What was said, as the record it is: a 🙋, or the ❗ that answers whoever
 /// `waiting` names. Null when nothing was.
 ///
-/// The prompt and whatever prose was piped are one thing said, not two: a
-/// prompt in front of piped text is a preamble to it.
+/// The prompt and prose are one submission, not two: the prompt is a preamble
+/// to explicitly included stdin, joined by one newline when both are nonempty.
 pub fn said(arena: Allocator, prompt: []const u8, prose: []const u8, waiting: ?[]const u8) !?doc.Record {
     const text = if (prompt.len > 0 and prose.len > 0)
         try std.fmt.allocPrint(arena, "{s}\n{s}", .{ prompt, prose })
@@ -87,110 +25,41 @@ pub fn said(arena: Allocator, prompt: []const u8, prose: []const u8, waiting: ?[
 
 const testing = std.testing;
 
-fn sigils(arena: Allocator, a: Assembled) ![]const doc.Record {
-    var diag: doc.Diagnostic = .{};
-    return doc.parse(arena, a.document, &diag);
+test "prompt and explicit stdin prose join with one newline, keeping whitespace" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const record = (try said(arena, "  prompt  ", "  prose \n", null)).?;
+    try testing.expectEqual(doc.Sigil.user, record.sigil);
+    try testing.expectEqualStrings("  prompt  \n  prose \n", record.content.?);
 }
 
-const chat_lead: []const doc.Record = &.{.{ .sigil = .agent, .value = "mob/agent/+/last" }};
+test "m8-looking stdin is ordinary prose" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const prose = "* :brain::/toy/echo\n\n* :raising_hand::\n  > words\n";
 
-test "nothing piped: the lead, then the prompt" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-
-    const got = try assemble(arena, chat_lead, "hello", "", null);
-    const r = try sigils(arena, got);
-    try testing.expectEqual(@as(usize, 2), r.len);
-    try testing.expectEqualStrings("mob/agent/+/last", r[0].value);
-    try testing.expectEqualStrings("hello", r[1].content.?);
-    try testing.expect(!got.said_nothing);
-
-    // Neither piped nor said is nothing to say.
-    try testing.expect((try assemble(arena, chat_lead, "", "", null)).said_nothing);
+    const record = (try said(arena, "", prose, null)).?;
+    try testing.expectEqual(doc.Sigil.user, record.sigil);
+    try testing.expectEqualStrings(prose, record.content.?);
 }
 
-test "an m8 document piped in follows the lead as it is" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
+test "empty prompt and prose say nothing" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
 
-    const piped = "* :brain::/local/tiny\n\n* :raising_hand::\n  > piped\n";
-    const got = try assemble(arena, chat_lead, "more", piped, null);
-    const r = try sigils(arena, got);
-    try testing.expectEqual(@as(usize, 4), r.len);
-    try testing.expectEqualStrings("mob/agent/+/last", r[0].value);
-    try testing.expectEqualStrings("/local/tiny", r[1].value);
-    try testing.expectEqualStrings("piped", r[2].content.?);
-    try testing.expectEqualStrings("more", r[3].content.?);
-
-    // With no lead it is the document alone, and a prompt is not needed.
-    const alone = try assemble(arena, &.{}, "", piped, null);
-    try testing.expectEqualStrings("/local/tiny", (try sigils(arena, alone))[0].value);
-    try testing.expect(!alone.said_nothing);
+    try testing.expect((try said(arena_state.allocator(), "", "", null)) == null);
 }
 
-test "prose piped in joins the prompt rather than becoming its own record" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
+test "submission answers the waiting question as an exclaim" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
 
-    const got = try assemble(arena, chat_lead, "Summarize:", "line one\nline two\n", null);
-    const r = try sigils(arena, got);
-    try testing.expectEqual(@as(usize, 2), r.len);
-    // One 🙋, the prompt as a preamble to what was piped.
-    try testing.expectEqualStrings("Summarize:\nline one\nline two\n", r[1].content.?);
-
-    // With no prompt it is the piped text alone.
-    const bare = try assemble(arena, chat_lead, "", "just this\n", null);
-    try testing.expectEqualStrings("just this\n", (try sigils(arena, bare))[1].content.?);
-
-    // Whitespace is something said too, and is kept as it came.
-    const blank = try sigils(arena, try assemble(arena, chat_lead, "", " \n\n", null));
-    try testing.expectEqualStrings(" \n\n", blank[1].content.?);
-}
-
-test "a header-shaped prompt without a sigil stays prose" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-
-    const got = try assemble(arena, chat_lead, "", "#### Should be raw because no real sigil.\n=\n", null);
-    const r = try sigils(arena, got);
-    try testing.expectEqual(@as(usize, 2), r.len);
-    try testing.expectEqualStrings("#### Should be raw because no real sigil.\n=\n", r[1].content.?);
-}
-
-test "a document that opens right and then goes wrong is an error, not a prompt" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-
-    // Detection is the first line alone. This one is a document, and a broken
-    // one, so it is refused rather than quietly sent as something to say.
-    try testing.expectError(error.UnknownSigil, assemble(
-        a.allocator(),
-        chat_lead,
-        "",
-        "* :brain::/local/tiny\n\n* :nosuchsigil::\n",
-        null,
-    ));
-}
-
-test "said to a ledger that ends in a question, it is the answer" {
-    var a: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer a.deinit();
-    const arena = a.allocator();
-
-    // The lead was read and found waiting on call c1.
-    const told = try sigils(arena, try assemble(arena, chat_lead, "yes", "", "c1"));
-    try testing.expectEqual(@as(usize, 2), told.len);
-    try testing.expectEqual(doc.Sigil.exclaim, told[1].sigil);
-    try testing.expectEqualStrings("c1", told[1].value);
-    try testing.expectEqualStrings("yes", told[1].content.?);
-
-    // A document that ends in one says so itself.
-    const piped = "* :calling::run,c2\n\n* :question::c2\n  > sure?\n";
-    const after = try sigils(arena, try assemble(arena, &.{}, "no", piped, null));
-    try testing.expectEqual(doc.Sigil.exclaim, after[2].sigil);
-    try testing.expectEqualStrings("c2", after[2].value);
+    const record = (try said(arena, "answer", "details", "call-1")).?;
+    try testing.expectEqual(doc.Sigil.exclaim, record.sigil);
+    try testing.expectEqualStrings("call-1", record.value);
+    try testing.expectEqualStrings("answer\ndetails", record.content.?);
 }

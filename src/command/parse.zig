@@ -39,7 +39,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\ledger-shaped; a response is turn-shaped, so it is read into the
         \\records it adds to a ledger rather than into one.
         \\
-        \\  m8 ref :demo/mathy "Say hi." \
+        \\  m8 say --no-send :demo/mathy "Say hi." \
         \\    | m8 encode openai-responses \
         \\    | M8_PROVIDER_URL=http://127.0.0.1:8000/v1/responses m8 url-provider \
         \\    | m8 parse openai-responses

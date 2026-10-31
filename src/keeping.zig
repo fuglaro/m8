@@ -5,8 +5,7 @@
 //! naming the one before it, which is all a chat ever was — and a run that
 //! dies keeps everything up to where it died.
 //!
-//! Shared by address shorthand and `m8 query`, which run and keep in one
-//! process. Only their explicitly addressed chat is advanced.
+//! `say` keeps and advances only the explicitly addressed chat.
 
 const config = @import("config.zig");
 const std = @import("std");

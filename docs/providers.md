@@ -280,7 +280,7 @@ is replayed through it. Nothing is kept between calls because
 there is nowhere to keep it — so the chat is the save file,
 forking a chat forks the world, and two runs of the same words
 cannot differ. Saving is not implemented and does not need to
-be: `m8 ref :games/zork | m8 encode m8 >save.md` already is one, and
+be: `m8 say --no-send :games/zork | m8 encode m8 >save.md` already is one, and
 `m8 tag :games/zork <save.md` restores that mob's conversation.
 
 The first thing you say is not played. It is hashed, and the

@@ -431,6 +431,45 @@ pub const Parser = struct {
     }
 };
 
+/// Unwrap records into generic Markdown while preserving input blank separators.
+/// `terminated` records whether the source record ended with a newline.
+pub const Unwrap = struct {
+    emitted: bool = false,
+    separated: bool = false,
+
+    pub fn separator(self: *Unwrap, raw: []const u8, out: *std.Io.Writer) std.Io.Writer.Error!void {
+        try out.writeAll(raw);
+        if (self.emitted) self.separated = true;
+    }
+
+    pub fn write(self: *Unwrap, record: Record, terminated: bool, out: *std.Io.Writer) std.Io.Writer.Error!void {
+        const has_value = record.value.len != 0;
+        const has_content = record.content != null;
+        if (!has_value and !has_content) return;
+
+        if (self.emitted and !self.separated) try out.writeAll("\n");
+        if (has_value) {
+            try out.writeAll("# ");
+            try out.writeAll(record.value);
+            try out.writeAll("\n");
+        }
+        if (has_content) {
+            if (has_value) try out.writeAll("\n");
+            var lines = std.mem.splitScalar(u8, record.content.?, '\n');
+            var first = true;
+            while (lines.next()) |line| {
+                if (!first) try out.writeAll("\n");
+                first = false;
+                if (line.len != 0) try out.writeAll(record.sigil.indent());
+                try out.writeAll(line);
+            }
+        }
+        if (terminated and has_content) try out.writeAll("\n");
+        self.emitted = true;
+        self.separated = false;
+    }
+};
+
 /// Write one record. Always emits \n; \r is never introduced.
 pub fn write(w: *std.Io.Writer, mode: Mode, r: Record) std.Io.Writer.Error!void {
     try w.writeAll(header(mode));

@@ -123,7 +123,7 @@ pub const Tty = struct {
 ///
 /// Every command is `m8 CMD ARGS` with stdin, and none of them is handed a
 /// name the command line resolved for it: a command that wants one takes it
-/// as an argument and resolves it itself, which is how `m8 ref :demo/mathy` works.
+/// as an argument and resolves it itself, as `m8 say :demo/mathy` does.
 ///
 /// So the one question is whether stdin is the command's to read. Most read
 /// it whole. `call` and anything else that hands stdin to a child must not,

@@ -38,7 +38,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\and nothing is resolved. It asks only how wide the terminal is, or
         \\$COLUMNS.
         \\
-        \\  m8 ref :demo/mathy | m8 encode | m8 render | less -R
+        \\  m8 say --no-send :demo/mathy | m8 encode | m8 render | less -R
         \\  m8 render <ledger.md
         \\
         \\Every 📜, 🤖, 💭 and 📲 is highlighted as markdown, and a line wider than the

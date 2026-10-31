@@ -138,7 +138,7 @@ or turn. To operate on another mob's conversation, invoke a separate command.
 ## Agents as commands
 
 A tool can invoke another mob with a command such as
-`m8 query :other/reviewer MESSAGE`. That activation has its own mob state.
+`m8 say --answer --unwrap :other/reviewer "MESSAGE"`. That activation has its own mob state.
 A tool can also resolve a shared document and emit its contents: what the tool
 returned is then recorded in the conversation, rather than a live reference
 that could change on a later read.
@@ -146,7 +146,7 @@ that could change on a later read.
 An agent needs no special way to spawn another: a 🧰 whose command invokes
 an agent is a subagent, running inside that tool's shields.
 
-* `m8 query --new :team/reviewer//job MESSAGE` starts fresh from the authored
+* `m8 say --new --answer --unwrap :team/reviewer//job "MESSAGE"` starts fresh from the authored
   agent. Without `--new`, it carries that chat on, including answering a
   question the agent asked.
 * `--no-advance` asks without advancing the chat.
@@ -193,7 +193,7 @@ with `mobs/*/.chats/` and `mobs/*/.mob-space/` in `.m8-st8/.gitignore`.
   `reset --to` follows another chat in the same mob and rejects cycles.
 * A side question advances nothing. Forks share parent turns without copying
   transcripts. Snips remain alongside the turns that refer to them.
-* `at` and `query` keep progress incrementally; only the explicitly addressed
+* `say` keeps progress incrementally; only the explicitly addressed
   chat moves. A model call is saved as a turn, and a tool call as two: the 📲
   as it is made, then its answer. An interrupted run keeps what happened so far.
   * A tool call left unanswered when a run died is closed on continuation with
@@ -234,9 +234,9 @@ Writing a file is how it comes to have one, like everything
 else, and that is also how a model is configured once and
 used everywhere:
 
-A model can also be used without stored state, for example
-`m8 query --no-store :/toy/echo hello`. Stored chats always belong to an agent
-in a mob; there is no global storage fallback for a bare model.
+Stored chats always belong to an agent in a mob; there is no global storage
+fallback for a bare model. Addressed runs are made with `say`; read-only model
+references can be composed with `say --no-send`.
 
 ```
 .m8-st8/

@@ -56,8 +56,8 @@ pub const Options = struct {
     /// or a tool has finished saying happened, whatever becomes of the next
     /// one, so a run that dies keeps everything up to where it died.
     keep: ?Keeper = null,
-    /// Say on stderr what the run is doing: a line as a thought opens, and
-    /// one as each tool is called.
+    /// Stream the complete turn in markdown to this writer as records arrive.
+    trace: ?*std.Io.Writer = null,
     /// How much is said on stderr about what the run is doing: nothing, a
     /// line as each thing happens, or more. Whatever the run starts is told
     /// the same, as `M8_VERBOSITY`, and a run started with that set says as
@@ -185,9 +185,13 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // terminal is shown every 📜, 🤖, 💭 and 📲 highlighted as markdown.
     var look: doc.Look = if (mode == .m8) try config.highlights(ctx.arena, ctx.io, ctx.env) else .{};
     look.width = highlight.terminalWidth(ctx.env);
-    var shown: Shown = .{ .look = if (mode == .m8) look else null };
-    var status: Status = .{ .err = if (level > 0 and !opts.echo_given) ctx.err else null };
-    if (opts.echo_given) for (settled) |r| try show(arena, out, mode, &shown, r);
+    var shown: Shown = .{ .look = if (mode == .m8) look else null, .trace = opts.trace };
+    var status: Status = .{ .err = if (level > 0 and opts.trace == null) ctx.err else null };
+    if (opts.echo_given) {
+        for (settled) |r| try show(arena, out, mode, &shown, r);
+    } else if (opts.trace != null) {
+        for (settled) |r| try shown.traceRecord(arena, r);
+    }
 
     for ([_]posix.SIG{ .INT, .TERM }) |sig|
         posix.sigaction(sig, &.{ .handler = .{ .handler = onInterrupt }, .mask = posix.sigemptyset(), .flags = posix.SA.RESTART }, null);
@@ -308,7 +312,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                         };
                     }
                 }
-                if (level > 0) {
+                if (level > 0 and opts.trace == null) {
                     try ctx.err.writeAll(answered.aside);
                     if (!std.mem.endsWith(u8, answered.aside, "\n")) try ctx.err.writeByte('\n');
                     try ctx.err.flush();
@@ -680,6 +684,23 @@ const Shown = struct {
     last: ?sigil.Sigil = null,
     /// How markdown is highlighted, for a terminal.
     look: ?doc.Look = null,
+    trace: ?*std.Io.Writer = null,
+    trace_written: bool = false,
+    trace_last: ?sigil.Sigil = null,
+
+    fn traceBegin(self: *Shown, s: sigil.Sigil) !?*std.Io.Writer {
+        const out = self.trace orelse return null;
+        if (self.trace_written and !touches(self.trace_last, s)) try out.writeByte('\n');
+        self.trace_written = true;
+        self.trace_last = s;
+        return out;
+    }
+
+    fn traceRecord(self: *Shown, arena: Allocator, r: doc.Record) !void {
+        const out = try self.traceBegin(r.sigil) orelse return;
+        try doc.write(out, .md, try ledger.rendered(arena, .md, r));
+        try out.flush();
+    }
 
     fn begin(self: *Shown, out: *std.Io.Writer, s: sigil.Sigil) !void {
         if (self.written and !touches(self.last, s)) try out.writeByte('\n');
@@ -711,6 +732,19 @@ fn show(
 ) !void {
     try shown.begin(out, r.sigil);
     try doc.writeLooking(out, mode, shown.look, try ledger.rendered(arena, mode, r));
+    try shown.traceRecord(arena, r);
+}
+
+test "trace writes records as markdown independently of display mode" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var display: std.Io.Writer.Allocating = .init(arena);
+    var trace: std.Io.Writer.Allocating = .init(arena);
+    var shown: Shown = .{ .trace = &trace.writer };
+    try show(arena, &display.writer, .m8, &shown, .{ .sigil = .bot, .value = "answer", .content = "first\nsecond" });
+    try std.testing.expect(std.mem.startsWith(u8, display.written(), "▐ 🤖:answer\n"));
+    try std.testing.expectEqualStrings("* :robot::answer\n  > first\n  > second\n", trace.written());
 }
 
 /// What a run says it is doing, for whoever is watching it work rather than
@@ -823,6 +857,7 @@ const LiveReply = struct {
     /// Opened on the first byte. A model that only calls a tool says nothing,
     /// and an empty 🤖 above the call would be a record of nothing.
     body: ?doc.ContentWriter = null,
+    trace_body: ?doc.ContentWriter = null,
     pending: ?sigil.Sigil = null,
     /// What the model said, for the ledger still running.
     said: codec.Gather,
@@ -864,11 +899,21 @@ const LiveReply = struct {
         if (bytes.len == 0) return;
         try self.said.write(bytes);
         try self.status.thought(bytes);
-        // Kept aside is kept out of sight: bound for its snip when the run is
-        // kept, and otherwise hidden from a terminal alone.
-        if (self.snipped() and (self.snips != null or self.mode == .m8)) return;
+        const s = self.pending orelse .bot;
+        if (self.trace_body == null) {
+            if (try self.shown.traceBegin(s)) |trace|
+                self.trace_body = try doc.ContentWriter.begin(trace, .md, s, self.said.value);
+        }
+        // Kept aside is kept out of sight on the display, but trace retains
+        // the complete streamed turn.
+        if (self.snipped() and (self.snips != null or self.mode == .m8)) {
+            if (self.trace_body) |*body| {
+                try body.write(bytes);
+                try body.w.flush();
+            }
+            return;
+        }
         if (self.body == null) {
-            const s = self.pending orelse .bot;
             try self.shown.begin(self.out, s);
             self.body = try doc.ContentWriter.beginLooking(
                 self.out,
@@ -880,6 +925,10 @@ const LiveReply = struct {
         }
         try self.body.?.write(bytes);
         try self.out.flush();
+        if (self.trace_body) |*body| {
+            try body.write(bytes);
+            try body.w.flush();
+        }
     }
 
     fn closeFn(ctx: *anyopaque) anyerror!void {
@@ -900,8 +949,15 @@ const LiveReply = struct {
                 try doc.write(self.out, self.mode, .{ .sigil = k.sigil, .value = k.value });
                 try self.out.flush();
             }
+            const trace_sigil = self.pending orelse k.sigil;
+            if (self.trace_body) |*body| {
+                try body.finish();
+                try body.w.flush();
+                self.shown.trace_last = trace_sigil;
+            } else try self.shown.traceRecord(self.arena, k);
         }
         self.body = null;
+        self.trace_body = null;
         self.pending = null;
     }
 

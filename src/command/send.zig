@@ -27,22 +27,22 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\is the provider it is asked of. The last model named is the one
         \\that answers, so one written after a chat is the one it runs on.
         \\
-        \\  m8 ref :demo/mathy "hi" | m8 send
-        \\  { m8 ref :demo/mathy "hi"; echo "* :brain::/local/tiny"; } | m8 send
+        \\  m8 say --no-send :demo/mathy "hi" | m8 send
+        \\  { m8 say --no-send :demo/mathy "hi"; echo "* :brain::/local/tiny"; } | m8 send
         \\
         \\Whatever the run says is appended — a reply, a 📲, and the answer to
         \\that 📲. What comes out is the whole turn, whatever stdout is: the
         \\ledger as it arrived, settled, and then all of that. Nothing is
         \\kept: `m8 tag` keeps it.
         \\
-        \\  m8 ref :demo/mathy "hi" | m8 send | m8 tag :demo/mathy
+        \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy
         \\
         \\That is what `m8 :demo/mathy -- hi` does. Shell filters select records
         \\in packed form; `m8 cat --unwrap` turns them into ordinary Markdown.
         \\`m8 render` is the turn as a person reads it. `m8 --help` says what
         \\a provider is.
         \\
-        \\  m8 ref :demo/mathy "hi" | m8 send | m8 cat --pack |
+        \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 cat --pack |
         \\      grep '^- :robot::' | tail -n 1 | m8 cat --unwrap
         \\
     );

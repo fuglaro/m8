@@ -73,14 +73,12 @@ fn stream(ctx: Ctx, packed_out: bool, unwrap: bool) !void {
     try streamReader(std.heap.page_allocator, &input.interface, packed_out, unwrap, ctx.out);
 }
 
-const UnwrapState = struct { emitted: bool = false, separated: bool = false };
-
 fn streamReader(allocator: std.mem.Allocator, r: *std.Io.Reader, packed_out: bool, unwrap: bool, out: *std.Io.Writer) !void {
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     var record: std.ArrayList(u8) = .empty;
     var line: std.ArrayList(u8) = .empty;
-    var unwrapped: UnwrapState = .{};
+    var unwrapped: doc.Unwrap = .{};
     defer line.deinit(allocator);
     while (true) {
         if (r.buffered().len == 0) {
@@ -109,7 +107,7 @@ fn streamReader(allocator: std.mem.Allocator, r: *std.Io.Reader, packed_out: boo
     }
 }
 
-fn processLine(arena: *std.heap.ArenaAllocator, record: *std.ArrayList(u8), raw: []const u8, packed_out: bool, unwrap: bool, state: *UnwrapState, out: *std.Io.Writer) !void {
+fn processLine(arena: *std.heap.ArenaAllocator, record: *std.ArrayList(u8), raw: []const u8, packed_out: bool, unwrap: bool, state: *doc.Unwrap, out: *std.Io.Writer) !void {
     const line_end = if (raw.len > 0 and raw[raw.len - 1] == '\n') raw.len - 1 else raw.len;
     const content_end = if (line_end > 0 and raw[line_end - 1] == '\r') line_end - 1 else line_end;
     const line = raw[0..content_end];
@@ -121,8 +119,7 @@ fn processLine(arena: *std.heap.ArenaAllocator, record: *std.ArrayList(u8), raw:
         record.* = .empty;
     }
     if (line.len == 0) {
-        try out.writeAll(raw);
-        if (unwrap and state.emitted) state.separated = true;
+        if (unwrap) try state.separator(raw, out) else try out.writeAll(raw);
     } else {
         if (record.items.len == 0 and !headed) return error.InvalidDocument;
         if (std.mem.startsWith(u8, line, "- ")) {
@@ -133,12 +130,13 @@ fn processLine(arena: *std.heap.ArenaAllocator, record: *std.ArrayList(u8), raw:
     }
 }
 
-fn writeRecord(arena: std.mem.Allocator, raw: []const u8, packed_out: bool, unwrap: bool, state: *UnwrapState, out: *std.Io.Writer) !void {
+fn writeRecord(arena: std.mem.Allocator, raw: []const u8, packed_out: bool, unwrap: bool, state: *doc.Unwrap, out: *std.Io.Writer) !void {
     var diag: doc.Diagnostic = .{};
     const records = try doc.parse(arena, raw, &diag);
     if (records.len != 1) return error.InvalidDocument;
     if (unwrap) {
-        try writeUnwrapped(records[0], raw, state, out);
+        const terminated = raw.len > 0 and raw[raw.len - 1] == '\n';
+        try state.write(records[0], terminated, out);
         return;
     }
     var normalized: std.Io.Writer.Allocating = .init(arena);
@@ -146,34 +144,6 @@ fn writeRecord(arena: std.mem.Allocator, raw: []const u8, packed_out: bool, unwr
     const bytes = normalized.written();
     const terminated = raw.len > 0 and raw[raw.len - 1] == '\n';
     try out.writeAll(if (terminated) bytes else bytes[0 .. bytes.len - 1]);
-}
-
-fn writeUnwrapped(record: doc.Record, raw: []const u8, state: *UnwrapState, out: *std.Io.Writer) !void {
-    const has_value = record.value.len != 0;
-    const has_content = record.content != null;
-    if (!has_value and !has_content) return;
-
-    if (state.emitted and !state.separated) try out.writeAll("\n");
-    if (has_value) {
-        try out.writeAll("# ");
-        try out.writeAll(record.value);
-        try out.writeAll("\n");
-    }
-    if (has_content) {
-        if (has_value) try out.writeAll("\n");
-        const content = record.content.?;
-        var lines = std.mem.splitScalar(u8, content, '\n');
-        var first = true;
-        while (lines.next()) |line| {
-            if (!first) try out.writeAll("\n");
-            first = false;
-            if (line.len != 0) try out.writeAll(record.sigil.indent());
-            try out.writeAll(line);
-        }
-    }
-    if (raw.len > 0 and raw[raw.len - 1] == '\n' and has_content) try out.writeAll("\n");
-    state.emitted = true;
-    state.separated = false;
 }
 
 fn usage(ctx: Ctx) !u8 {

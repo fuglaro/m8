@@ -11,7 +11,7 @@
 * :toolbox::zork
   > > Talk to the Z-machine loaded with the Zork-I game.
   >
-  > `m8` `call` `--md` `m8` `query` `:games/zork` `{{command|}}`
+  > `m8` `call` `--md` `m8` `say` `--answer` `--unwrap` `:games/zork` `{{command|}}`
   > * command string
   >   The command to give to the game. Say anything to get started.
 
