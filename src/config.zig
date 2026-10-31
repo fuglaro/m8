@@ -505,8 +505,8 @@ pub fn read(arena: Allocator, io: std.Io, dirs: Dirs, rel: []const u8) !?[]const
     return std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ root, rel }), arena, .limited(max_file)) catch null;
 }
 
-/// Providers are individual JSON files. The first file of each basename in
-/// nearest-first core directories owns that provider; files are never merged.
+/// Provider files select by basename before inheritance is resolved. Parent
+/// objects contribute defaults; child values win recursively.
 pub fn providers(
     arena: Allocator,
     io: std.Io,
@@ -528,7 +528,79 @@ pub fn providers(
             try selected.put(arena, try arena.dupe(u8, name), parsed);
         }
     }
-    return selected;
+    var resolved: std.json.ObjectMap = .empty;
+    var active: std.ArrayList([]const u8) = .empty;
+    var names = selected.iterator();
+    while (names.next()) |entry| {
+        try resolved.put(arena, entry.key_ptr.*, try resolveProvider(arena, &selected, &resolved, &active, entry.key_ptr.*));
+    }
+    return resolved;
+}
+
+fn resolveProvider(
+    arena: Allocator,
+    selected: *const std.json.ObjectMap,
+    resolved: *std.json.ObjectMap,
+    active: *std.ArrayList([]const u8),
+    name: []const u8,
+) !std.json.Value {
+    if (resolved.get(name)) |value| return value;
+    for (active.items) |ancestor| if (std.mem.eql(u8, ancestor, name)) return Error.ProviderParentCycle;
+    const value = selected.get(name) orelse return Error.MissingProviderParent;
+    if (value != .object) {
+        try resolved.put(arena, name, value);
+        return value;
+    }
+    try active.append(arena, name);
+    defer _ = active.pop();
+    var result: std.json.ObjectMap = .empty;
+    if (value.object.get("parent")) |parent_value| {
+        if (parent_value != .string or parent_value.string.len == 0) return Error.BadProviderParent;
+        const base = try resolveProvider(arena, selected, resolved, active, parent_value.string);
+        if (base != .object) return Error.BadProviderParent;
+        result = try copyProviderObject(arena, base.object);
+    }
+    var fields = value.object.iterator();
+    while (fields.next()) |field| {
+        if (std.mem.eql(u8, field.key_ptr.*, "parent")) continue;
+        const old = result.get(field.key_ptr.*);
+        const child = field.value_ptr.*;
+        const merged: std.json.Value = if (old) |previous|
+            if (previous == .object and child == .object)
+                .{ .object = try mergeProviderObjects(arena, previous.object, child.object) }
+            else
+                child
+        else
+            child;
+        try result.put(arena, field.key_ptr.*, merged);
+    }
+    const resolved_value: std.json.Value = .{ .object = result };
+    try resolved.put(arena, name, resolved_value);
+    return resolved_value;
+}
+
+fn copyProviderObject(arena: Allocator, source: std.json.ObjectMap) !std.json.ObjectMap {
+    var result: std.json.ObjectMap = .empty;
+    var fields = source.iterator();
+    while (fields.next()) |field| try result.put(arena, field.key_ptr.*, field.value_ptr.*);
+    return result;
+}
+
+fn mergeProviderObjects(arena: Allocator, parent: std.json.ObjectMap, child: std.json.ObjectMap) !std.json.ObjectMap {
+    var result = try copyProviderObject(arena, parent);
+    var fields = child.iterator();
+    while (fields.next()) |field| {
+        const old = result.get(field.key_ptr.*);
+        const merged: std.json.Value = if (old) |previous|
+            if (previous == .object and field.value_ptr.* == .object)
+                .{ .object = try mergeProviderObjects(arena, previous.object, field.value_ptr.object) }
+            else
+                field.value_ptr.*
+        else
+            field.value_ptr.*;
+        try result.put(arena, field.key_ptr.*, merged);
+    }
+    return result;
 }
 
 pub const Error = error{
@@ -536,6 +608,12 @@ pub const Error = error{
     BadTui,
     /// `highlights` in core/config.json is not a valid highlight string.
     BadHighlight,
+    /// A provider's `parent` is not a non-empty provider name.
+    BadProviderParent,
+    /// A provider names a parent that was not selected.
+    MissingProviderParent,
+    /// Provider inheritance returns to a provider already being resolved.
+    ProviderParentCycle,
 };
 
 /// What an address alone at a terminal opens: the `tui` of the nearest
@@ -999,6 +1077,78 @@ test "pin preserves roots for authored overlays while refusing another mob's sta
     try testing.expectEqualStrings("new shadow", (try read(arena, t.io, pinned, try nameFile(arena, "team/helper"))).?);
     try testing.expectEqualStrings("other agent", (try read(arena, t.io, pinned, try nameFile(arena, "other/agent"))).?);
     try testing.expectError(error.CrossMobReference, read(arena, t.io, pinned, try nameFile(arena, "other/agent/+")));
+}
+
+test "provider parents recursively merge selected provider objects" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const t = try Tree.init(arena, &threaded, "m8-provider-parents");
+    defer t.deinit(arena);
+    const root = try t.join(arena, "project");
+    const far = try t.join(arena, "far");
+    try t.write(arena, "far/core/providers/base.json", "{\"far_only\":true,\"nested\":{\"far\":true}}");
+    try t.write(arena, "project/core/providers/base.json", "{\"nested\":{\"keep\":1,\"replace\":2},\"array\":[1],\"nullable\":true,\"switch\":{\"child\":1},\"flip\":{\"base\":1},\"rise\":1}");
+    try t.write(arena, "project/core/providers/middle.json", "{\"parent\":\"base\",\"nested\":{\"replace\":3}}");
+    try t.write(arena, "project/core/providers/child.json", "{\"parent\":\"middle\",\"nested\":{\"added\":4},\"array\":[],\"nullable\":null,\"switch\":5,\"flip\":{\"child\":2},\"rise\":{\"child\":3}}");
+    try t.write(arena, "project/core/providers/sibling.json", "{\"parent\":\"base\",\"nested\":{\"sibling\":6}}");
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("M8_CALL_ID", "fixture");
+    try env.put(dirs_var, try std.mem.join(arena, ":", &.{ root, far }));
+    const entries = try providers(arena, t.io, &env);
+    const child = entries.get("child").?.object;
+    const nested = child.get("nested").?.object;
+    try testing.expectEqual(@as(i64, 1), nested.get("keep").?.integer);
+    try testing.expectEqual(@as(i64, 3), nested.get("replace").?.integer);
+    try testing.expectEqual(@as(i64, 4), nested.get("added").?.integer);
+    try testing.expectEqual(@as(usize, 0), child.get("array").?.array.items.len);
+    try testing.expect(child.get("nullable").? == .null);
+    try testing.expect(child.get("parent") == null);
+    try testing.expectEqual(@as(i64, 5), child.get("switch").?.integer);
+    const flip = child.get("flip").?.object;
+    try testing.expectEqual(@as(i64, 1), flip.get("base").?.integer);
+    try testing.expectEqual(@as(i64, 2), flip.get("child").?.integer);
+    const rise = child.get("rise").?.object;
+    try testing.expectEqual(@as(i64, 3), rise.get("child").?.integer);
+
+    const base = entries.get("base").?.object;
+    try testing.expect(base.get("far_only") == null);
+    try testing.expect(base.get("parent") == null);
+    const base_nested = base.get("nested").?.object;
+    try testing.expectEqual(@as(i64, 2), base_nested.get("replace").?.integer);
+    try testing.expect(base_nested.get("added") == null);
+    try testing.expect(base_nested.get("sibling") == null);
+
+    const sibling = entries.get("sibling").?.object;
+    const sibling_nested = sibling.get("nested").?.object;
+    try testing.expectEqual(@as(i64, 2), sibling_nested.get("replace").?.integer);
+    try testing.expectEqual(@as(i64, 6), sibling_nested.get("sibling").?.integer);
+    try testing.expect(sibling_nested.get("added") == null);
+}
+
+test "provider parents report missing, invalid and cyclic references" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const t = try Tree.init(arena, &threaded, "m8-provider-parent-errors");
+    defer t.deinit(arena);
+    const root = try t.join(arena, "project");
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put("M8_CALL_ID", "fixture");
+    try env.put(dirs_var, root);
+    try t.write(arena, "project/core/providers/child.json", "{\"parent\":\"absent\"}");
+    try testing.expectError(Error.MissingProviderParent, providers(arena, t.io, &env));
+    try t.write(arena, "project/core/providers/child.json", "{\"parent\":null}");
+    try testing.expectError(Error.BadProviderParent, providers(arena, t.io, &env));
+    try t.write(arena, "project/core/providers/child.json", "{\"parent\":\"other\"}");
+    try t.write(arena, "project/core/providers/other.json", "false");
+    try testing.expectError(Error.BadProviderParent, providers(arena, t.io, &env));
+    try t.write(arena, "project/core/providers/other.json", "{\"parent\":\"child\"}");
+    try testing.expectError(Error.ProviderParentCycle, providers(arena, t.io, &env));
 }
 
 test "provider filename selects a whole entry, without merging fields" {

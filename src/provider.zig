@@ -105,6 +105,7 @@ pub fn read(arena: Allocator, providers: std.json.ObjectMap, name: []const u8) !
 
 fn words(arena: Allocator, v: ?std.json.Value) !?[]const []const u8 {
     const list = v orelse return null;
+    if (list == .null) return null;
     if (list != .array or list.array.items.len == 0) return Error.NoCommand;
     var out: std.ArrayList([]const u8) = .empty;
     for (list.array.items) |item| {
@@ -743,4 +744,18 @@ test "provider input normalizes mixed records and preserves literal arrows" {
     );
     const block = "* :robot::\n  > literal ↵\n";
     try testing.expectEqualStrings(block, try providerInput(a.allocator(), block));
+}
+
+test "null disables optional provider commands" {
+    const arena = testing.allocator;
+    const parsed = try std.json.parseFromSlice(std.json.Value, arena,
+        \\{"local":{"cmd":["m8","toy-provider"],"encode":null,"parse":null,"models":null}}
+    , .{});
+    defer parsed.deinit();
+    var a: std.heap.ArenaAllocator = .init(arena);
+    defer a.deinit();
+    const p = try read(a.allocator(), parsed.value.object, "local");
+    try testing.expect(p.encode == null);
+    try testing.expect(p.parse == null);
+    try testing.expect(p.models == null);
 }

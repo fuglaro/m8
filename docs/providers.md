@@ -105,8 +105,9 @@ then passed on.
 * `-v` reaches every stage as `M8_VERBOSITY`, so each says no more than was
   asked for.
 
-Only `cmd`, `encode`, `parse` and `models` are m8's. Every other key reaches
-the stages as `M8_PROVIDER_*`, and means whatever the command makes of it.
+`cmd`, `encode`, `parse` and `models` name pipeline commands; `parent` is
+loader metadata. Every other key reaches the stages as `M8_PROVIDER_*`,
+and means whatever the command makes of it.
 
 * A key is lowercase letters, digits and hyphens: `api-version` arrives as
   `M8_PROVIDER_API_VERSION`.
@@ -179,6 +180,39 @@ kept in step with what a provider offers.
 
 A provider that speaks two apis is two entries pointing at one
 url, rather than a second kind of override.
+
+## Inheriting a provider
+
+A provider may name another provider as its `parent`:
+
+```json
+{
+  "parent": "openai-responses",
+  "url": "http://127.0.0.1:8000/v1/responses",
+  "stats": {
+    "cmd": ["my-stats"]
+  }
+}
+```
+
+* `parent` names a provider file without `.json`.
+  * Parents may have parents; missing parents and cycles are errors.
+  * A parent must name an object, not another JSON type.
+* Objects merge recursively, with the child's subkeys winning.
+  * This example replaces `stats.cmd` while retaining the parent's selectors.
+* Arrays and scalars replace the inherited value, rather than appending.
+* An explicit `null` replaces an inherited value too.
+  * It disables an inherited setting rather than falling back to it.
+* File selection happens first, nearest file per provider name.
+  * Same-named files in different config layers are not merged.
+  * Parent names resolve against those selected files.
+* `parent` is loader metadata and never reaches `M8_PROVIDER_*`.
+
+The repository's `openai-responses.json` holds the shared transport, encoder,
+parser, stats, inline upload and model-list command for `local-omlx.json` and `codex.json`.
+The model-list command accepts `id` or `slug` and runs only when `models-url`
+is set, so the base itself emits no models.
+Copy the parent file along with a provider that inherits it.
 
 ## Finding the command
 
@@ -340,6 +374,7 @@ named by the id the api gave back.
 * `encode` runs `upload` for every file before the codec
   sees the ledger.
 * With no `upload`, a 🔗 fails the encode.
+  * Set `"upload": null` in a child to disable inherited attachment support.
 * m8 holds no view of the line. The codecs it ships read it:
   * a `data:` url carries the file whole;
   * `ref:` and an id names a file the api has;
@@ -354,8 +389,9 @@ Both read `<path (SHA-256)`, resolve relative paths against
 `M8_MOB_ST8_DIR`, and refuse a file whose hash differs from
 the link.
 
-This one carries a file whole. It uses macOS `stat` to detect
-ordinary concurrent changes; a failed command's output is
+This one carries a file whole, as the shared Responses provider does.
+It tries GNU/Linux then BSD/macOS `stat` to detect ordinary concurrent
+changes; a failed command's output is
 discarded. It does not defend against adversarial timing:
 
 ```bash
@@ -367,10 +403,11 @@ case $n in
 esac
 case $p in /*) f=$p ;; *) f=$M8_MOB_ST8_DIR/$p ;; esac
 
-before=$(stat -f '%d:%i:%z:%m:%c' -- "$f") || exit
-[ "$(shasum -a 256 <"$f" | cut -c1-64)" = "$h" ] || { echo "upload: $p is not the file linked" >&2; exit 1; }
+stamp() { stat -c '%d:%i:%s:%Y:%Z' -- "$1" 2>/dev/null || stat -f '%d:%i:%z:%m:%c' -- "$1"; }
+before=$(stamp "$f") || exit
+[ "$({ sha256sum 2>/dev/null || shasum -a 256; } <"$f" | cut -c1-64)" = "$h" ] || { echo "upload: $p is not the file linked" >&2; exit 1; }
 printf '%s data:%s;base64,' $m $m; base64 <"$f" | tr -d '\n'; printf ' %s' "$n"
-after=$(stat -f '%d:%i:%z:%m:%c' -- "$f") || exit
+after=$(stamp "$f") || exit
 [ "$before" = "$after" ] || { echo "upload: $p changed while encoding" >&2; exit 1; }
 ```
 

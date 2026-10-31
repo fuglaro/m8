@@ -20,6 +20,8 @@ missing keys do not fall through to another layer.
 
 * `core/providers/NAME.json` holds one provider object, named by its filename.
   Different names may come from different layers; the same name is never merged.
+  * An explicit `parent` inherits another selected provider's keys recursively.
+    See [Inheriting a provider](providers.md#inheriting-a-provider).
 * `core/config.json` holds optional `tui` and `highlights` settings.
 * `core/mac-sandbox.sb` supplies the native sandbox profile, with the built-in
   profile used when no file exists.
