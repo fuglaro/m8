@@ -121,12 +121,13 @@ fn run(given: Ctx) !u8 {
     else
         try address.readFrom(arena, io, dirs, a, o.start);
     const asked = ledger.waiting(arena, io, dirs, name);
-    var buf: [64 * 1024]u8 = undefined;
-    const terminal = o.piped and try std.Io.File.stdin().isTty(io);
+    const terminal = o.piped and ctx.stdin_terminal;
     const prose = if (!o.piped) "" else if (terminal)
-        try readTerminal(io, arena, &buf)
+        try readTerminal(ctx.stdin, arena)
+    else if (ctx.stdin) |reader|
+        try reader.allocRemaining(arena, .unlimited)
     else
-        try api.readDocument(io, arena, &buf);
+        "";
     const said = try assembly.said(arena, o.prompt, prose, asked);
     var records: std.ArrayList(doc.Record) = .empty;
     try records.append(arena, .{ .sigil = .agent, .value = name });
@@ -209,9 +210,8 @@ fn run(given: Ctx) !u8 {
 
 // Canonical terminal reads end a submission at Ctrl-D, even when its final
 // line has no newline. This is a single submission, not an editor or UI.
-fn readTerminal(io: std.Io, arena: std.mem.Allocator, buf: []u8) ![]const u8 {
-    var input = std.Io.File.stdin().readerStreaming(io, buf);
-    const r = &input.interface;
+fn readTerminal(reader: ?*std.Io.Reader, arena: std.mem.Allocator) ![]const u8 {
+    const r = reader orelse return "";
     var text: std.ArrayList(u8) = .empty;
     while (true) {
         r.fill(1) catch |e| switch (e) {
@@ -306,4 +306,106 @@ test "chat option rejects suffixes but own-chat suffixes work" {
     try t.expectError(error.ChatAddressConflict, o.target(.{ .kind = .chat, .name = "mob/agent//other" }, arena.allocator()));
     var bad: Options = .{ .word = "", .start = .new };
     try t.expectError(error.StartConflict, bad.target(.{ .kind = .chat, .name = "mob/agent", .suffix = .reset }, arena.allocator()));
+}
+
+// The provider still runs as a real child; only the command's process boundary
+// is supplied in memory. Each invocation gets its own config and storage.
+const Invocation = struct {
+    out: []const u8,
+    err: []const u8,
+    status: u8,
+    consumed: usize,
+
+    fn say(arena: std.mem.Allocator, io: std.Io, args: []const []const u8, input: []const u8, terminal: bool) !Invocation {
+        const root = try @import("../test_tmp.zig").make(arena, io, "m8-say-ctx");
+        defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+        const agent = try std.fs.path.join(arena, &.{ root, "mobs/demo" });
+        const providers = try std.fs.path.join(arena, &.{ root, "core/providers" });
+        try std.Io.Dir.cwd().createDirPath(io, agent);
+        try std.Io.Dir.cwd().createDirPath(io, providers);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ agent, "echo.md" }), .data = "* :brain::/toy/echo\n" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ providers, "toy.json" }), .data = "{\"cmd\":[\"m8\",\"toy-provider\"]}\n" });
+        var env: std.process.Environ.Map = .init(arena);
+        try env.put("M8_CALL_ID", "ctx-test");
+        try env.put(config.dirs_var, root);
+        try env.put(config.user_root_var, try std.fs.path.join(arena, &.{ root, "user" }));
+        try env.put(config.data_root_var, try std.fs.path.join(arena, &.{ root, "data" }));
+        try env.put("HOME", root);
+        try env.put("XDG_CONFIG_HOME", root);
+        try env.put("XDG_DATA_HOME", root);
+        try env.put("TMPDIR", root);
+        var input_reader: std.Io.Reader = .fixed(input);
+        var out: std.Io.Writer.Allocating = .init(arena);
+        var err: std.Io.Writer.Allocating = .init(arena);
+        const status = try command.run(.{
+            .arena = arena,
+            .io = io,
+            .mode = .md,
+            .env = &env,
+            .self = @import("test_options").launcher,
+            .args = args,
+            .stdin = &input_reader,
+            .stdin_terminal = terminal,
+            .in = "",
+            .out = &out.writer,
+            .err = &err.writer,
+            .stdout_pipe = true,
+            .tty = null,
+        });
+        return .{ .out = out.written(), .err = err.written(), .status = status, .consumed = input_reader.seek };
+    }
+};
+
+test "say through Ctx retains piped submissions in every presentation" {
+    const t = std.testing;
+    var heap: std.heap.ArenaAllocator = .init(t.allocator);
+    defer heap.deinit();
+    const arena = heap.allocator();
+    var threaded: std.Io.Threaded = .init(t.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const cases = [_]struct { flags: []const []const u8, user: ?[]const u8, bot: []const u8, texts: usize = 2 }{
+        .{ .flags = &.{ "-r", "-i", "--no-advance", ":demo/echo" }, .user = "🙋", .bot = "🤖" },
+        .{ .flags = &.{ "-i", "--no-advance", ":demo/echo" }, .user = ":raising_hand:", .bot = ":robot:" },
+        .{ .flags = &.{ "-r", "-i", "--no-advance", "--answer", ":demo/echo" }, .user = null, .bot = "🤖", .texts = 1 },
+        .{ .flags = &.{ "-i", "--no-advance", "--unwrap", ":demo/echo" }, .user = null, .bot = "ctx submission" },
+    };
+    for (cases) |case| {
+        const result = try Invocation.say(arena, io, case.flags, "ctx submission\n", false);
+        try t.expectEqual(@as(u8, 0), result.status);
+        try t.expectEqualStrings("", result.err);
+        try t.expectEqual(case.texts, std.mem.count(u8, result.out, "ctx submission"));
+        const reply = std.mem.indexOf(u8, result.out, case.bot) orelse return error.MissingReply;
+        if (case.user) |user| {
+            try t.expectEqual(@as(usize, 1), std.mem.count(u8, result.out, user));
+            const submitted = std.mem.indexOf(u8, result.out, user).?;
+            try t.expect(submitted < reply);
+            try t.expect(std.mem.indexOf(u8, result.out[submitted..reply], "ctx submission") != null);
+        } else {
+            try t.expectEqual(@as(usize, 0), std.mem.count(u8, result.out, "🙋"));
+            try t.expectEqual(@as(usize, 0), std.mem.count(u8, result.out, ":raising_hand:"));
+        }
+    }
+}
+
+test "say supplied stdin is opt-in and terminal EOF is a single submission" {
+    const t = std.testing;
+    var heap: std.heap.ArenaAllocator = .init(t.allocator);
+    defer heap.deinit();
+    const arena = heap.allocator();
+    var threaded: std.Io.Threaded = .init(t.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const untouched = try Invocation.say(arena, io, &.{ "--no-send", ":demo/echo", "prompt" }, "not submitted", false);
+    try t.expectEqual(@as(u8, 0), untouched.status);
+    try t.expectEqual(@as(usize, 0), untouched.consumed);
+    try t.expect(std.mem.indexOf(u8, untouched.out, "not submitted") == null);
+    for ([_][]const u8{ "", "final without newline", "first\nsecond\n" }) |input| {
+        const result = try Invocation.say(arena, io, &.{ "-i", "--no-send", ":demo/echo" }, input, true);
+        try t.expectEqual(@as(u8, 0), result.status);
+        try t.expectEqualStrings("", result.err);
+        var lines = std.mem.tokenizeScalar(u8, input, '\n');
+        while (lines.next()) |line| try t.expect(std.mem.indexOf(u8, result.out, line) != null);
+        try t.expectEqual(input.len, result.consumed);
+    }
 }

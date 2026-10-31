@@ -114,16 +114,16 @@ fn run(ctx: Ctx) !u8 {
     // m8 runs a provider with a pipe on stdin. A terminal is nobody piping a
     // request, so what was wanted is the page rather than a provider left
     // waiting for an end of file that is not coming.
-    if (std.Io.File.stdin().isTty(ctx.io) catch false) {
+    if (ctx.stdin_terminal) {
         try ctx.err.writeAll("m8 toy-provider: no request on stdin\n");
         try page(ctx, ctx.err);
         try ctx.err.flush();
         return 1;
     }
 
-    var in_buf: [64 * 1024]u8 = undefined;
-    var in = std.Io.File.stdin().readerStreaming(ctx.io, &in_buf);
-    const request = try in.interface.allocRemaining(ctx.arena, .unlimited);
+    var empty: std.Io.Reader = .fixed(&.{});
+    const input = ctx.stdin orelse &empty;
+    const request = try input.allocRemaining(ctx.arena, .unlimited);
 
     var diag: doc.Diagnostic = .{};
     const records = try doc.parse(ctx.arena, request, &diag);
@@ -297,4 +297,81 @@ test "every model it serves is on its page" {
     }, &out.writer);
 
     for (models) |m| try testing.expect(std.mem.indexOf(u8, out.written(), m.name) != null);
+}
+
+test "toy-provider answers supplied requests in their document mode" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const cases = [_]struct { request: []const u8, reply: []const u8 }{
+        .{
+            .request = "* :brain::/toy/echo\n\n* :raising_hand::\n  > supplied answer",
+            .reply = "* :robot::\n  > supplied answer\n",
+        },
+        .{
+            .request = "▐ 🧠:/toy/echo\n\n▐ 🙋:\n│ supplied answer",
+            .reply = "▐ 🤖:\n│ supplied answer\n",
+        },
+    };
+    for (cases) |case| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed(case.request);
+        try testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{}, &input)));
+        try testing.expectEqualStrings(case.reply, invocation.out.written());
+        try testing.expectEqualStrings("", invocation.err.written());
+        try testing.expectEqualStrings("", input.buffered());
+    }
+}
+
+test "toy-provider rejects terminal input without consuming it" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed("unconsumed");
+    var ctx = invocation.ctx(&.{}, &input);
+    ctx.stdin_terminal = true;
+    try testing.expectEqual(@as(u8, 1), try command.run(ctx));
+    try testing.expectEqualStrings("unconsumed", input.buffered());
+    try testing.expectEqualStrings("", invocation.out.written());
+    try testing.expect(std.mem.startsWith(u8, invocation.err.written(), "m8 toy-provider: no request on stdin\n"));
+}
+
+test "toy-provider diagnoses missing and unknown models on stderr" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const cases = [_]struct { request: ?[]const u8, diagnostic: []const u8 }{
+        .{ .request = null, .diagnostic = "m8 toy-provider: the request names no model\n" },
+        .{ .request = "", .diagnostic = "m8 toy-provider: the request names no model\n" },
+        .{ .request = "* :raising_hand::\n  > no model\n", .diagnostic = "m8 toy-provider: the request names no model\n" },
+        .{ .request = "* :brain::/toy/unknown\n", .diagnostic = "m8 toy-provider: no model named 'unknown'\n" },
+    };
+    for (cases) |case| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed(case.request orelse "");
+        try testing.expectEqual(@as(u8, 1), try command.run(invocation.ctx(&.{}, if (case.request != null) &input else null)));
+        try testing.expectEqualStrings("", invocation.out.written());
+        try testing.expect(std.mem.startsWith(u8, invocation.err.written(), case.diagnostic));
+    }
+}
+
+test "toy-provider models bypasses terminal refusal and leaves input unread" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed("unconsumed");
+    var ctx = invocation.ctx(&.{"--models"}, &input);
+    ctx.stdin_terminal = true;
+    try testing.expectEqual(@as(u8, 0), try command.run(ctx));
+    try testing.expectEqualStrings("unconsumed", input.buffered());
+    try testing.expect(std.mem.startsWith(u8, invocation.out.written(), "echo\nrunner\neliza\n"));
+    try testing.expectEqualStrings("", invocation.err.written());
+}
+
+test "toy-provider propagates malformed supplied request errors without output" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed("* :not-a-sigil::\n");
+    try testing.expectError(error.UnknownSigil, command.run(invocation.ctx(&.{}, &input)));
+    try testing.expectEqualStrings("", invocation.out.written());
+    try testing.expectEqualStrings("", invocation.err.written());
 }

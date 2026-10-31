@@ -43,10 +43,10 @@ pub fn under(ctx: Ctx, c: api.Command, args: []const []const u8) !u8 {
         return 0;
     }
 
-    if (c.takes != .nothing) {
-        var buf: [64 * 1024]u8 = undefined;
-        inner.in = try api.readDocument(ctx.io, ctx.arena, &buf);
-    }
+    if (c.takes != .nothing) if (ctx.stdin) |reader| {
+        inner.in = try api.readDocument(reader, ctx.stdin_terminal, ctx.arena);
+        inner.stdin = null;
+    };
     return c.run(inner);
 }
 

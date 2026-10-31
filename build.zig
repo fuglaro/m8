@@ -78,6 +78,10 @@ pub fn build(b: *std.Build) void {
     });
     // The tests are of the sources, so they are handed every command.
     tests.root_module.addOptions("build_options", options(b, "", every, no_curl_dep, formats, "", system_config));
+    const test_launcher = command(b, target, optimize, small, "m8-test-launcher", "src/main.zig", "", every, no_curl_dep, formats, "", system_config);
+    const test_options = b.addOptions();
+    test_options.addOptionPath("launcher", test_launcher.getEmittedBin());
+    tests.root_module.addOptions("test_options", test_options);
     b.step("test", "Run tests").dependOn(&b.addRunArtifact(tests).step);
 
     // A story file run straight through the machine, for working on the

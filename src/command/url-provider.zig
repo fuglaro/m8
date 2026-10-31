@@ -86,7 +86,7 @@ fn run(ctx: Ctx) !u8 {
             return 1;
         }
         if (comptime no_curl_dep) return runStdlib(ctx, ctx.args[1], null, "");
-        return runCurl(ctx, &.{ get_script, "m8 url-provider", ctx.args[1] }, .ignore);
+        return runCurl(ctx, &.{ get_script, "m8 url-provider", ctx.args[1] }, false);
     }
     // Handing over a file, as a form.
     if (ctx.args.len > 0 and std.mem.eql(u8, ctx.args[0], "--upload")) {
@@ -109,13 +109,13 @@ fn run(ctx: Ctx) !u8 {
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.appendSlice(ctx.arena, &.{ upload_script, "m8 url-provider" });
         try argv.appendSlice(ctx.arena, ctx.args[1..]);
-        return runCurl(ctx, argv.items, .ignore);
+        return runCurl(ctx, argv.items, false);
     }
 
     // m8 runs a provider with a pipe on stdin. A terminal is nobody piping a
     // request, so what was wanted is the page rather than a provider left
     // waiting for an end of file that is not coming.
-    if (std.Io.File.stdin().isTty(ctx.io) catch false) {
+    if (ctx.stdin_terminal) {
         try ctx.err.writeAll("m8 url-provider: no request on stdin\n");
         try page(ctx, ctx.err);
         try ctx.err.flush();
@@ -131,11 +131,10 @@ fn run(ctx: Ctx) !u8 {
     // curl build never references std.http.Client and the stdlib build never
     // carries the curl command line or its curl-spawn path.
     if (comptime no_curl_dep) {
-        var in_buf: [64 * 1024]u8 = undefined;
-        var input = std.Io.File.stdin().readerStreaming(ctx.io, &in_buf);
-        return runStdlib(ctx, endpoint, try input.interface.allocRemaining(ctx.arena, .unlimited), "application/json");
+        const input = ctx.stdin orelse return runStdlib(ctx, endpoint, "", "application/json");
+        return runStdlib(ctx, endpoint, try input.allocRemaining(ctx.arena, .unlimited), "application/json");
     }
-    return runCurl(ctx, &.{ script, "m8 url-provider", endpoint }, .inherit);
+    return runCurl(ctx, &.{ script, "m8 url-provider", endpoint }, true);
 }
 
 /// The no-curl transport. The stdlib client owns TLS and certificate lookup,
@@ -234,7 +233,7 @@ fn form(
 
 /// The default transport. curl keeps TLS, certificates, proxies and HTTP out
 /// of the executable, which is why it is the small build.
-fn runCurl(ctx: Ctx, args: []const []const u8, stdin: std.process.SpawnOptions.StdIo) !u8 {
+fn runCurl(ctx: Ctx, args: []const []const u8, forward_stdin: bool) !u8 {
     var lines: std.ArrayList(u8) = .empty;
     try headers(ctx, &lines);
 
@@ -245,63 +244,98 @@ fn runCurl(ctx: Ctx, args: []const []const u8, stdin: std.process.SpawnOptions.S
         .{ .key = "M8_URL_CAPTURE_HEADERS", .value = if (capture_headers) "1" else "" },
     });
 
-    // Without stats, curl inherits stdout/stderr exactly as before. With stats,
-    // drain both pipes while forwarding body bytes unchanged. Headers use
-    // curl's separate stderr stream, never --include on the body stream.
+    // Always drain both pipes: stderr may contain curl diagnostics (and, with
+    // stats, response headers), while stdout is the response body.
     //
     // No `--fail`. A status that is not 200 still has a body, and the body is
     // what the api said — the codec reads it as it reads any other answer.
     // What is left to fail is the reaching itself, which curl says on stderr.
+    // The executable is single-threaded. Spool before spawning rather than
+    // deadlocking a full request pipe against a full response pipe. curl's
+    // --data-binary @- buffers the request before sending it in either case.
+    var request_spool: ?std.Io.File = null;
+    var spool_path: ?[]const u8 = null;
+    defer if (spool_path) |path| std.Io.Dir.cwd().deleteFile(ctx.io, path) catch {};
+    defer if (request_spool) |file| file.close(ctx.io);
+    if (forward_stdin) {
+        var random: [16]u8 = undefined;
+        ctx.io.random(&random);
+        const temp_name = try std.fs.path.join(ctx.arena, &.{
+            ctx.env.get("TMPDIR") orelse "/tmp",
+            try std.fmt.allocPrint(ctx.arena, "m8-url-{x}", .{&random}),
+        });
+        const spool = try std.Io.Dir.cwd().createFile(ctx.io, temp_name, .{
+            .read = true,
+            .exclusive = true,
+            .permissions = .fromMode(0o600),
+        });
+        request_spool = spool;
+        spool_path = temp_name;
+        if (ctx.stdin) |input| try spoolFile(ctx.io, input, spool);
+    }
+
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(ctx.arena, &.{ "sh", "-c" });
     try argv.appendSlice(ctx.arena, args);
     var child = std.process.spawn(ctx.io, .{
         .argv = argv.items,
         .environ_map = environ,
-        .stdin = stdin,
-        .stdout = if (settings != null) .pipe else .inherit,
-        .stderr = if (settings != null) .pipe else .inherit,
+        .stdin = if (request_spool) |spool| .{ .file = spool } else .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
     }) catch |e| {
         try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
         return 1;
     };
     defer child.kill(ctx.io);
-    if (settings) |s| {
-        var buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
-        var streams: std.Io.File.MultiReader = undefined;
-        streams.init(ctx.arena, ctx.io, buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
-        defer streams.deinit();
-        var body: std.ArrayList(u8) = .empty;
-        const response = streams.reader(0);
-        while (streams.fill(4096, .none)) |_| {
-            const chunk = response.buffered();
-            ctx.out.writeAll(chunk) catch return 0;
-            ctx.out.flush() catch return 0;
-            if (s.body.len > 0) try body.appendSlice(ctx.arena, chunk);
-            response.toss(chunk.len);
-        } else |e| switch (e) {
-            error.EndOfStream => {},
-            else => return e,
-        }
-        try streams.checkAnyError();
-        const raw_stderr = streams.reader(1).buffered();
-        const separated = if (capture_headers)
-            try stats.splitCurlStderr(ctx.arena, raw_stderr)
-        else
-            stats.CurlStderr{ .headers = "", .diagnostics = raw_stderr };
-        try ctx.err.writeAll(separated.diagnostics);
-        try ctx.err.flush();
-        const code: u8 = switch (try child.wait(ctx.io)) {
-            .exited => |code| code,
-            else => 1,
-        };
-        stats.finish(ctx, s, separated.headers, body.items);
-        return code;
+
+    var buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var streams: std.Io.File.MultiReader = undefined;
+    streams.init(ctx.arena, ctx.io, buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer streams.deinit();
+    var body: std.ArrayList(u8) = .empty;
+    const response = streams.reader(0);
+    while (streams.fill(4096, .none)) |_| {
+        const chunk = response.buffered();
+        ctx.out.writeAll(chunk) catch return 0;
+        ctx.out.flush() catch return 0;
+        if (settings) |s| if (s.body.len > 0) try body.appendSlice(ctx.arena, chunk);
+        response.toss(chunk.len);
+    } else |e| switch (e) {
+        error.EndOfStream => {},
+        else => return e,
     }
-    return switch (child.wait(ctx.io) catch return 1) {
+    try streams.checkAnyError();
+    const raw_stderr = streams.reader(1).buffered();
+    const separated = if (capture_headers)
+        try stats.splitCurlStderr(ctx.arena, raw_stderr)
+    else
+        stats.CurlStderr{ .headers = "", .diagnostics = raw_stderr };
+    try ctx.err.writeAll(separated.diagnostics);
+    try ctx.err.flush();
+    const code: u8 = switch (try child.wait(ctx.io)) {
         .exited => |code| code,
         else => 1,
     };
+    if (settings) |s| stats.finish(ctx, s, separated.headers, body.items);
+    return code;
+}
+
+fn spoolFile(io: std.Io, input: *std.Io.Reader, output: std.Io.File) !void {
+    // Positional writes leave the inherited descriptor ready to read at zero.
+    var offset: u64 = 0;
+    while (true) {
+        if (input.buffered().len == 0) {
+            input.fillMore() catch |e| switch (e) {
+                error.EndOfStream => return,
+                else => return e,
+            };
+        }
+        const chunk = input.buffered();
+        try output.writePositionalAll(io, chunk, offset);
+        offset += chunk.len;
+        input.toss(chunk.len);
+    }
 }
 
 /// Where the header lines wait between here and curl.
@@ -459,4 +493,75 @@ test "a file goes up as a form, with its fields beside it" {
             "\r\n--B--\r\n",
         try form(a.allocator(), "B", "a.jpeg", "abc", &.{ "purpose=vision", "odd=@notafile" }),
     );
+}
+
+test "url-provider refuses terminal stdin without consuming it" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed("unconsumed");
+    var ctx = invocation.ctx(&.{}, &input);
+    ctx.stdin_terminal = true;
+    try std.testing.expectEqual(@as(u8, 1), try command.run(ctx));
+    try std.testing.expectEqualStrings("unconsumed", input.buffered());
+    try std.testing.expectEqualStrings("", invocation.out.written());
+    try std.testing.expect(std.mem.startsWith(u8, invocation.err.written(), "m8 url-provider: no request on stdin\n"));
+}
+
+test "url-provider validates endpoint and no-input mode arguments before reading" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const cases = [_]struct { args: []const []const u8, terminal: bool = false, diagnostic: []const u8 }{
+        .{ .args = &.{}, .diagnostic = "m8 url-provider: no M8_PROVIDER_URL\n" },
+        .{ .args = &.{"--get"}, .terminal = true, .diagnostic = "m8 url-provider: --get takes one url\n" },
+        .{ .args = &.{ "--get", "one", "two" }, .diagnostic = "m8 url-provider: --get takes one url\n" },
+        .{ .args = &.{ "--upload", "one" }, .terminal = true, .diagnostic = "m8 url-provider: --upload takes a url and a file\n" },
+    };
+    for (cases) |case| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed("unconsumed");
+        var ctx = invocation.ctx(case.args, &input);
+        ctx.stdin_terminal = case.terminal;
+        try std.testing.expectEqual(@as(u8, 1), try command.run(ctx));
+        try std.testing.expectEqualStrings("unconsumed", input.buffered());
+        try std.testing.expectEqualStrings("", invocation.out.written());
+        try std.testing.expectEqualStrings(case.diagnostic, invocation.err.written());
+    }
+}
+
+// Exercise the subprocess pump separately from HTTP/curl integration. The shell
+// stands in for the transport, not command parsing or process-input discovery.
+test "url-provider curl pump forwards supplied input and separates output without stats" {
+    if (comptime no_curl_dep) return error.SkipZigTest;
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    const request = try invocation.arena.allocator().alloc(u8, 256 * 1024);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try invocation.env.put("TMPDIR", try tmp.dir.realPathFileAlloc(std.testing.io, ".", invocation.arena.allocator()));
+    @memset(request, 'x');
+    var input: std.Io.Reader = .fixed(request);
+    const ctx = invocation.ctx(&.{}, &input);
+    try std.testing.expectEqual(@as(u8, 7), try runCurl(ctx, &.{ "cat; printf diagnostic >&2; exit 7", "test transport" }, true));
+    try std.testing.expectEqualStrings(request, invocation.out.written());
+    try std.testing.expectEqualStrings("diagnostic", invocation.err.written());
+}
+
+test "url-provider curl pump treats absent stdin as EOF and no-input modes leave it unread" {
+    if (comptime no_curl_dep) return error.SkipZigTest;
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    for ([_]bool{ true, false }) |forward| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try invocation.env.put("TMPDIR", try tmp.dir.realPathFileAlloc(std.testing.io, ".", invocation.arena.allocator()));
+        var input: std.Io.Reader = .fixed("unconsumed");
+        const ctx = invocation.ctx(&.{}, if (forward) null else &input);
+        try std.testing.expectEqual(@as(u8, 0), try runCurl(ctx, &.{ "cat; printf done", "test transport" }, forward));
+        try std.testing.expectEqualStrings("done", invocation.out.written());
+        try std.testing.expectEqualStrings("", invocation.err.written());
+        try std.testing.expectEqualStrings("unconsumed", input.buffered());
+    }
 }

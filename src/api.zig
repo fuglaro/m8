@@ -39,11 +39,14 @@ pub const Ctx = struct {
     argv: []const []const u8 = &.{},
     /// Arguments after the command name.
     args: []const []const u8,
-    /// The incoming document. Empty when nothing was piped in.
-    ///
-    /// Read whole for now. Commands that only ever append are the reason this
-    /// wants to become a streaming reader later; the contract does not change
-    /// when it does.
+    /// Process stdin, available only when the command owns raw stdin (or opts in).
+    /// Null means no process input was supplied. `in` remains the pre-read document.
+    stdin: ?*std.Io.Reader = null,
+    /// Whether process stdin is a terminal; distinct from the interaction tty.
+    stdin_terminal: bool = false,
+    /// The incoming document, pre-read for commands that take a document.
+    /// Empty when nothing was piped in. Its reader is then null, preventing a
+    /// command from accidentally consuming the same process input a second time.
     in: []const u8,
     /// The outgoing document.
     out: *std.Io.Writer,
@@ -263,9 +266,7 @@ pub fn openTty(io: std.Io, storage: *TtyFiles) ?Tty {
 /// A terminal on stdin means there is no incoming document — nobody pipes a
 /// conversation in by hand — so it reads as empty. Waiting for an EOF the
 /// terminal will never send just hangs.
-pub fn readDocument(io: std.Io, arena: Allocator, buf: []u8) ![]const u8 {
-    const in = std.Io.File.stdin();
-    if (try in.isTty(io)) return "";
-    var r = in.readerStreaming(io, buf);
-    return r.interface.allocRemaining(arena, .unlimited);
+pub fn readDocument(reader: *std.Io.Reader, terminal: bool, arena: Allocator) ![]const u8 {
+    if (terminal) return "";
+    return reader.allocRemaining(arena, .unlimited);
 }

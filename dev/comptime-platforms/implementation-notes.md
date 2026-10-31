@@ -36,4 +36,4 @@ No automatic migration of arbitrary user/system configuration outside this repos
 - Native CLI smoke through the toy provider: explicit project chat, subchat/reset, relocated user chat/workspace, mob shadowing, cross-mob refusal, no default/main chat: passed.
 - All-split command build and the same native smoke checks: passed.
 - Small build: passed.
-- Repeat the native checks with `bash plans/comptime-platforms/storage-smoke.sh`; `M8_BIN` optionally selects another built launcher. The fixtures stay under ignored `scratch/storage-smoke/`.
+- Storage/launcher smoke scenarios now live in `src/storage_process_test.zig` and run with `zig build test`, using isolated temporary fixtures and the test-built unsplit launcher. The former `storage-smoke.sh` script has been removed; these tests do not establish all-split executable wiring.

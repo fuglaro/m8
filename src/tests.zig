@@ -1,6 +1,7 @@
 //! Root module for the complete project test suite.
 
 comptime {
+    _ = @import("storage_process_test.zig");
     _ = @import("main.zig");
     _ = @import("m8/sigil.zig");
     _ = @import("m8/markdown.zig");

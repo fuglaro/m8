@@ -1,4 +1,4 @@
-//! `cast` — a ledger replayed as riff would have shown it, as an animated SVG.
+//! `cast` — a ledger replayed as an animated SVG.
 //!
 //! The picture is for a README, where an image is all that runs: no script,
 //! only the CSS inside the SVG. So nothing is drawn frame by frame. Every line
@@ -46,7 +46,7 @@ const Ctx = api.Ctx;
 
 pub const command: api.Command = .{
     .name = "cast",
-    .summary = "replay a ledger as riff would show it, as an animated SVG",
+    .summary = "replay a ledger as an animated SVG",
     // Read as it arrives, a record at a time.
     .takes = .nothing,
     .run = run,
@@ -238,17 +238,14 @@ fn run(ctx: Ctx) !u8 {
 
     var diag: doc.Diagnostic = .{};
     var p: doc.Parser = .{ .arena = ctx.arena, .diag = &diag };
-    var buf: [16 * 1024]u8 = undefined;
-    var in = std.Io.File.stdin().readerStreaming(ctx.io, &buf);
-    const r = &in.interface;
-    while (true) {
-        r.fillMore() catch |e| switch (e) {
+    if (ctx.stdin) |r| while (true) {
+        if (r.bufferedLen() == 0) r.fillMore() catch |e| switch (e) {
             error.EndOfStream => break,
             else => return e,
         };
         p.feed(r.buffered(), &c) catch |e| return failed(ctx, &diag, e);
         r.tossBuffered();
-    }
+    };
     p.finish(&c) catch |e| return failed(ctx, &diag, e);
     try c.close();
     try ctx.out.flush();
@@ -1214,9 +1211,9 @@ const Sgr = struct {
 /// The xterm 256-colour palette.
 fn xterm(n: u8) [3]u8 {
     const named = [16][3]u8{
-        .{ 0, 0, 0 },       .{ 205, 49, 49 },  .{ 13, 188, 121 }, .{ 229, 229, 16 },
-        .{ 36, 114, 200 },  .{ 188, 63, 188 }, .{ 17, 168, 205 }, .{ 229, 229, 229 },
-        .{ 102, 102, 102 }, .{ 241, 76, 76 },  .{ 35, 209, 139 }, .{ 245, 245, 67 },
+        .{ 0, 0, 0 },       .{ 205, 49, 49 },   .{ 13, 188, 121 }, .{ 229, 229, 16 },
+        .{ 36, 114, 200 },  .{ 188, 63, 188 },  .{ 17, 168, 205 }, .{ 229, 229, 229 },
+        .{ 102, 102, 102 }, .{ 241, 76, 76 },   .{ 35, 209, 139 }, .{ 245, 245, 67 },
         .{ 59, 142, 234 },  .{ 214, 112, 214 }, .{ 41, 184, 219 }, .{ 255, 255, 255 },
     };
     if (n < 16) return named[n];
@@ -1296,4 +1293,80 @@ test "what does not fit is handed back, in the style it was in" {
     const next = try layout(a.allocator(), line[s.rest.?..], 5, s.style);
     try testing.expect(next.runs[0].style.bold);
     try testing.expectEqual(@as(?usize, null), next.rest);
+}
+
+test "cast static consumes supplied ledger through EOF, including terminal-marked input" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    for ([_]bool{ false, true }) |terminal| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed("▐ 🤖:\n│ HiddenPrelude\n▐ 🙋:\n│ SentQuestion\n▐ 🤖:\n│ VisibleReply\n▐ 🙋:\n│ UnsentDraft");
+        var ctx = invocation.ctx(&.{"--static"}, &input);
+        ctx.stdin_terminal = terminal;
+        try testing.expectEqual(@as(u8, 0), try command.run(ctx));
+        const svg = invocation.out.written();
+        try testing.expect(std.mem.startsWith(u8, svg, "<svg"));
+        try testing.expect(std.mem.endsWith(u8, svg, "</svg>\n"));
+        try testing.expect(std.mem.indexOf(u8, svg, "HiddenPrelude") == null);
+        const question = std.mem.indexOf(u8, svg, "SentQuestion").?;
+        const reply = std.mem.indexOf(u8, svg, "VisibleReply").?;
+        try testing.expect(question < reply);
+        try testing.expect(std.mem.indexOf(u8, svg, "UnsentDraft") != null);
+        try testing.expect(std.mem.indexOf(u8, svg, "@keyframes") == null);
+        try testing.expectEqualStrings("", input.buffered());
+        try testing.expectEqualStrings("", invocation.err.written());
+    }
+}
+
+test "cast absent input is an empty SVG, not process stdin" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    for ([_][]const []const u8{ &.{}, &.{"--static"} }) |args| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        try testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(args, null)));
+        try testing.expect(std.mem.startsWith(u8, invocation.out.written(), "<svg"));
+        try testing.expect(std.mem.endsWith(u8, invocation.out.written(), "</svg>\n"));
+        try testing.expectEqualStrings("", invocation.err.written());
+    }
+}
+
+test "cast rejects invalid arguments before consuming input or writing SVG" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const cases = [_]struct { args: []const []const u8, diagnostic: []const u8 }{
+        .{ .args = &.{ "--size", "7x4" }, .diagnostic = "m8 cast: --size is at least 8x4\n" },
+        .{ .args = &.{ "--speed", "oops" }, .diagnostic = "m8 cast: --speed is a default" },
+        .{ .args = &.{"--unknown"}, .diagnostic = "m8 cast: '--unknown' is not something it takes" },
+    };
+    for (cases) |case| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed("unconsumed");
+        try testing.expectEqual(@as(u8, 1), try command.run(invocation.ctx(case.args, &input)));
+        try testing.expectEqualStrings("unconsumed", input.buffered());
+        try testing.expectEqualStrings("", invocation.out.written());
+        try testing.expect(std.mem.startsWith(u8, invocation.err.written(), case.diagnostic));
+    }
+}
+
+test "cast animated output includes supplied reply and animation" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed("▐ 🙋:\r\n│ Question\r\n▐ 🤖:\r\n│ AnimatedReply");
+    try testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{}, &input)));
+    const svg = invocation.out.written();
+    try testing.expect(std.mem.indexOf(u8, svg, "AnimatedReply") != null);
+    try testing.expect(std.mem.indexOf(u8, svg, "@keyframes") != null);
+    try testing.expect(std.mem.endsWith(u8, svg, "</svg>\n"));
+    try testing.expectEqualStrings("", invocation.err.written());
+}
+
+test "cast malformed supplied ledger diagnoses on stderr, not SVG output" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed("not a ledger\n");
+    try testing.expectError(error.Said, command.run(invocation.ctx(&.{"--static"}, &input)));
+    try testing.expectEqualStrings("m8 cast: line 1: first line is not a record header\n", invocation.err.written());
+    try testing.expect(std.mem.indexOf(u8, invocation.out.written(), "m8 cast:") == null);
 }

@@ -91,14 +91,15 @@ fn run(ctx: Ctx) !u8 {
     var diag: doc.Diagnostic = .{};
     var p: doc.Parser = .{ .arena = ctx.arena, .diag = &diag };
     var show: Show = .{ .out = ctx.out, .mode = mode, .look = look };
-    var buf: [16 * 1024]u8 = undefined;
-    var in = std.Io.File.stdin().readerStreaming(ctx.io, &buf);
-    const r = &in.interface;
+    var empty: std.Io.Reader = .fixed("");
+    const r = ctx.stdin orelse &empty;
     while (true) {
-        r.fillMore() catch |e| switch (e) {
-            error.EndOfStream => break,
-            else => return e,
-        };
+        if (r.buffered().len == 0) {
+            r.fillMore() catch |e| switch (e) {
+                error.EndOfStream => break,
+                else => return e,
+            };
+        }
         p.feed(r.buffered(), &show) catch |e| return failed(ctx, &show, &diag, e);
         r.tossBuffered();
         try ctx.out.flush();
@@ -148,3 +149,42 @@ const Show = struct {
         s.body = null;
     }
 };
+
+test "render command consumes supplied buffered input through EOF" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const cases = [_]struct { args: []const []const u8, expected: []const u8 }{
+        .{ .args = &.{"-r"}, .expected = "* :robot::title\n  > body\n" },
+        .{ .args = &.{ "--parsable", "--no-highlight" }, .expected = "▐ 🤖:title\n│ body\n" },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |terminal| {
+            var invocation = try Invocation.init();
+            defer invocation.deinit();
+            var input: std.Io.Reader = .fixed("* :robot::title\r\n  > body");
+            var ctx = invocation.ctx(case.args, &input);
+            ctx.stdin_terminal = terminal;
+            try std.testing.expectEqual(@as(u8, 0), try command.run(ctx));
+            try std.testing.expectEqualStrings(case.expected, invocation.out.written());
+            try std.testing.expectEqualStrings("", invocation.err.written());
+        }
+    }
+}
+
+test "render command sees absent stdin as EOF" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"-r"}, null)));
+    try std.testing.expectEqualStrings("", invocation.out.written());
+    try std.testing.expectEqualStrings("", invocation.err.written());
+}
+
+test "render command keeps partial output and parse diagnostics separate" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed("* :robot::first\n\nnot a record\n");
+    try std.testing.expectError(error.Said, command.run(invocation.ctx(&.{"-r"}, &input)));
+    try std.testing.expectEqualStrings("* :robot::first\n", invocation.out.written());
+    try std.testing.expect(std.mem.startsWith(u8, invocation.err.written(), "m8 render: line 3:"));
+}

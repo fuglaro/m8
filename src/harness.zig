@@ -38,6 +38,9 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
     const err = &stderr.interface;
 
     const self = try m8Path(arena, io, init.environ_map, argv);
+    var stdin_buf: [64 * 1024]u8 = undefined;
+    var stdin_reader = std.Io.File.stdin().readerStreaming(io, &stdin_buf);
+    const stdin_terminal = std.Io.File.stdin().isTty(io) catch false;
     var tty_storage: api.TtyFiles = undefined;
     var ctx: api.Ctx = .{
         .arena = arena,
@@ -48,6 +51,8 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
         .verbosity = verbosity(init.environ_map),
         .argv = @ptrCast(argv),
         .args = args,
+        .stdin = &stdin_reader.interface,
+        .stdin_terminal = stdin_terminal,
         .in = "",
         .out = out,
         .err = err,
@@ -64,9 +69,12 @@ pub fn leaf(init: std.process.Init, c: api.Command, called: []const u8) !u8 {
         return 0;
     }
 
-    var in_buf: [64 * 1024]u8 = undefined;
-    // Stdin belongs to whatever a `.nothing` command hands it to.
-    if (c.takes != .nothing) ctx.in = try api.readDocument(io, arena, &in_buf);
+    // Stdin belongs to whatever a `.nothing` command hands it to. Once
+    // pre-read into `in`, no raw reader remains to avoid consuming it twice.
+    if (c.takes != .nothing) {
+        ctx.in = try api.readDocument(&stdin_reader.interface, stdin_terminal, arena);
+        ctx.stdin = null;
+    }
 
     return finish(ctx, called, c.run(ctx));
 }
@@ -88,6 +96,9 @@ pub fn run(
     out: *std.Io.Writer,
     err: *std.Io.Writer,
 ) !u8 {
+    var stdin_buf: [64 * 1024]u8 = undefined;
+    var stdin_reader = std.Io.File.stdin().readerStreaming(io, &stdin_buf);
+    const stdin_terminal = std.Io.File.stdin().isTty(io) catch false;
     var tty_storage: api.TtyFiles = undefined;
     const ctx: api.Ctx = .{
         .arena = arena,
@@ -98,6 +109,8 @@ pub fn run(
         .verbosity = verbosity(env),
         .argv = argv,
         .args = &.{},
+        .stdin = &stdin_reader.interface,
+        .stdin_terminal = stdin_terminal,
         .in = "",
         .out = out,
         .err = err,

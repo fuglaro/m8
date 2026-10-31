@@ -68,9 +68,8 @@ fn run(ctx: Ctx) !u8 {
 fn stream(ctx: Ctx, packed_out: bool, unwrap: bool) !void {
     // A nested arena on ctx.arena may not reclaim memory if the outer allocator
     // is itself an arena. Use a backing allocator with real free_all semantics.
-    var buf: [16 * 1024]u8 = undefined;
-    var input = std.Io.File.stdin().readerStreaming(ctx.io, &buf);
-    try streamReader(std.heap.page_allocator, &input.interface, packed_out, unwrap, ctx.out);
+    const input = ctx.stdin orelse return;
+    try streamReader(std.heap.page_allocator, input, packed_out, unwrap, ctx.out);
 }
 
 fn streamReader(allocator: std.mem.Allocator, r: *std.Io.Reader, packed_out: bool, unwrap: bool, out: *std.Io.Writer) !void {
@@ -273,4 +272,38 @@ test "cat unwrap decodes arrows and retains empty and trailing content lines" {
         defer testing.allocator.free(got);
         try testing.expectEqualStrings(case[1], got);
     }
+}
+
+test "cat command uses supplied stdin in each mode, including terminal EOF" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const cases = [_]struct { args: []const []const u8, expected: []const u8 }{
+        .{ .args = &.{}, .expected = "\n* :robot::title\n  > body" },
+        .{ .args = &.{"--pack"}, .expected = "\n- :robot::title↵  > body" },
+        .{ .args = &.{"--unwrap"}, .expected = "\n# title\n\nbody" },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |terminal| {
+            var invocation = try Invocation.init();
+            defer invocation.deinit();
+            var input: std.Io.Reader = .fixed("\n* :robot::title\n  > body");
+            var ctx = invocation.ctx(case.args, &input);
+            ctx.stdin_terminal = terminal;
+            try testing.expectEqual(@as(u8, 0), try command.run(ctx));
+            try testing.expectEqualStrings(case.expected, invocation.out.written());
+            try testing.expectEqualStrings("", invocation.err.written());
+        }
+    }
+}
+
+test "cat command has no global input fallback and reports options on stderr" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{}, null)));
+    try testing.expectEqualStrings("", invocation.out.written());
+    var input: std.Io.Reader = .fixed("not a document");
+    try testing.expectEqual(@as(u8, 1), try command.run(invocation.ctx(&.{ "--pack", "--unwrap" }, &input)));
+    try testing.expectEqualStrings("not a document", input.buffered());
+    try testing.expectEqualStrings("", invocation.out.written());
+    try testing.expect(std.mem.startsWith(u8, invocation.err.written(), "m8 cat: invalid options;"));
 }

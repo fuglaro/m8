@@ -67,13 +67,13 @@ fn run(ctx: Ctx) !u8 {
         return 1;
     };
 
-    var buf: [64 * 1024]u8 = undefined;
-    var in = std.Io.File.stdin().readerStreaming(ctx.io, &buf);
+    var empty: std.Io.Reader = .fixed(&.{});
+    const input = ctx.stdin orelse &empty;
 
     // Written as it is read, so a streamed response reaches whatever is next
     // in the pipe while the model is still saying it.
     var live: Live = .{ .out = ctx.out, .mode = ctx.mode };
-    const reply = try c.parse(ctx.arena, &in.interface, live.sink());
+    const reply = try c.parse(ctx.arena, input, live.sink());
     try live.finish();
     // What a format has to say beside the turn, such as what it cost, is for
     // whoever is watching the run, and only once they have asked to be told.
@@ -162,3 +162,111 @@ const Live = struct {
         if (self.body) |*b| try b.finish();
     }
 };
+
+test "parse runs from its context reader and keeps output channels separate" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed("* :robot::\n  > answer\n");
+    var ctx = invocation.ctx(&.{"m8"}, &input);
+    ctx.verbosity = 1;
+    try std.testing.expectEqual(@as(u8, 0), try command.run(ctx));
+    try std.testing.expectEqualStrings("* :robot::\n  > answer\n", invocation.out.written());
+    try std.testing.expectEqualStrings("", invocation.err.written());
+}
+
+test "parse rejects missing and unknown formats without consuming input" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const cases = [_]struct { args: []const []const u8, diagnostic: []const u8 }{
+        .{ .args = &.{}, .diagnostic = "m8 parse: name a format\n" },
+        .{ .args = &.{"not-a-format"}, .diagnostic = "m8 parse: no format named 'not-a-format'\n" },
+    };
+    for (cases) |case| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed("unconsumed");
+        try std.testing.expectEqual(@as(u8, 1), try command.run(invocation.ctx(case.args, &input)));
+        try std.testing.expectEqualStrings("unconsumed", input.buffered());
+        try std.testing.expectEqualStrings("", invocation.out.written());
+        try std.testing.expect(std.mem.startsWith(u8, invocation.err.written(), case.diagnostic));
+    }
+}
+
+test "parse with no context input sees EOF rather than process stdin" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"m8"}, null)));
+    try std.testing.expectEqualStrings("", invocation.out.written());
+    try std.testing.expectEqualStrings("", invocation.err.written());
+}
+
+test "parse provider SSE and whole JSON produce the same ledger through EOF" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const streamed =
+        \\data: {"choices":[{"delta":{"content":"Hello"}}]}
+        \\
+        \\data: {"choices":[{"delta":{"content":" world"}}]}
+        \\
+        \\data: [DONE]
+    ;
+    const whole =
+        \\{"choices":[{"message":{"content":"Hello world"}}]}
+    ;
+    for ([_][]const u8{ streamed, whole }) |body| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed(body);
+        try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"openai-completions"}, &input)));
+        try std.testing.expectEqualStrings("* :robot::\n  > Hello world\n", invocation.out.written());
+        try std.testing.expectEqualStrings("", invocation.err.written());
+    }
+}
+
+test "parse streamed tool arguments become one call without an empty assistant record" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed(
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"say"}}]}}]}
+        \\
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"text\":"}}]}}]}
+        \\
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"hi\"}"}}]}}]}
+        \\
+        \\data: [DONE]
+    );
+    try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"openai-completions"}, &input)));
+    try std.testing.expectEqualStrings("* :calling::say,c1\n  > * text `\"hi\"`\n", invocation.out.written());
+    try std.testing.expectEqualStrings("", invocation.err.written());
+}
+
+test "parse preserves non-object tool arguments after assistant text" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed(
+        \\{"choices":[{"message":{"content":"Calling now","tool_calls":[{"id":"c2","function":{"name":"say","arguments":"not JSON"}}]}}]}
+    );
+    try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"openai-completions"}, &input)));
+    try std.testing.expectEqualStrings("* :robot::\n  > Calling now\n\n* :calling::say,c2\n  > not JSON\n", invocation.out.written());
+    try std.testing.expectEqualStrings("", invocation.err.written());
+}
+
+test "parse provider usage metadata stays off ledger and stderr even with verbosity" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    // Codecs currently return no built-in stats aside. This exercises real
+    // provider metadata, not a synthetic Reply.aside that no codec produces.
+    for ([_]u8{ 0, 1 }) |verbosity_level| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed(
+            \\{"choices":[{"message":{"content":"Answer"}}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}
+        );
+        var ctx = invocation.ctx(&.{"openai-completions"}, &input);
+        ctx.verbosity = verbosity_level;
+        try std.testing.expectEqual(@as(u8, 0), try command.run(ctx));
+        try std.testing.expectEqualStrings("* :robot::\n  > Answer\n", invocation.out.written());
+        try std.testing.expectEqualStrings("", invocation.err.written());
+    }
+}
