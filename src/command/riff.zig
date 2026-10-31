@@ -39,6 +39,9 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\Each message sent starts CMD, hands it the message on stdin, and lets
         \\its stdout scroll past as ordinary terminal scrollback. The last line
         \\it wrote to stderr is the status line.
+        \\While CMD runs, elapsed minutes:seconds sits at the bottom right if
+        \\no status text has been given or more than one status line is visible.
+        \\The stats panel takes priority when there is only one line.
         \\
         \\A stderr line that leads with `::stats::` carries a panel, which
         \\stays at the right of the top status line until the next one. The
@@ -272,6 +275,9 @@ const Riff = struct {
     shaken: ?std.Io.Timestamp = null,
     clear: bool = false,
     child: ?std.process.Child = null,
+    /// The current process's start, and whether it has supplied status text.
+    started: ?std.Io.Timestamp = null,
+    status_given: bool = false,
     streams: [2]?posix.fd_t = .{ null, null },
 
     /// The rows riff owns: the status lines and the editor.
@@ -346,7 +352,9 @@ const Riff = struct {
                 // Sending ends whatever line the command had left open, as
                 // the Enter a terminal echoes would have.
                 r.status_ended = true;
+                const status_given = r.status_given;
                 r.note(working);
+                r.status_given = r.child != null and status_given;
                 try r.render();
                 if (r.child == null) try r.spawn(r.queue.orderedRemove(0));
                 // A run already listening is handed whatever else is waiting.
@@ -358,7 +366,7 @@ const Riff = struct {
                 .{ .fd = if (r.asking != .no) -1 else r.streams[0] orelse -1, .events = posix.POLL.IN, .revents = 0 },
                 .{ .fd = r.streams[1] orelse -1, .events = posix.POLL.IN, .revents = 0 },
             };
-            const n = posix.system.poll(&fds, fds.len, if (r.asking != .no) 100 else if (r.resizing != null) settle / 2 else -1);
+            const n = posix.system.poll(&fds, fds.len, if (r.asking != .no) 100 else if (r.resizing != null) settle / 2 else if (r.started != null) 1000 else -1);
             if (posix.errno(n) != .SUCCESS) continue;
             // A terminal that never answers is assumed to be at the bottom.
             if (n == 0 and r.asking != .no) try r.answered(r.first, null);
@@ -416,12 +424,15 @@ const Riff = struct {
                 }
                 r.input.clearRetainingCapacity();
                 r.child = null;
+                r.started = null;
                 // Whatever it left half said is not owed an ending.
                 r.scan.state = .text;
                 r.scan.owed = 0;
                 r.stopping = false;
                 try r.render();
             }
+            // Quiet commands still advance the clock; unchanged rows cost no output.
+            if (r.started != null) try r.render();
         }
     }
 
@@ -460,9 +471,12 @@ const Riff = struct {
         });
         r.streams = .{ child.stdout.?.handle, child.stderr.?.handle };
         r.child = child;
+        r.started = .now(io, .awake);
+        r.status_given = false;
         r.input.clearRetainingCapacity();
         r.output_seen = false;
         try r.hand(message);
+        try r.render();
     }
 
     /// Write the command a message. One run a message has then been told
@@ -551,6 +565,9 @@ const Riff = struct {
                 r.status[r.status_len] = b;
                 r.status_len += 1;
             }
+            const text = r.status[0..r.status_len];
+            if (!std.mem.startsWith(u8, stats, text) and !std.mem.startsWith(u8, text, stats))
+                r.status_given = true;
             // The panel ends at the next pair of colons. The rest of this
             // line is detail for other consumers, not another status line.
             if (b == ':' and std.mem.endsWith(u8, r.status[0..r.status_len], "::") and
@@ -640,6 +657,11 @@ const Riff = struct {
 
         var any = false;
         var waiting_line: [128]u8 = undefined;
+        var clock_buf: [32]u8 = undefined;
+        const clock = if (r.started) |since| blk: {
+            const seconds = @divTrunc(@max(0, since.untilNow(r.ctx.io, .awake).toMilliseconds()), 1000);
+            break :blk try std.fmt.bufPrint(&clock_buf, "{d}:{d:0>2}", .{ @divTrunc(seconds, 60), @mod(seconds, 60) });
+        } else "";
         const line = &r.line;
         for (0..l) |k| {
             line.clearRetainingCapacity();
@@ -657,10 +679,12 @@ const Riff = struct {
                 const bezel = inner >= 8;
                 try w.writeAll(if (!bezel) grey ++ "\x1b[7m" else if (k == 0) grey ++ "▂▟\x1b[7m" else grey ++ "██\x1b[7m");
                 const room = if (bezel) inner - 4 else inner;
-                // The top line gives its right end to the panel, hard up
-                // against it, while that leaves it room to say something.
-                const panel = r.panel[0..r.panel_len];
-                const aside = if (k == 0 and span(panel) + 8 <= room) span(panel) else 0;
+                // Stats keep the top right; the clock uses the bottom right
+                // while it need not compete with a single explicit status.
+                const panel = if (k == 0 and r.panel_len > 0)
+                    r.panel[0..r.panel_len]
+                else if (up == 0 and (b > 1 or !r.status_given)) clock else "";
+                const aside = if (panel.len > 0 and span(panel) + 8 <= room) span(panel) else 0;
                 var said = r.above(up);
                 if (up == 0 and r.child == null and r.queue.items.len == 0 and r.stopped != null) {
                     said = std.fmt.bufPrint(
@@ -1310,4 +1334,48 @@ test "Enter sends, and a paste keeps its lines" {
     try testing.expect(!r.pasting);
     // A lone escape is a key that does nothing, and is not waited on.
     try testing.expectEqual(@as(usize, 1), try r.keys("\x1b"));
+}
+
+test "elapsed process time shares the status area without displacing stats" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var ctx: Ctx = undefined;
+    ctx.arena = arena;
+    ctx.io = testing.io;
+    var r: Riff = .{ .ctx = ctx, .out = &out.writer, .cmd = &.{}, .h = 24, .w = 100 };
+    defer r.line.deinit();
+
+    r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(56));
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "0:56") != null);
+
+    r.note("::sta");
+    r.note("ts::stats panel::detail\n");
+    try testing.expect(!r.status_given);
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "stats panel") != null);
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "0:56") == null);
+
+    r.panel_len = 0;
+    r.note("thinking\n");
+    try testing.expect(r.status_given);
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "0:56") == null);
+
+    r.s = 2;
+    r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(3723));
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[1].items, "62:03") != null);
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "62:03") == null);
+
+    // A terminal too short for two bars follows the single-line rule.
+    r.h = 3;
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "62:03") == null);
+    r.h = 24;
+    r.started = null;
+    try r.render();
+    try testing.expect(std.mem.indexOf(u8, r.drawn.items[1].items, "62:03") == null);
 }

@@ -215,12 +215,17 @@ turn is reported before you write a message.
   * `-s N` is N status lines, from 1 to 8: the last N it wrote,
     newest at the bottom.
   * What riff says itself takes the bottom one.
+  * While CMD runs, elapsed time appears at the bottom-right of
+    the status area as minutes and seconds (for example, `0:56`),
+    when CMD has not written status text yet or more than one status
+    line is visible.
   * A nonzero exit remains `Stopped(N) and waiting ...` until
     the next message is dispatched. A signal uses its number.
 * A stderr line that leads with `::stats::` carries a panel.
   * The panel is what follows, up to a `::` or the line's end.
   * It sits at the right end of the top status line, hard
-    against the text, and stays until the next one.
+    against the text, and stays until the next one. It takes
+    priority over elapsed time when only one status line is visible.
   * Anything after the `::` is a status line as usual.
   * A provider's optional `stats` command says one under `-v`:
     `::stats::✥19▇16K::` is what came out, the share the
