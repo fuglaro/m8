@@ -19,8 +19,11 @@ definition's business.
   and a verdict.
 * A command that writes m8 itself is named directly.
 * m8 keeps no note of which is which. It reads what came
-  back, and an answer with no verdict for its call is a
-  🚫.
+  back, retaining allowed tool records even without a verdict.
+  If no explicit verdict names the call, m8 supplies 🟢 for
+  exit status zero or 🚫 for a nonzero exit or interruption.
+* For a single tool call, its allowed records are displayed as
+  they arrive. Multi-call responses are displayed after completion.
 
 ```m8
 ▐ 🏃:bash

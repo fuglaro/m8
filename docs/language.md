@@ -204,11 +204,11 @@ however large it is, so that the first line could be
 written last. Splitting the verdict off is what lets
 the answer be written as it arrives.
 
-A tool that says nothing is answered by its verdict
-alone. 🧾 without a verdict under it is a tool that
-spoke and was cut off; it still answers the call,
-because running it again to find out how it would
-have ended would do whatever it does a second time.
+A tool that says nothing is answered by its verdict alone. If a tool
+omits a verdict, m8 supplies one after it stops: 🟢 for exit
+status zero, or 🚫 for a nonzero exit or interruption. An
+explicit verdict naming the call takes precedence. 🧾 without a
+verdict is therefore still a useful receipt, not a lost answer.
 
 What a call supplies is a bullet per argument, including any
 parameter the model supplied that the tool does not define.

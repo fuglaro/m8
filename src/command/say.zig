@@ -152,6 +152,9 @@ fn run(given: Ctx) !u8 {
     // (as it is under riff). Only the padding is for terminal input echo.
     if (ctx.mode == .m8 and !o.answer and !o.unwrap) {
         if (terminal) try ctx.out.writeAll("  \n");
+        // The agent reference and submission are separate records; user
+        // submissions open a paragraph of their own.
+        try ctx.out.writeByte('\n');
         try doc.write(ctx.out, .m8, said.?);
         try ctx.out.flush();
     }
@@ -177,6 +180,7 @@ fn run(given: Ctx) !u8 {
         .keep = keeping.keeper(),
         .echo_given = !deferred and ctx.mode == .md,
         .verbosity = verbosity,
+        .previous = if (ctx.mode == .m8 and !o.answer and !o.unwrap) said.?.sigil else null,
         .trace = if (verbosity >= 2) ctx.err else null,
     });
     const kept = try keeping.finish(turn);
@@ -202,7 +206,6 @@ fn run(given: Ctx) !u8 {
         for (turn) |r| try unwrapped.write(r, true, ctx.out);
         try unwrapped.write(receipt, true, ctx.out);
     } else {
-        try ctx.out.writeByte('\n');
         try doc.write(ctx.out, ctx.mode, receipt);
     }
     return 0;
@@ -384,6 +387,12 @@ test "say through Ctx retains piped submissions in every presentation" {
         } else {
             try t.expectEqual(@as(usize, 0), std.mem.count(u8, result.out, "🙋"));
             try t.expectEqual(@as(usize, 0), std.mem.count(u8, result.out, ":raising_hand:"));
+        }
+        if (case.user != null and std.mem.eql(u8, case.flags[0], "-r")) {
+            try t.expect(std.mem.indexOf(u8, result.out, "\n\n") != null);
+            try t.expect(std.mem.indexOf(u8, result.out, "\n\n▐ 🤖") != null);
+            try t.expect(std.mem.indexOf(u8, result.out, "ctx submission") != null);
+            try t.expect(std.mem.indexOf(u8, result.out, "\n\n▐ 🧠") == null);
         }
     }
 }

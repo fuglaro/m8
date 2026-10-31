@@ -56,6 +56,9 @@ pub const Options = struct {
     /// or a tool has finished saying happened, whatever becomes of the next
     /// one, so a run that dies keeps everything up to where it died.
     keep: ?Keeper = null,
+    /// The last record already rendered by the caller, if this run continues
+    /// an existing display (for example, `say`'s rendered submission).
+    previous: ?sigil.Sigil = null,
     /// Stream the complete turn in markdown to this writer as records arrive.
     trace: ?*std.Io.Writer = null,
     /// How much is said on stderr about what the run is doing: nothing, a
@@ -185,7 +188,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     // terminal is shown every 📜, 🤖, 💭 and 📲 highlighted as markdown.
     var look: doc.Look = if (mode == .m8) try config.highlights(ctx.arena, ctx.io, ctx.env) else .{};
     look.width = highlight.terminalWidth(ctx.env);
-    var shown: Shown = .{ .look = if (mode == .m8) look else null, .trace = opts.trace };
+    var shown: Shown = .{ .last = opts.previous, .written = opts.previous != null, .look = if (mode == .m8) look else null, .trace = opts.trace };
     var status: Status = .{ .err = if (level > 0 and opts.trace == null) ctx.err else null };
     if (opts.echo_given) {
         for (settled) |r| try show(arena, out, mode, &shown, r);
@@ -233,8 +236,13 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             const said = try ledger.exclamations(arena, records.items, c.id);
             try status.call(arena, c);
             var how: Went = .settled;
-            for (try answer(ctx, scratch, mob_dir, mob_st8_dir, shields, offered, def.tools, c, said, &how)) |record| {
-                try show(arena, out, mode, &shown, record);
+            var live: LiveTool = .{ .arena = arena, .out = out, .mode = mode, .shown = &shown };
+            const streaming = owed.len == 1;
+            for (try answer(ctx, scratch, mob_dir, mob_st8_dir, shields, offered, def.tools, c, said, &how, if (streaming) &live else null), 0..) |record, at| {
+                if (streaming and at < live.displayed)
+                    try shown.traceRecord(arena, record)
+                else
+                    try show(arena, out, mode, &shown, record);
                 try records.append(arena, record);
                 try turn.append(arena, record);
             }
@@ -348,7 +356,9 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 // The answer comes from the tool, not the model, and was already
                 // checked against what a tool may say.
                 var how: Went = .settled;
-                const answers = try answer(ctx, scratch, mob_dir, mob_st8_dir, shields, offered, def.tools, c, &.{}, &how);
+                var live: LiveTool = .{ .arena = arena, .out = out, .mode = mode, .shown = &shown };
+                const streaming = calls.len == 1;
+                const answers = try answer(ctx, scratch, mob_dir, mob_st8_dir, shields, offered, def.tools, c, &.{}, &how, if (streaming) &live else null);
                 // A question stops the run, so the calls behind it are written
                 // down first. They are owed, and whoever picks this up with the
                 // person's answer runs them once the one that asked is through.
@@ -358,8 +368,11 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                     try records.append(arena, waits);
                     try turn.append(arena, waits);
                 };
-                for (answers) |record| {
-                    try show(arena, out, mode, &shown, record);
+                for (answers, 0..) |record, at| {
+                    if (streaming and at < live.displayed)
+                        try shown.traceRecord(arena, record)
+                    else
+                        try show(arena, out, mode, &shown, record);
                     try records.append(arena, record);
                     try turn.append(arena, record);
                 }
@@ -496,6 +509,7 @@ fn answer(
     /// What the person has answered this call's questions with so far.
     said: []const ledger.Answer,
     how: *Went,
+    live: ?*LiveTool,
 ) ![]const doc.Record {
     const arena = ctx.arena;
     const io = ctx.io;
@@ -587,6 +601,8 @@ fn answer(
     try env.appendSlice(arena, try exclaimed(arena, said));
 
     var captured: std.Io.Writer.Allocating = .init(arena);
+    if (live) |l| l.captured = &captured.writer;
+    defer if (live) |l| l.finish() catch {};
     var err_sink: std.Io.Writer.Allocating = .init(arena);
     var tty_storage: api.TtyFiles = undefined;
 
@@ -605,11 +621,16 @@ fn answer(
         .extra_env = env.items,
         .args = &.{},
         .in = "",
-        .out = &captured.writer,
+        .out = if (live) |l| &l.writer else &captured.writer,
         .err = &err_sink.writer,
         .tty = api.openTty(io, &tty_storage),
-    }, wrapped, .document) catch |e|
+    }, wrapped, .document) catch |e| {
+        if (live) |l| {
+            l.finish() catch {};
+            l.displayed = 0;
+        }
         return failure(arena, c.id, "{s}", .{@errorName(e)});
+    };
 
     // A question, which is the whole of what the tool said. The call stays
     // unanswered: it is run again once the person has said something.
@@ -631,31 +652,53 @@ fn answer(
         return one;
     }
     if (status == api.ask_exit and said.len > 0) how.* = .refused;
+    if (live) |l| try l.finish();
 
     var diag: doc.Diagnostic = .{};
-    const records = doc.parse(arena, captured.written(), &diag) catch
+    const records = doc.parse(arena, captured.written(), &diag) catch {
+        if (live) |l| l.displayed = 0;
         return failure(arena, c.id, "the tool did not answer in m8", .{});
-    // Stopped by Ctrl-C before it could say how it went, which is then all
-    // there is to say. One that finished first keeps its own answer.
-    if (interrupted.load(.monotonic) and !hasVerdict(records, c.id))
-        return failure(arena, c.id, "Interrupted while it was running.", .{});
-    if (records.len == 0) return if (status == 0)
-        failure(arena, c.id, "the tool wrote nothing", .{})
-    else if (complaint.len > 0)
-        failure(arena, c.id, "Failed with exit code {d}: {s}", .{ status, complaint })
-    else
-        failure(arena, c.id, "the tool exited without an m8 failure", .{});
-    if (!hasVerdict(records, c.id))
-        return failure(arena, c.id, "the tool did not answer its call with a verdict", .{});
+    };
+    const interrupted_now = interrupted.load(.monotonic);
+    return toolAnswer(arena, records, c.id, status, complaint, interrupted_now);
+}
 
-    // What a tool is allowed to have said. The reply side is closed always;
-    // the definition side is closed by a 🛡 rather than from here, which is
-    // why nothing in this function asks what was in force.
+/// Keep every record the tool was allowed to say. A missing verdict is
+/// supplied here; an explicit verdict is authoritative. Disallowed records
+/// are omitted, but reported alongside the allowed records rather than
+/// replacing them.
+fn toolAnswer(
+    arena: Allocator,
+    records: []const doc.Record,
+    id: []const u8,
+    status: anytype,
+    complaint: []const u8,
+    was_interrupted: bool,
+) ![]const doc.Record {
+    var kept: std.ArrayList(doc.Record) = .empty;
+    var disallowed: ?sigil.Sigil = null;
     for (records) |r| {
-        if (!policy.fromTool(r.sigil))
-            return failure(arena, c.id, "a tool may not hand back {s}", .{r.sigil.word()});
+        if (policy.fromTool(r.sigil)) {
+            try kept.append(arena, r);
+        } else if (disallowed == null) {
+            disallowed = r.sigil;
+        }
     }
-    return records;
+
+    if (disallowed) |which| {
+        try kept.append(arena, (try failure(arena, id, "a tool may not hand back {s}", .{which.word()}))[0]);
+    } else if (!hasVerdict(kept.items, id)) {
+        const verdict = if (was_interrupted)
+            (try failure(arena, id, "Interrupted while it was running.", .{}))[0]
+        else if (status == 0)
+            doc.Record{ .sigil = .ok, .value = id }
+        else if (complaint.len > 0)
+            (try failure(arena, id, "Failed with exit code {d}: {s}", .{ status, complaint }))[0]
+        else
+            (try failure(arena, id, "the tool exited without an m8 failure", .{}))[0];
+        try kept.append(arena, verdict);
+    }
+    return kept.items;
 }
 
 /// The one record that says a call could not be run. A slice, because that is
@@ -714,8 +757,13 @@ const Shown = struct {
     fn touches(last: ?sigil.Sigil, s: sigil.Sigil) bool {
         const l = last orelse return false;
         return switch (s) {
-            .thought, .bot => l == s,
-            .agent => l == .thought,
+            // User submissions and model replies open their own paragraphs;
+            // consecutive chunks from one model stay together.
+            .user => false,
+            .bot => l == .bot,
+            .thought => l == .thought,
+            // An agent receipt is a continuation, never a new paragraph.
+            .agent => true,
             .result, .scroll, .link, .ok, .failed => l == .call or l == .result or l == .scroll or l == .link,
             else => false,
         };
@@ -967,8 +1015,92 @@ const LiveReply = struct {
     }
 };
 
-/// A tool answers the call it was handed. A verdict for another call is still
-/// a valid record, but it does not settle this one.
+/// Incremental display for one tool response. The caller feeds bytes while
+/// retaining them separately; only policy-approved records reach the display.
+/// Trace is intentionally left to the completed records.
+const LiveTool = struct {
+    arena: Allocator,
+    diag: doc.Diagnostic = .{},
+    parser: ?doc.Parser = null,
+    out: *std.Io.Writer,
+    mode: doc.Mode,
+    shown: *Shown,
+    body: ?doc.ContentWriter = null,
+    allowed: bool = false,
+    displayed: usize = 0,
+    lines: usize = 0,
+    feed_error: bool = false,
+    captured: ?*std.Io.Writer = null,
+    writer: std.Io.Writer = .{ .vtable = &writer_vtable, .buffer = &.{} },
+
+    const writer_vtable: std.Io.Writer.VTable = .{ .drain = drain };
+
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *LiveTool = @fieldParentPtr("writer", w);
+        var total: usize = 0;
+        for (data, 0..) |bytes, at| {
+            const repeats = if (at == data.len - 1) splat else 1;
+            for (0..repeats) |_| {
+                if (self.captured) |capture| try capture.writeAll(bytes);
+                if (!self.feed_error) self.feed(bytes) catch {
+                    self.feed_error = true;
+                };
+                total += bytes.len;
+            }
+        }
+        return total;
+    }
+
+    fn feed(self: *LiveTool, bytes: []const u8) !void {
+        if (self.parser == null) self.parser = .{ .arena = self.arena, .diag = &self.diag };
+        try self.parser.?.feed(bytes, self);
+        try self.out.flush();
+    }
+
+    fn finish(self: *LiveTool) !void {
+        if (!self.feed_error) {
+            if (self.parser) |*parser| parser.finish(self) catch {
+                self.feed_error = true;
+            };
+        }
+        try self.end();
+        try self.out.flush();
+    }
+
+    pub fn begin(self: *LiveTool, s: sigil.Sigil, value: []const u8) !void {
+        self.allowed = policy.fromTool(s);
+        self.lines = 0;
+        if (!self.allowed) return;
+        try self.shown.begin(self.out, s);
+        if (s.takesContent()) {
+            self.body = try doc.ContentWriter.beginLooking(self.out, self.mode, self.shown.look, s, value);
+        } else {
+            try doc.writeLooking(self.out, self.mode, self.shown.look, .{ .sigil = s, .value = value });
+            try self.out.flush();
+        }
+        self.displayed += 1;
+    }
+
+    pub fn line(self: *LiveTool) !void {
+        if (!self.allowed) return;
+        if (self.lines > 0) if (self.body) |*body| try body.write("\n");
+        self.lines += 1;
+    }
+
+    pub fn text(self: *LiveTool, bytes: []const u8) !void {
+        if (self.allowed) if (self.body) |*body| try body.write(bytes);
+    }
+
+    pub fn end(self: *LiveTool) !void {
+        if (self.allowed) if (self.body) |*body| {
+            try body.finish();
+            self.body = null;
+        };
+        self.allowed = false;
+    }
+};
+
+/// A verdict for another call is a valid record, but does not settle this one.
 fn hasVerdict(records: []const doc.Record, id: []const u8) bool {
     for (records) |r| switch (r.sigil) {
         .ok, .failed => if (std.mem.eql(u8, r.value, id)) return true,
@@ -1025,6 +1157,113 @@ test "a run is kept a piece at a time, each naming the one before" {
     try std.testing.expectEqual(sigil.Sigil.ok, pieces[1][2].sigil);
 }
 
+test "tool receipts survive a missing verdict" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const receipt = [_]doc.Record{
+        .{ .sigil = .result, .value = "c1", .content = "receipt" },
+        .{ .sigil = .scroll, .value = "c1", .content = "more" },
+    };
+
+    const success = try toolAnswer(arena, &receipt, "c1", 0, "", false);
+    try std.testing.expectEqual(@as(usize, 3), success.len);
+    try std.testing.expectEqual(sigil.Sigil.result, success[0].sigil);
+    try std.testing.expectEqual(sigil.Sigil.scroll, success[1].sigil);
+    try std.testing.expectEqual(sigil.Sigil.ok, success[2].sigil);
+
+    const failed = try toolAnswer(arena, &receipt, "c1", 7, "bad", false);
+    try std.testing.expectEqual(@as(usize, 3), failed.len);
+    try std.testing.expectEqual(sigil.Sigil.failed, failed[2].sigil);
+    const stopped_result = try toolAnswer(arena, &receipt, "c1", 0, "", true);
+    try std.testing.expectEqual(@as(usize, 3), stopped_result.len);
+    try std.testing.expectEqual(sigil.Sigil.failed, stopped_result[2].sigil);
+}
+
+test "tool explicit verdict stands and disallowed record is omitted without losing receipts" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const explicit = [_]doc.Record{
+        .{ .sigil = .result, .value = "c1", .content = "receipt" },
+        .{ .sigil = .failed, .value = "c1", .content = "explicit" },
+    };
+    const kept = try toolAnswer(arena, &explicit, "c1", 0, "", false);
+    try std.testing.expectEqual(@as(usize, 2), kept.len);
+    try std.testing.expectEqualStrings("explicit", kept[1].content.?);
+
+    const forbidden = [_]doc.Record{
+        .{ .sigil = .result, .value = "c1", .content = "receipt" },
+        .{ .sigil = .bot, .content = "not allowed" },
+    };
+    const filtered = try toolAnswer(arena, &forbidden, "c1", 0, "", false);
+    try std.testing.expectEqual(@as(usize, 2), filtered.len);
+    try std.testing.expectEqual(sigil.Sigil.result, filtered[0].sigil);
+    try std.testing.expectEqual(sigil.Sigil.failed, filtered[1].sigil);
+}
+test "live tool parses split headers and gates disallowed records" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var shown: Shown = .{};
+    var captured: std.Io.Writer.Allocating = .init(arena);
+    var live: LiveTool = .{
+        .arena = arena,
+        .out = &out.writer,
+        .mode = .md,
+        .shown = &shown,
+        .captured = &captured.writer,
+    };
+    const wire = "* :receipt::one\n  >     visib✨e\n  >\n  >     second\n\n* :green_circle::c1\n";
+    for (wire) |byte| try live.writer.writeByte(byte);
+    try live.finish();
+    try std.testing.expectEqualStrings(wire, captured.written());
+    try std.testing.expectEqual(@as(usize, 2), live.displayed);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "visib✨e\n  >\n  >     second") != null);
+    try std.testing.expect(std.mem.endsWith(u8, out.written(), "* :green_circle::c1\n"));
+}
+test "answer tees a live single-call response and final trace once" {
+    var state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var env: std.process.Environ.Map = .init(arena);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var trace: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = threaded.io(),
+        .mode = .md,
+        .env = &env,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &out.writer,
+        .tty = null,
+    };
+    const tools = [_]toolbox.Tool{.{
+        .name = "test",
+        .command = .{ .argv = &.{ "/bin/sh", "-c", "printf '%s\\n' '* :receipt::c1' '  >     hello'" } },
+    }};
+    var shown: Shown = .{ .trace = &trace.writer };
+    var live: LiveTool = .{ .arena = arena, .out = &out.writer, .mode = .md, .shown = &shown };
+    var how: Went = .settled;
+    const records = try answer(ctx, "", "", "", .{}, &tools, &tools, .{
+        .name = "test",
+        .id = "c1",
+        .arguments = "{}",
+    }, &.{}, &how, &live);
+    try std.testing.expectEqual(@as(usize, 2), records.len);
+    try std.testing.expectEqual(@as(usize, 1), live.displayed);
+    for (records, 0..) |record, at| {
+        if (at < live.displayed) try shown.traceRecord(arena, record) else try show(arena, &out.writer, .md, &shown, record);
+    }
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "* :receipt::c1"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, trace.written(), "* :receipt::c1"));
+    try std.testing.expect(std.mem.indexOf(u8, trace.written(), "* :green_circle::c1") != null);
+}
 test "only a verdict naming the call settles it" {
     const said = [_]doc.Record{
         .{ .sigil = .result, .value = "c1", .content = "hi" },
@@ -1251,7 +1490,7 @@ test "required top-level enums constrain converted call values before running" {
             .name = "test",
             .id = "c1",
             .arguments = case.args,
-        }, &.{}, &how);
+        }, &.{}, &how, null);
         try testing.expectEqual(@as(usize, 1), records.len);
         try testing.expectEqual(sigil.Sigil.failed, records[0].sigil);
         try testing.expectEqualStrings(case.expected, records[0].content.?);
@@ -1294,8 +1533,37 @@ test "a call that does not read is kept as written and failed" {
         const c: codec.Call = .{ .id = "c1", .name = "edit", .arguments = args };
         try testing.expectEqualStrings(args, (try called(arena, c)).content.?);
         var how: Went = .settled;
-        const records = try answer(ctx, "", "", "", .{}, &tools, &tools, c, &.{}, &how);
+        const records = try answer(ctx, "", "", "", .{}, &tools, &tools, c, &.{}, &how, null);
         try testing.expectEqual(sigil.Sigil.failed, records[0].sigil);
         try testing.expectEqualStrings("arguments could not be read", records[0].content.?);
+    }
+}
+
+test "live tool separators match show in both document modes" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const records = [_]doc.Record{
+        .{ .sigil = .result, .value = "c1", .content = "receipt" },
+        .{ .sigil = .ok, .value = "c1" },
+        .{ .sigil = .result, .value = "c1", .content = "" },
+        .{ .sigil = .scroll, .value = "c1", .content = "scroll\ntext" },
+    };
+    inline for (.{ doc.Mode.md, doc.Mode.m8 }) |wire_mode| {
+        var wire: std.Io.Writer.Allocating = .init(arena);
+        try doc.writeAll(&wire.writer, wire_mode, &records);
+        inline for (.{ doc.Mode.md, doc.Mode.m8 }) |display_mode| {
+            var expected: std.Io.Writer.Allocating = .init(arena);
+            var shown_expected: Shown = .{};
+            for (records) |record| try show(arena, &expected.writer, display_mode, &shown_expected, record);
+
+            var actual: std.Io.Writer.Allocating = .init(arena);
+            var shown_actual: Shown = .{};
+            var live: LiveTool = .{ .arena = arena, .out = &actual.writer, .mode = display_mode, .shown = &shown_actual };
+            try live.writer.writeAll(wire.written());
+            try live.finish();
+            try std.testing.expectEqualStrings(expected.written(), actual.written());
+            try std.testing.expectEqual(records.len, live.displayed);
+        }
     }
 }
