@@ -167,6 +167,9 @@ m8 watch :crew/cody//delegated
   * `say CHAT--` starts it from the authored agent, whatever its chats have got
     to; `say --new CHAT` is the equivalent spelling.
 * `cat` reads a document and writes block markdown by default.
+  * `cat REF` reads the document the chat resolves to, or a named turn, without
+    expanding its lineage or included documents. A chat without a kept turn
+    reads its authored agent document. It ignores stdin.
   * `--pack` writes each record on one physical line for shell filters.
   * `--unwrap` writes generic Markdown: record values become `# VALUE`
     headings, and content is unquoted.

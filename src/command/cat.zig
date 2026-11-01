@@ -3,6 +3,8 @@
 //! grow the command's arena for the lifetime of the process.
 const std = @import("std");
 const api = @import("../api.zig");
+const config = @import("../config.zig");
+const address = @import("../address.zig");
 const doc = @import("../m8/doc.zig");
 const Ctx = api.Ctx;
 
@@ -17,9 +19,11 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 cat [--pack | --unwrap]
+        \\  m8 cat [--pack | --unwrap] [REF]
         \\
-        \\Reads m8 on stdin and writes block markdown by default.
+        \\Reads m8 on stdin and writes block markdown by default. With REF, reads
+        \\the document the chat resolves to, or a named turn instead; stdin is
+        \\ignored. A chat with no kept turn reads its authored agent document.
         \\--pack puts each record on one line, using - for its bullet and ↵
         \\for internal newlines. Literal ↵ is doubled in packed records.
         \\
@@ -30,7 +34,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\Packed and block records may be mixed. Separator newlines and the
         \\presence of the final newline are preserved in default and --pack
-        \\output. Nothing is resolved. --pack and --unwrap are exclusive.
+        \\output. Nothing is resolved without REF. --pack and --unwrap are exclusive.
         \\
         \\  ... | m8 cat --pack | grep '^- :call::' | m8 cat
         \\
@@ -51,6 +55,7 @@ fn run(ctx: Ctx) !u8 {
     if (!modesExclusive(ctx.args)) return usage(ctx);
     var pack = false;
     var unwrap = false;
+    var ref: ?[]const u8 = null;
     for (ctx.args) |arg| {
         if (std.mem.eql(u8, arg, "--pack")) {
             pack = true;
@@ -59,9 +64,25 @@ fn run(ctx: Ctx) !u8 {
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try help(ctx, ctx.out);
             return 0;
+        } else if (ref == null) {
+            ref = arg;
         } else return usage(ctx);
     }
-    try stream(ctx, pack, unwrap);
+    if (ref) |word| {
+        if (!address.isAddress(word)) return usage(ctx);
+        const dirs = try config.discover(ctx.arena, ctx.io, ctx.env);
+        const a = try address.typed(ctx.arena, ctx.io, dirs, word, ctx.err);
+        if (a.suffix != .none or a.kind == .model) return usage(ctx);
+        const turn = try address.found(ctx.arena, ctx.io, dirs, a, ctx.err);
+        const bytes = (try config.read(ctx.arena, ctx.io, dirs, try config.nameFile(ctx.arena, turn))) orelse {
+            try ctx.err.print("m8: no turn named '{s}'\n", .{turn});
+            return 1;
+        };
+        var reader: std.Io.Reader = .fixed(bytes);
+        try streamReader(std.heap.page_allocator, &reader, pack, unwrap, ctx.out);
+    } else {
+        try stream(ctx, pack, unwrap);
+    }
     return 0;
 }
 
@@ -180,8 +201,70 @@ test "cat help documents unwrap formatting and exclusive modes" {
     var output: std.Io.Writer.Allocating = .init(testing.allocator);
     defer output.deinit();
     try help(undefined, &output.writer);
+    try testing.expect(std.mem.indexOf(u8, output.written(), "[REF]") != null);
+    try testing.expect(std.mem.indexOf(u8, output.written(), "stdin is") != null);
     try testing.expect(std.mem.indexOf(u8, output.written(), "--pack and --unwrap are exclusive") != null);
     try testing.expect(std.mem.indexOf(u8, output.written(), "four-space indent") != null);
+}
+
+test "cat ref resolves selected chat and turn, ignores stdin and retains modes" {
+    const alloc = testing.allocator;
+    var heap: std.heap.ArenaAllocator = .init(alloc);
+    defer heap.deinit();
+    const arena = heap.allocator();
+    var threaded: std.Io.Threaded = .init(alloc, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const root = try @import("../test_tmp.zig").make(arena, io, "m8-cat-ref");
+    defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+    const mobs = try std.fs.path.join(arena, &.{ root, "mobs/demo" });
+    try std.Io.Dir.cwd().createDirPath(io, mobs);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ mobs, "cody.md" }), .data = "* :brain::/toy/echo\n* :robot::agent body\n" });
+
+    var env: std.process.Environ.Map = .init(arena);
+    try env.put(config.dirs_var, root);
+    try env.put("M8_CALL_ID", "cat-ref-test");
+    try env.put(config.user_root_var, try std.fs.path.join(arena, &.{ root, "user" }));
+    try env.put(config.data_root_var, try std.fs.path.join(arena, &.{ root, "data" }));
+    const turn = "demo/cody/+/abcdefghij";
+    const pointer = "demo/cody//delegated/+";
+    const state = root;
+    const turn_file = try std.fs.path.join(arena, &.{ state, try config.nameFile(arena, turn) });
+    const dirs = try config.discover(arena, io, &env);
+    try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(turn_file).?);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = turn_file, .data = "* :brain::demo/cody/+/olderturnx\n* :robot::selected\n  > only this turn\n" });
+    try @import("../session.zig").point(arena, io, dirs, pointer[0 .. pointer.len - 2], turn);
+
+    for ([_]struct { args: []const []const u8, expected: []const u8 }{
+        .{ .args = &.{":demo/cody//delegated"}, .expected = "* :brain::demo/cody/+/olderturnx\n* :robot::selected\n  > only this turn\n" },
+        .{ .args = &.{ "--pack", ":demo/cody/+/abcdefghij" }, .expected = "- :brain::demo/cody/+/olderturnx\n- :robot::selected↵  > only this turn\n" },
+        .{ .args = &.{ "--unwrap", ":demo/cody//delegated" }, .expected = "# demo/cody/+/olderturnx\n\n# selected\n\nonly this turn\n" },
+    }) |case| {
+        var input: std.Io.Reader = .fixed("not used stdin");
+        var output: std.Io.Writer.Allocating = .init(alloc);
+        defer output.deinit();
+        var err: std.Io.Writer.Allocating = .init(alloc);
+        defer err.deinit();
+        const code = try command.run(.{ .arena = arena, .io = io, .mode = .md, .env = &env, .args = case.args, .stdin = &input, .in = "", .out = &output.writer, .err = &err.writer, .tty = null });
+        try testing.expectEqual(@as(u8, 0), code);
+        try testing.expectEqualStrings(case.expected, output.written());
+        try testing.expectEqualStrings("not used stdin", input.buffered());
+    }
+
+    var input: std.Io.Reader = .fixed("* :robot::stdin\n");
+    var output: std.Io.Writer.Allocating = .init(alloc);
+    defer output.deinit();
+    var err: std.Io.Writer.Allocating = .init(alloc);
+    defer err.deinit();
+    const code = try command.run(.{ .arena = arena, .io = io, .mode = .md, .env = &env, .args = &.{}, .stdin = &input, .in = "", .out = &output.writer, .err = &err.writer, .tty = null });
+    try testing.expectEqual(@as(u8, 0), code);
+    try testing.expectEqualStrings("* :robot::stdin\n", output.written());
+
+    output.clearRetainingCapacity();
+    err.clearRetainingCapacity();
+    const extra = try command.run(.{ .arena = arena, .io = io, .mode = .md, .env = &env, .args = &.{ ":demo/cody//delegated", ":demo/cody" }, .stdin = null, .in = "", .out = &output.writer, .err = &err.writer, .tty = null });
+    try testing.expectEqual(@as(u8, 1), extra);
+    try testing.expect(std.mem.startsWith(u8, err.written(), "m8 cat: invalid options;"));
 }
 
 test "cat unwraps values, bodies, both and neither literally" {
