@@ -151,6 +151,25 @@ than a field per vendor habit.
 A provider you write reads whatever its own entry says,
 under its own `M8_PROVIDER_` name, and owes none of this.
 
+## Server-directed rate-limit retry
+
+`m8 url-provider` handles HTTP 429 with a valid `Retry-After` by waiting
+as directed and replaying the request **once**. This applies to both HTTP
+transports, including GET and upload requests; it needs no provider config.
+
+* Integer-second delays are used unchanged.
+* IMF-shaped date values ending in `GMT` are treated as short-range time hints:
+  only minutes and seconds are parsed and compared with local UTC, modulo one
+  hour. Values up to five minutes behind are considered already due; otherwise
+  the wait is forward, less than 55 minutes. A two-second cushion is added.
+  Calendar dates and hours are deliberately ignored, and old formats are not
+  supported. This assumes a nearby deadline, not an arbitrary future date.
+* The initial rate-limit body is discarded; only the replay's response is
+  passed to the parser and response stats.
+* A missing or invalid header means no retry. Other status codes are passed
+  through unchanged, and the replay is never retried, even if it is another 429.
+* There is no fallback delay, exponential backoff, or curl retry policy.
+
 ## Listing models
 
 ```bash

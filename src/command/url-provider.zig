@@ -46,8 +46,10 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\as a form, its field `file`, with each NAME=VALUE as a field beside
         \\it.
         \\
-        \\A response is passed on whatever its status. Only a url that cannot
-        \\be reached is a failure.
+        \\A response is passed on whatever its status. A 429 with a valid
+        \\Retry-After is the exception: wait as directed and replay once,
+        \\discarding the first response. There is no fallback backoff.
+        \\Only a url that cannot be reached is a failure.
         \\
         \\environment:
         \\
@@ -155,56 +157,104 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8, body: ?[]const u8, content_type: []
         return 1;
     };
 
-    // No encoding is asked for, as curl asks for none: what comes back is
-    // passed on as it is, and nothing here would undo a compressed body.
-    var req = client.request(method, uri, .{
-        .headers = .{
-            .content_type = if (body != null) .{ .override = content_type } else .default,
-            .accept_encoding = .omit,
-        },
-        .extra_headers = extra.items,
-    }) catch |e| {
-        try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
-        return 1;
-    };
-    defer req.deinit();
-
-    (if (body) |b| req.sendBodyComplete(@constCast(b)) else req.sendBodiless()) catch |e| {
-        try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
-        return 1;
-    };
-
-    var redirect_buf: [8192]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch |e| {
-        try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
-        return 1;
-    };
-
-    const settings = stats.load(ctx);
-    var response_headers: std.Io.Writer.Allocating = .init(ctx.arena);
-    if (settings) |s| if (s.headers.len > 0) {
-        var it = response.head.iterateHeaders();
-        while (it.next()) |h| try response_headers.writer.print("{s}: {s}\n", .{ h.name, h.value });
-    };
-
-    // A non-200 response still contains the api's explanation. Passing its
-    // body through is part of the provider contract, just as it is in curl.
-    var response_body: std.ArrayList(u8) = .empty;
-    var transfer_buf: [64 * 1024]u8 = undefined;
-    const reader = response.reader(&transfer_buf);
+    var retried = false;
     while (true) {
-        reader.fill(1) catch |e| switch (e) {
-            error.EndOfStream => break,
-            else => return e,
+        // No encoding is asked for, as curl asks for none: what comes back is
+        // passed on as it is, and nothing here would undo a compressed body.
+        var req = client.request(method, uri, .{
+            .headers = .{
+                .content_type = if (body != null) .{ .override = content_type } else .default,
+                .accept_encoding = .omit,
+            },
+            .extra_headers = extra.items,
+        }) catch |e| {
+            try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
+            return 1;
         };
-        const chunk = reader.buffered();
-        ctx.out.writeAll(chunk) catch return 0;
-        ctx.out.flush() catch return 0;
-        if (settings) |s| if (s.body.len > 0) try response_body.appendSlice(ctx.arena, chunk);
-        reader.toss(chunk.len);
+        defer req.deinit();
+
+        (if (body) |b| req.sendBodyComplete(@constCast(b)) else req.sendBodiless()) catch |e| {
+            try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
+            return 1;
+        };
+
+        var redirect_buf: [8192]u8 = undefined;
+        var response = req.receiveHead(&redirect_buf) catch |e| {
+            try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
+            return 1;
+        };
+
+        if (!retried and @intFromEnum(response.head.status) == 429) {
+            var it = response.head.iterateHeaders();
+            while (it.next()) |h| {
+                if (std.ascii.eqlIgnoreCase(h.name, "retry-after")) {
+                    if (retryAfterSeconds(h.value, std.Io.Timestamp.now(ctx.io, .real).toSeconds())) |seconds| {
+                        try waitToRetry(ctx, seconds);
+                        retried = true;
+                        break;
+                    }
+                }
+            }
+            if (retried) continue;
+        }
+
+        const settings = stats.load(ctx);
+        var response_headers: std.Io.Writer.Allocating = .init(ctx.arena);
+        if (settings) |s| if (s.headers.len > 0) {
+            var it = response.head.iterateHeaders();
+            while (it.next()) |h| try response_headers.writer.print("{s}: {s}\n", .{ h.name, h.value });
+        };
+
+        // A non-200 response still contains the api's explanation. Passing its
+        // body through is part of the provider contract, just as it is in curl.
+        var response_body: std.ArrayList(u8) = .empty;
+        var transfer_buf: [64 * 1024]u8 = undefined;
+        const reader = response.reader(&transfer_buf);
+        while (true) {
+            reader.fill(1) catch |e| switch (e) {
+                error.EndOfStream => break,
+                else => return e,
+            };
+            const chunk = reader.buffered();
+            ctx.out.writeAll(chunk) catch return 0;
+            ctx.out.flush() catch return 0;
+            if (settings) |s| if (s.body.len > 0) try response_body.appendSlice(ctx.arena, chunk);
+            reader.toss(chunk.len);
+        }
+        if (settings) |s| stats.finish(ctx, s, response_headers.written(), response_body.items);
+        return 0;
     }
-    if (settings) |s| stats.finish(ctx, s, response_headers.written(), response_body.items);
-    return 0;
+}
+
+/// Date-shaped values use only MM:SS, ignoring the calendar date and hour.
+/// Interpret them within this hour: up to five minutes behind is already due;
+/// otherwise wait forward (less than 55 minutes). Add a two-second cushion.
+/// This intentionally does not support arbitrary HTTP dates or old date formats.
+fn retryAfterSeconds(raw: []const u8, now_seconds: i64) ?u64 {
+    if (raw.len == 0) return null;
+    const numeric = for (raw) |c| {
+        if (!std.ascii.isDigit(c)) break false;
+    } else true;
+    if (numeric) return std.fmt.parseInt(u64, raw, 10) catch null;
+
+    if (raw.len != 29 or raw[3] != ',' or raw[4] != ' ' or raw[7] != ' ' or
+        raw[11] != ' ' or raw[16] != ' ' or raw[19] != ':' or raw[22] != ':' or
+        raw[25] != ' ' or !std.mem.eql(u8, raw[26..29], "GMT")) return null;
+    const minute = retryTimePair(raw[20..22]) orelse return null;
+    const second = retryTimePair(raw[23..25]) orelse return null;
+    if (minute > 59 or second > 59) return null;
+    // Unix seconds give UTC without a timezone conversion, including at midnight.
+    const ahead = @mod(@as(i64, minute) * 60 + second - @mod(now_seconds, 3600), 3600);
+    return @intCast((if (ahead >= 55 * 60) @as(i64, 0) else ahead) + 2);
+}
+
+fn retryTimePair(s: []const u8) ?u8 {
+    if (!std.ascii.isDigit(s[0]) or !std.ascii.isDigit(s[1])) return null;
+    return (s[0] - '0') * 10 + s[1] - '0';
+}
+
+fn waitToRetry(ctx: Ctx, seconds: u64) !void {
+    try ctx.io.sleep(.{ .nanoseconds = @as(i96, seconds) * std.time.ns_per_s }, .awake);
 }
 
 /// A file as a form, as curl's `-F file=@FILE` sends it, with each
@@ -237,10 +287,9 @@ fn runCurl(ctx: Ctx, args: []const []const u8, forward_stdin: bool) !u8 {
     try headers(ctx, &lines);
 
     const settings = stats.load(ctx);
-    const capture_headers = if (settings) |s| s.headers.len > 0 else false;
     const environ = try api.childEnvironment(ctx.arena, ctx, &.{
         .{ .key = headers_var, .value = lines.items },
-        .{ .key = "M8_URL_CAPTURE_HEADERS", .value = if (capture_headers) "1" else "" },
+        .{ .key = "M8_URL_CAPTURE_HEADERS", .value = "1" },
     });
 
     // Always drain both pipes: stderr may contain curl diagnostics (and, with
@@ -276,48 +325,108 @@ fn runCurl(ctx: Ctx, args: []const []const u8, forward_stdin: bool) !u8 {
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(ctx.arena, &.{ "sh", "-c" });
     try argv.appendSlice(ctx.arena, args);
-    var child = std.process.spawn(ctx.io, .{
-        .argv = argv.items,
-        .environ_map = environ,
-        .stdin = if (request_spool) |spool| .{ .file = spool } else .ignore,
-        .stdout = .pipe,
-        .stderr = .pipe,
-    }) catch |e| {
-        try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
-        return 1;
-    };
-    defer child.kill(ctx.io);
+    var retried = false;
+    while (true) {
+        // Each attempt opens a fresh descriptor: curl consumed the previous one's offset.
+        const input_file = if (spool_path) |path| try std.Io.Dir.cwd().openFile(ctx.io, path, .{}) else null;
+        defer if (input_file) |file| file.close(ctx.io);
+        var child = std.process.spawn(ctx.io, .{
+            .argv = argv.items,
+            .environ_map = environ,
+            .stdin = if (input_file) |file| .{ .file = file } else .ignore,
+            .stdout = .pipe,
+            .stderr = .pipe,
+        }) catch |e| {
+            try ctx.err.print("m8 url-provider: {s}\n", .{@errorName(e)});
+            return 1;
+        };
+        defer child.kill(ctx.io);
 
-    var buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
-    var streams: std.Io.File.MultiReader = undefined;
-    streams.init(ctx.arena, ctx.io, buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
-    defer streams.deinit();
-    var body: std.ArrayList(u8) = .empty;
-    const response = streams.reader(0);
-    while (streams.fill(4096, .none)) |_| {
-        const chunk = response.buffered();
-        ctx.out.writeAll(chunk) catch return 0;
-        ctx.out.flush() catch return 0;
-        if (settings) |s| if (s.body.len > 0) try body.appendSlice(ctx.arena, chunk);
-        response.toss(chunk.len);
-    } else |e| switch (e) {
-        error.EndOfStream => {},
-        else => return e,
+        var buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+        var streams: std.Io.File.MultiReader = undefined;
+        streams.init(ctx.arena, ctx.io, buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+        defer streams.deinit();
+        var body: std.ArrayList(u8) = .empty;
+        var head_ready = false;
+        var pending: std.ArrayList(u8) = .empty;
+        var retry_seconds: ?u64 = null;
+        const response = streams.reader(0);
+        while (streams.fill(4096, .none)) |_| {
+            // Both pipes are drained together. Body bytes may be observed before
+            // the corresponding stderr read, so hold them only until the head is in.
+            if (!head_ready) {
+                if (curlResponseHead(streams.reader(1).buffered())) |head| {
+                    head_ready = true;
+                    if (!retried and head.status == 429) {
+                        if (head.retry_after) |value| retry_seconds = retryAfterSeconds(value, std.Io.Timestamp.now(ctx.io, .real).toSeconds());
+                    }
+                }
+            }
+            const chunk = response.buffered();
+            if (!head_ready) {
+                try pending.appendSlice(ctx.arena, chunk);
+            } else if (retry_seconds == null) {
+                ctx.out.writeAll(pending.items) catch return 0;
+                ctx.out.writeAll(chunk) catch return 0;
+                ctx.out.flush() catch return 0;
+                if (settings) |s| if (s.body.len > 0) {
+                    try body.appendSlice(ctx.arena, pending.items);
+                    try body.appendSlice(ctx.arena, chunk);
+                };
+                pending.clearRetainingCapacity();
+            } else pending.clearRetainingCapacity();
+            response.toss(chunk.len);
+        } else |e| switch (e) {
+            error.EndOfStream => {},
+            else => return e,
+        }
+        try streams.checkAnyError();
+        const raw_stderr = streams.reader(1).buffered();
+        const separated = try stats.splitCurlStderr(ctx.arena, raw_stderr);
+        try ctx.err.writeAll(separated.diagnostics);
+        try ctx.err.flush();
+        const code: u8 = switch (try child.wait(ctx.io)) {
+            .exited => |code| code,
+            else => 1,
+        };
+        if (code == 0) {
+            if (!head_ready) return error.InvalidHttpResponse;
+            if (retry_seconds) |seconds| {
+                try waitToRetry(ctx, seconds);
+                retried = true;
+                continue;
+            }
+        }
+        if (settings) |s| stats.finish(ctx, s, separated.headers, body.items);
+        return code;
     }
-    try streams.checkAnyError();
-    const raw_stderr = streams.reader(1).buffered();
-    const separated = if (capture_headers)
-        try stats.splitCurlStderr(ctx.arena, raw_stderr)
-    else
-        stats.CurlStderr{ .headers = "", .diagnostics = raw_stderr };
-    try ctx.err.writeAll(separated.diagnostics);
-    try ctx.err.flush();
-    const code: u8 = switch (try child.wait(ctx.io)) {
-        .exited => |code| code,
-        else => 1,
-    };
-    if (settings) |s| stats.finish(ctx, s, separated.headers, body.items);
-    return code;
+}
+
+/// Inspect the existing stderr buffer without copying it. Only complete lines
+/// count; skip diagnostics and informational heads, then stop before trailers.
+fn curlResponseHead(raw: []const u8) ?struct { status: u16, retry_after: ?[]const u8 } {
+    var status: ?u16 = null;
+    var retry_after: ?[]const u8 = null;
+    var pos: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, raw, pos, '\n')) |end| {
+        const line = std.mem.trimEnd(u8, raw[pos..end], "\r");
+        pos = end + 1;
+        if (status == null) {
+            if (!std.mem.startsWith(u8, line, "HTTP/")) continue;
+            var words = std.mem.tokenizeAny(u8, line, " \t");
+            _ = words.next();
+            status = std.fmt.parseInt(u16, words.next() orelse return null, 10) catch return null;
+        } else if (line.len == 0) {
+            if (status.? >= 100 and status.? < 200 and status.? != 101) {
+                status = null;
+                retry_after = null;
+            } else return .{ .status = status.?, .retry_after = retry_after };
+        } else {
+            const name, const value = std.mem.cutScalar(u8, line, ':') orelse continue;
+            if (std.ascii.eqlIgnoreCase(name, "retry-after")) retry_after = std.mem.trim(u8, value, " \t");
+        }
+    }
+    return null;
 }
 
 fn spoolFile(io: std.Io, input: *std.Io.Reader, output: std.Io.File) !void {
@@ -348,14 +457,14 @@ const headers_var = "M8_PROVIDER_url_HEADERS";
 const script =
     \\u=$1; shift
     \\if [ "$M8_URL_CAPTURE_HEADERS" = 1 ]; then set -- "$@" --dump-header /dev/stderr; fi
-    \\exec curl -sS -N -H 'content-type: application/json' -H @/dev/fd/3 --data-binary @- "$@" "$u"
+    \\exec curl -sS --suppress-connect-headers -N -H 'content-type: application/json' -H @/dev/fd/3 --data-binary @- "$@" "$u"
 ++ heredoc;
 
 /// The same, asking rather than posting: no body, so nothing says what one is.
 const get_script =
     \\u=$1; shift
     \\if [ "$M8_URL_CAPTURE_HEADERS" = 1 ]; then set -- "$@" --dump-header /dev/stderr; fi
-    \\exec curl -sS -N -H @/dev/fd/3 "$@" "$u"
+    \\exec curl -sS --suppress-connect-headers -N -H @/dev/fd/3 "$@" "$u"
 ++ heredoc;
 
 /// The same, handing over a file: `$2` as the field `file`, and every other
@@ -365,7 +474,7 @@ const upload_script =
     \\u=$1 f=$2; shift 2
     \\for a; do set -- "$@" --form-string "$a"; shift; done
     \\if [ "$M8_URL_CAPTURE_HEADERS" = 1 ]; then set -- "$@" --dump-header /dev/stderr; fi
-    \\exec curl -sS -H @/dev/fd/3 -F "file=@$f" "$@" "$u"
+    \\exec curl -sS --suppress-connect-headers -H @/dev/fd/3 -F "file=@$f" "$@" "$u"
 ++ heredoc;
 
 const heredoc =
@@ -578,7 +687,7 @@ test "url-provider curl pump forwards supplied input and separates output withou
     @memset(request, 'x');
     var input: std.Io.Reader = .fixed(request);
     const ctx = invocation.ctx(&.{}, &input);
-    try std.testing.expectEqual(@as(u8, 7), try runCurl(ctx, &.{ "cat; printf diagnostic >&2; exit 7", "test transport" }, true));
+    try std.testing.expectEqual(@as(u8, 7), try runCurl(ctx, &.{ "printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' >&2; cat; printf diagnostic >&2; exit 7", "test transport" }, true));
     try std.testing.expectEqualStrings(request, invocation.out.written());
     try std.testing.expectEqualStrings("diagnostic", invocation.err.written());
 }
@@ -594,7 +703,7 @@ test "url-provider curl pump treats absent stdin as EOF and no-input modes leave
         try invocation.env.put("TMPDIR", try tmp.dir.realPathFileAlloc(std.testing.io, ".", invocation.arena.allocator()));
         var input: std.Io.Reader = .fixed("unconsumed");
         const ctx = invocation.ctx(&.{}, if (forward) null else &input);
-        try std.testing.expectEqual(@as(u8, 0), try runCurl(ctx, &.{ "cat; printf done", "test transport" }, forward));
+        try std.testing.expectEqual(@as(u8, 0), try runCurl(ctx, &.{ "printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' >&2; cat; printf done", "test transport" }, forward));
         try std.testing.expectEqualStrings("done", invocation.out.written());
         try std.testing.expectEqualStrings("", invocation.err.written());
         try std.testing.expectEqualStrings("unconsumed", input.buffered());
@@ -616,4 +725,98 @@ test "header suffixes are preserved verbatim by both transport collectors" {
     try std.testing.expectEqual(@as(usize, 1), stdlib_headers.items.len);
     try std.testing.expectEqualStrings("Content-Type", stdlib_headers.items[0].name);
     try std.testing.expectEqualStrings("application/example", stdlib_headers.items[0].value);
+}
+
+test "curl response head waits for complete headers and skips diagnostics and interim heads" {
+    const raw = "warning before headers\nHTTP/1.1 100 Continue\r\nRetry-After: 99\r\n\r\n" ++
+        "HTTP/2 429\r\nrEtRy-AfTeR: \t0 \t\r\n\r\n";
+    // Every prefix before the final blank line is incomplete.
+    for (0..raw.len) |len| try std.testing.expect(curlResponseHead(raw[0..len]) == null);
+    const head = curlResponseHead(raw).?;
+    try std.testing.expectEqual(@as(u16, 429), head.status);
+    try std.testing.expectEqualStrings("0", head.retry_after.?);
+    const with_trailer = curlResponseHead(raw ++ "Retry-After: 999\r\ncurl: diagnostic\n").?;
+    try std.testing.expectEqualStrings("0", with_trailer.retry_after.?);
+    try std.testing.expect(curlResponseHead("HTTP/1.1 200 OK\n\n").?.retry_after == null);
+    try std.testing.expect(curlResponseHead("curl: connection failed\n") == null);
+}
+
+test "curl pump replays once only with Retry-After and preserves final error and request" {
+    if (comptime no_curl_dep) return error.SkipZigTest;
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const cases = [_]struct { status: []const u8, header: []const u8, retry_expected: bool, second_status: []const u8 = "429" }{
+        .{ .status = "429", .header = "Retry-After: 0", .retry_expected = true, .second_status = "200" },
+        .{ .status = "429", .header = "Retry-After: 0", .retry_expected = true },
+        .{ .status = "429", .header = "X-No-Retry: 0", .retry_expected = false },
+        .{ .status = "429", .header = "Retry-After: invalid", .retry_expected = false },
+        .{ .status = "503", .header = "Retry-After: 0", .retry_expected = false },
+    };
+    for (cases) |case| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const arena = invocation.arena.allocator();
+        const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", arena);
+        try invocation.env.put("TMPDIR", dir);
+        try invocation.env.put("M8_RETRY_TEST_DIR", dir);
+        try invocation.env.put("M8_RETRY_TEST_STATUS", case.status);
+        try invocation.env.put("M8_RETRY_TEST_HEADER", case.header);
+        try invocation.env.put("M8_RETRY_TEST_SECOND_STATUS", case.second_status);
+        var input: std.Io.Reader = .fixed("exact request\nwith another line\n");
+        const transport =
+            \\d=$M8_RETRY_TEST_DIR
+            \\printf x >> "$d/count"
+            \\if [ -f "$d/request" ]; then
+            \\  cmp - "$d/request" || exit 9
+            \\  printf 'HTTP/1.1 %s Response\r\nRetry-After: 0\r\n\r\n' "$M8_RETRY_TEST_SECOND_STATUS" >&2
+            \\  printf second
+            \\  printf 'X-Trailer: stays-off-stdout\r\n' >&2
+            \\else
+            \\  cat > "$d/request"
+            \\  printf 'HTTP/1.1 %s Response\r\n%s\r\n\r\n' "$M8_RETRY_TEST_STATUS" "$M8_RETRY_TEST_HEADER" >&2
+            \\  printf first
+            \\fi
+        ;
+        try std.testing.expectEqual(@as(u8, 0), try runCurl(invocation.ctx(&.{}, &input), &.{ transport, "test transport" }, true));
+        try std.testing.expectEqualStrings(if (case.retry_expected) "second" else "first", invocation.out.written());
+        const count = try tmp.dir.readFileAlloc(std.testing.io, "count", arena, .unlimited);
+        try std.testing.expectEqualStrings(if (case.retry_expected) "xx" else "x", count);
+        try std.testing.expectEqualStrings("", invocation.err.written());
+    }
+}
+
+test "delta seconds are strict nonnegative integers with no cushion" {
+    try std.testing.expectEqual(@as(?u64, 0), retryAfterSeconds("0", 0));
+    try std.testing.expectEqual(@as(?u64, 123), retryAfterSeconds("123", 0));
+    for ([_][]const u8{ "", "-1", "+1", "1 ", "1.5", "18446744073709551616" }) |value| {
+        try std.testing.expectEqual(@as(?u64, null), retryAfterSeconds(value, 0));
+    }
+}
+
+test "date hints use only UTC minutes and seconds with a two-second cushion" {
+    const date = "Sun, 06 Nov 1994 08:02:00 GMT";
+    try std.testing.expectEqual(@as(?u64, 242), retryAfterSeconds(date, 58 * 60)); // hour rollover
+    try std.testing.expectEqual(@as(?u64, 242), retryAfterSeconds(date, 23 * 3600 + 58 * 60)); // midnight
+    try std.testing.expectEqual(@as(?u64, 2), retryAfterSeconds(date, 2 * 60)); // equal
+    try std.testing.expectEqual(@as(?u64, 2), retryAfterSeconds(date, 2 * 60 + 1)); // just passed
+    try std.testing.expectEqual(@as(?u64, 2), retryAfterSeconds(date, 7 * 60)); // five minutes behind
+    try std.testing.expectEqual(@as(?u64, 3301), retryAfterSeconds(date, 7 * 60 + 1)); // just outside window
+    try std.testing.expectEqual(@as(?u64, 2402), retryAfterSeconds("Sun, 06 Nov 1994 08:50:00 GMT", 10 * 60));
+    // No calendar or hour interpretation: this is deliberately a time-within-hour hint.
+    try std.testing.expectEqual(retryAfterSeconds(date, 0), retryAfterSeconds("Mon, 31 Feb 2040 23:02:00 GMT", 0));
+}
+
+test "date hints reject other layouts, timezones and invalid minute or second fields" {
+    for ([_][]const u8{
+        "Sun, 06 Nov 1994 08:02:00 UTC",
+        "Sun, 06 Nov 1994 08:60:00 GMT",
+        "Sun, 06 Nov 1994 08:02:60 GMT",
+        "Sun, 06 Nov 1994 08:ab:00 GMT",
+        "Sunday, 06-Nov-94 08:02:00 GMT",
+        "Sun Nov  6 08:02:00 1994",
+        "08:02:00 GMT",
+    }) |value| {
+        try std.testing.expectEqual(@as(?u64, null), retryAfterSeconds(value, 0));
+    }
 }
