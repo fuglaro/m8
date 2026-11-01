@@ -67,7 +67,7 @@ fn overview(w: *std.Io.Writer) !void {
         \\
         \\A provider is a file core/providers/NAME.json. Its `cmd`, `encode`,
         \\`parse` and `models` are commands. Other nameable values reach them
-        \\as M8_PROVIDER_*: `url` as M8_PROVIDER_URL, objects/arrays as JSON.
+        \\as M8_PROVIDER_*: `url` as M8_PROVIDER_url, objects/arrays as JSON.
         \\
     );
     try overviewCommands(w);

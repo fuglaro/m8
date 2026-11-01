@@ -115,15 +115,12 @@ fn words(arena: Allocator, v: ?std.json.Value) !?[]const []const u8 {
     return out.items;
 }
 
-/// Whether a key has an environment variable to become: lowercase letters,
-/// digits and hyphens. Anything else is left where it is rather than mangled
-/// into a name that would collide with something.
+/// A provider argument can preserve any key that is representable after the
+/// prefix, except an empty name or bytes that cannot occur in an environment
+/// variable name.
 fn nameable(key: []const u8) bool {
     if (key.len == 0) return false;
-    for (key) |c| {
-        if (std.ascii.isLower(c) or std.ascii.isDigit(c) or c == '-') continue;
-        return false;
-    }
+    for (key) |c| if (c == '=' or c == 0) return false;
     return true;
 }
 
@@ -132,12 +129,9 @@ fn reserved(key: []const u8) bool {
         std.mem.eql(u8, key, "parse") or std.mem.eql(u8, key, "models");
 }
 
-/// `api-version` becomes `M8_PROVIDER_API_VERSION`.
+/// Preserve the config key byte-for-byte after the provider prefix.
 pub fn envName(arena: Allocator, key: []const u8) ![]const u8 {
-    const out = try arena.alloc(u8, env_prefix.len + key.len);
-    @memcpy(out[0..env_prefix.len], env_prefix);
-    for (key, env_prefix.len..) |c, i| out[i] = if (c == '-') '_' else std.ascii.toUpper(c);
-    return out;
+    return std.mem.concat(arena, u8, &.{ env_prefix, key });
 }
 
 /// Add everything a provider entry said to the child environment already
@@ -149,7 +143,7 @@ pub fn addEnvironment(
 ) !void {
     for (p.args) |a| try env.put(try envName(arena, a.key), a.value);
     // The selected entry name is metadata, not an entry argument. Set it last
-    // so an entry's own `name` field cannot shadow the actual selection.
+    // so an entry's own `NAME` field cannot shadow the actual selection.
     try env.put("M8_PROVIDER_NAME", p.name);
 }
 
@@ -426,6 +420,10 @@ test "an entry is its commands, and whatever else it wants to say" {
         \\  "features": ["one", 2, true],
         \\  "stats": {"cmd": ["not", "special"], "enabled": true},
         \\  "Weird_Key": {"ignored": true},
+        \\  "MiXeD-key_2": {"nested": [1, true]},
+        \\  "bad=key": "ignored",
+        \\  "nul\u0000key": "ignored",
+        \\  "": "ignored",
         \\  "unset": null
         \\}}
     );
@@ -438,8 +436,7 @@ test "an entry is its commands, and whatever else it wants to say" {
     try testing.expectEqual(@as(usize, 2), p.cmd.len);
     try testing.expectEqualStrings("m8", p.cmd[0]);
 
-    // Scalars preserve their spelling; structured settings become JSON.
-    // Reserved command keys, unnameable keys and nulls stay behind.
+    // Reserved command keys and invalid environment names stay behind.
     try testing.expectEqualStrings("http://x/v1/chat/completions", p.get("url").?);
     try testing.expectEqualStrings("cat ~/.key", p.get("key").?);
     try testing.expectEqualStrings("2024-02-01", p.get("api-version").?);
@@ -447,7 +444,11 @@ test "an entry is its commands, and whatever else it wants to say" {
     try testing.expect(p.get("encode") == null);
     try testing.expect(p.get("parse") == null);
     try testing.expect(p.get("models") == null);
-    try testing.expect(p.get("Weird_Key") == null);
+    try testing.expectEqualStrings("{\"ignored\":true}", p.get("Weird_Key").?);
+    try testing.expectEqualStrings("{\"nested\":[1,true]}", p.get("MiXeD-key_2").?);
+    try testing.expect(p.get("bad=key") == null);
+    try testing.expect(p.get("nul\x00key") == null);
+    try testing.expect(p.get("") == null);
     try testing.expect(p.get("unset") == null);
     try testing.expectEqualStrings("30", p.get("timeout").?);
     try testing.expectEqualStrings("true", p.get("use-cache").?);
@@ -455,16 +456,17 @@ test "an entry is its commands, and whatever else it wants to say" {
     try testing.expectEqualStrings("[\"one\",2,true]", p.get("features").?);
     try testing.expectEqualStrings("{\"cmd\":[\"not\",\"special\"],\"enabled\":true}", p.get("stats").?);
 
-    try testing.expectEqualStrings("M8_PROVIDER_API_VERSION", try envName(arena, "api-version"));
-    try testing.expectEqualStrings("M8_PROVIDER_URL", try envName(arena, "url"));
+    try testing.expectEqualStrings("M8_PROVIDER_api-version", try envName(arena, "api-version"));
+    try testing.expectEqualStrings("M8_PROVIDER_Weird_Key", try envName(arena, "Weird_Key"));
 
     var env: std.process.Environ.Map = .init(arena);
     try env.put("M8_PROVIDER_NAME", "inherited-value");
     try addEnvironment(arena, p, &env);
     try testing.expectEqualStrings("local", env.get("M8_PROVIDER_NAME").?);
-    try testing.expectEqualStrings("http://x/v1/chat/completions", env.get("M8_PROVIDER_URL").?);
-    try testing.expectEqualStrings("[\"one\",2,true]", env.get("M8_PROVIDER_FEATURES").?);
-    try testing.expectEqualStrings("{\"cmd\":[\"not\",\"special\"],\"enabled\":true}", env.get("M8_PROVIDER_STATS").?);
+    try testing.expectEqualStrings("http://x/v1/chat/completions", env.get("M8_PROVIDER_url").?);
+    try testing.expectEqualStrings("[\"one\",2,true]", env.get("M8_PROVIDER_features").?);
+    try testing.expectEqualStrings("{\"cmd\":[\"not\",\"special\"],\"enabled\":true}", env.get("M8_PROVIDER_stats").?);
+    try testing.expectEqualStrings("{\"ignored\":true}", env.get("M8_PROVIDER_Weird_Key").?);
 }
 
 test "an entry with no command is not a provider" {
@@ -713,8 +715,8 @@ test "everything the entry said reaches the command, and nothing else does" {
 
     // On top of what was already there, not instead of it.
     try testing.expectEqualStrings("yes", environ.get("M8_TEST_INHERITED").?);
-    try testing.expectEqualStrings("http://x/v1/chat/completions", environ.get("M8_PROVIDER_URL").?);
-    try testing.expectEqualStrings("2024-02-01", environ.get("M8_PROVIDER_API_VERSION").?);
+    try testing.expectEqualStrings("http://x/v1/chat/completions", environ.get("M8_PROVIDER_url").?);
+    try testing.expectEqualStrings("2024-02-01", environ.get("M8_PROVIDER_api-version").?);
     // `cmd` does not: the command already knows what it is.
     try testing.expect(environ.get("M8_PROVIDER_CMD") == null);
 
@@ -724,7 +726,7 @@ test "everything the entry said reaches the command, and nothing else does" {
         arena,
         io,
         .{
-            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '* :robot::\n  > %s\n' \"$M8_PROVIDER_URL\"" },
+            .cmd = &.{ "/bin/sh", "-c", "cat >/dev/null; printf '* :robot::\n  > %s\n' \"$M8_PROVIDER_url\"" },
         },
         &environ,
         "",

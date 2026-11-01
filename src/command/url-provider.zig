@@ -25,7 +25,7 @@ const no_curl_dep = build_options.no_curl_dep;
 
 pub const command: api.Command = .{
     .name = "url-provider",
-    .summary = "post a request to $M8_PROVIDER_URL",
+    .summary = "post a request to $M8_PROVIDER_url",
     // The request is read from the descriptor as it arrives, not handed
     // over: `url` streams it straight back out again.
     .takes = .nothing,
@@ -40,7 +40,7 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 url-provider --get URL
         \\  m8 url-provider --upload URL FILE [NAME=VALUE]...
         \\
-        \\Posts stdin to $M8_PROVIDER_URL as JSON and writes the response to
+        \\Posts stdin to $M8_PROVIDER_url as JSON and writes the response to
         \\stdout as it arrives. `--get URL` sends a GET to URL instead, with
         \\the same headers, and reads no stdin. `--upload` posts FILE to URL
         \\as a form, its field `file`, with each NAME=VALUE as a field beside
@@ -51,11 +51,11 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\environment:
         \\
-        \\  M8_PROVIDER_URL          the endpoint to post to
-        \\  M8_PROVIDER_HEADER_NAME  a shell command whose output is sent as
-        \\                           header NAME: HEADER_X_API_KEY is x-api-key.
-        \\                           One that fails or prints nothing is left off.
-        \\  M8_PROVIDER_STATS        JSON: {"headers":[...],"body":[...],"cmd":[...]}
+        \\  M8_PROVIDER_url          the endpoint to post to
+        \\  M8_PROVIDER_header_NAME  a JSON argv array; its stdout is sent as
+        \\                           header NAME: ["sh","-c",...] opts into a shell.
+        \\                           Empty or failing commands leave it off.
+        \\  M8_PROVIDER_stats        JSON: {"headers":[...],"body":[...],"cmd":[...]}
         \\                           Select response values for a formatter at EOF.
         \\                           Its stdout goes to stderr; the body still streams.
         \\
@@ -68,15 +68,14 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
 
 /// Post the request and hand the answer back as it arrives.
 ///
-/// `M8_PROVIDER_URL` is the whole endpoint. There is no path m8 appends to
+/// `M8_PROVIDER_url` is the whole endpoint. There is no path m8 appends to
 /// it: which api lives where is a fact about a provider, not about a format,
 /// and keeping a table of those is not something m8 does.
 ///
-/// Every `M8_PROVIDER_HEADER_*` is run as a shell command and its output is
-/// that header's value. That is this command's convention rather than m8's,
-/// and it is a command so that a config can commit safely and still reach a
-/// keychain. A bearer token, an api version and a beta flag are all headers,
-/// so there is one rule here rather than a field per vendor habit.
+/// Every `M8_PROVIDER_header_*` is decoded as a JSON argv array and its
+/// output is that header's value. An explicit `sh -c` array opts into shell
+/// behavior. This is this command's convention rather than m8's, and it is a
+/// command so a config can commit safely and still reach a keychain.
 fn run(ctx: Ctx) !u8 {
     // Asking rather than posting: the url is said here, because the entry's
     // own is where requests go, and nothing is read from stdin.
@@ -122,8 +121,8 @@ fn run(ctx: Ctx) !u8 {
         return 1;
     }
 
-    const endpoint = ctx.env.get(provider.env_prefix ++ "URL") orelse {
-        try ctx.err.writeAll("m8 url-provider: no " ++ provider.env_prefix ++ "URL\n");
+    const endpoint = ctx.env.get(provider.env_prefix ++ "url") orelse {
+        try ctx.err.writeAll("m8 url-provider: no M8_PROVIDER_url\n");
         return 1;
     };
 
@@ -339,7 +338,7 @@ fn spoolFile(io: std.Io, input: *std.Io.Reader, output: std.Io.File) !void {
 }
 
 /// Where the header lines wait between here and curl.
-const headers_var = "M8_PROVIDER_URL_HEADERS";
+const headers_var = "M8_PROVIDER_url_HEADERS";
 
 /// The curl command line.
 ///
@@ -382,14 +381,14 @@ const heredoc =
 /// list. This is separate from the curl wire format so each comptime build
 /// only keeps the representation its transport uses.
 fn headersStdlib(ctx: Ctx, into: *std.ArrayList(std.http.Header)) !void {
-    const prefix = provider.env_prefix ++ "HEADER_";
+    const prefix = provider.env_prefix ++ "header_";
     var it = ctx.env.iterator();
     while (it.next()) |e| {
         const named = e.key_ptr.*;
         if (!std.mem.startsWith(u8, named, prefix)) continue;
         const value = (try ran(ctx, e.value_ptr.*)) orelse continue;
         try into.append(ctx.arena, .{
-            .name = try headerName(ctx, named[prefix.len..]),
+            .name = named[prefix.len..],
             .value = value,
         });
     }
@@ -403,7 +402,7 @@ fn headersStdlib(ctx: Ctx, into: *std.ArrayList(std.http.Header)) !void {
 /// that knows the endpoint rather than to a table in here.
 /// Every header the entry asked for, each one a command.
 ///
-/// `header-x-api-key` arrives here as `M8_PROVIDER_HEADER_X_API_KEY`, and
+/// `header_x-api-key` arrives here as `M8_PROVIDER_header_x-api-key`, and
 /// what it says is run: its output is the value. One rule rather than three —
 /// a bearer token, an api version, a beta flag and a tenant are all headers,
 /// and the only thing they have in common is that not one of them is a
@@ -414,22 +413,14 @@ fn headersStdlib(ctx: Ctx, into: *std.ArrayList(std.http.Header)) !void {
 /// one: a config can commit safely and still reach a keychain. A constant is
 /// `echo` and costs a fork nobody will notice beside a model call.
 fn headers(ctx: Ctx, into: *std.ArrayList(u8)) !void {
-    const prefix = provider.env_prefix ++ "HEADER_";
+    const prefix = provider.env_prefix ++ "header_";
     var it = ctx.env.iterator();
     while (it.next()) |e| {
         const named = e.key_ptr.*;
         if (!std.mem.startsWith(u8, named, prefix)) continue;
         const value = (try ran(ctx, e.value_ptr.*)) orelse continue;
-        try into.print(ctx.arena, "{s}: {s}\n", .{ try headerName(ctx, named[prefix.len..]), value });
+        try into.print(ctx.arena, "{s}: {s}\n", .{ named[prefix.len..], value });
     }
-}
-
-/// `X_API_KEY` is `x-api-key`. An environment variable cannot hold a hyphen,
-/// so the one the entry was written with is put back.
-fn headerName(ctx: Ctx, named: []const u8) ![]const u8 {
-    const out = try ctx.arena.alloc(u8, named.len);
-    for (named, 0..) |c, i| out[i] = if (c == '_') '-' else std.ascii.toLower(c);
-    return out;
 }
 
 /// What a header's command said, or null when it said nothing worth sending.
@@ -441,11 +432,33 @@ fn headerName(ctx: Ctx, named: []const u8) ![]const u8 {
 /// so it is dropped.
 fn ran(ctx: Ctx, cmd: []const u8) !?[]const u8 {
     if (cmd.len == 0) return null;
-
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, ctx.arena, cmd, .{}) catch {
+        try ctx.err.writeAll("m8 url-provider: invalid header command JSON (expected an argv array)\n");
+        return null;
+    };
+    if (parsed != .array or parsed.array.items.len == 0) {
+        try ctx.err.writeAll("m8 url-provider: invalid header command JSON (expected a non-empty argv array)\n");
+        return null;
+    }
+    const argv = try ctx.arena.alloc([]const u8, parsed.array.items.len);
+    for (parsed.array.items, 0..) |item, i| {
+        if (item != .string) {
+            try ctx.err.print("m8 url-provider: invalid header command JSON (argv item {d} is not a string)\n", .{i});
+            return null;
+        }
+        argv[i] = item.string;
+    }
+    if (argv[0].len == 0) {
+        try ctx.err.writeAll("m8 url-provider: invalid header command JSON (argv[0] is empty)\n");
+        return null;
+    }
+    const resolved = try provider.resolve(ctx.arena, ctx.io, ctx.self, &.{}, argv);
+    const environ = try api.childEnvironment(ctx.arena, ctx, &.{});
     const r = std.process.run(ctx.arena, ctx.io, .{
-        .argv = &.{ "sh", "-c", cmd },
+        .argv = resolved,
+        .environ_map = environ,
     }) catch return null;
-    // What the command complained about is for whoever is setting it up.
+    // The command's own diagnostics remain useful to whoever configured it.
     ctx.err.writeAll(r.stderr) catch {};
     ctx.err.flush() catch {};
     switch (r.term) {
@@ -458,7 +471,29 @@ fn ran(ctx: Ctx, cmd: []const u8) !?[]const u8 {
     return value;
 }
 
-// ---------------------------------------------------------------- inbuilt
+test "header commands use argv directly, with shell only when requested" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    const ctx = invocation.ctx(&.{}, null);
+    try std.testing.expectEqualStrings("plain value", (try ran(ctx, "[\"printf\",\"%s\",\"plain value\"]")).?);
+    try std.testing.expectEqualStrings("shell value", (try ran(ctx, "[\"sh\",\"-c\",\"printf 'shell value'\"]")).?);
+    try std.testing.expectEqualStrings("$(printf not-run); *", (try ran(ctx, "[\"printf\",\"%s\",\"$(printf not-run); *\"]")).?);
+}
+
+test "header commands omit empty and failed output and inherit configured environment" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try invocation.env.put("M8_HEADER_TEST_VALUE", "passed");
+    const ctx = invocation.ctx(&.{}, null);
+    try std.testing.expect((try ran(ctx, "[]")) == null);
+    try std.testing.expect((try ran(ctx, "[\"printf\",\"\"]")) == null);
+    try std.testing.expect((try ran(ctx, "[\"printf\",\"one\\\\ntwo\"]")) == null);
+    try std.testing.expect((try ran(ctx, "[\"sh\",\"-c\",\"exit 9\"]")) == null);
+    try std.testing.expectEqualStrings("passed", (try ran(ctx, "[\"sh\",\"-c\",\"printf %s \\\"$M8_HEADER_TEST_VALUE\\\"\"]")).?);
+    try std.testing.expect(std.mem.indexOf(u8, invocation.err.written(), "invalid header command JSON") != null);
+}
 
 test "the page names what it reads" {
     var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -477,8 +512,8 @@ test "the page names what it reads" {
         .tty = null,
     };
     try page(ctx, &out.writer);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_URL") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_HEADER_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_url") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "M8_PROVIDER_header_") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.written(), if (no_curl_dep) "own HTTP client" else "`curl`") != null);
 }
 
@@ -511,7 +546,7 @@ test "url-provider refuses terminal stdin without consuming it" {
 test "url-provider validates endpoint and no-input mode arguments before reading" {
     const Invocation = @import("../command_input_test.zig").Invocation;
     const cases = [_]struct { args: []const []const u8, terminal: bool = false, diagnostic: []const u8 }{
-        .{ .args = &.{}, .diagnostic = "m8 url-provider: no M8_PROVIDER_URL\n" },
+        .{ .args = &.{}, .diagnostic = "m8 url-provider: no M8_PROVIDER_url\n" },
         .{ .args = &.{"--get"}, .terminal = true, .diagnostic = "m8 url-provider: --get takes one url\n" },
         .{ .args = &.{ "--get", "one", "two" }, .diagnostic = "m8 url-provider: --get takes one url\n" },
         .{ .args = &.{ "--upload", "one" }, .terminal = true, .diagnostic = "m8 url-provider: --upload takes a url and a file\n" },
@@ -564,4 +599,21 @@ test "url-provider curl pump treats absent stdin as EOF and no-input modes leave
         try std.testing.expectEqualStrings("", invocation.err.written());
         try std.testing.expectEqualStrings("unconsumed", input.buffered());
     }
+}
+test "header suffixes are preserved verbatim by both transport collectors" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try invocation.env.put("M8_PROVIDER_header_Content-Type", "[\"printf\",\"application/example\"]");
+    const ctx = invocation.ctx(&.{}, null);
+
+    var curl_headers: std.ArrayList(u8) = .empty;
+    try headers(ctx, &curl_headers);
+    try std.testing.expectEqualStrings("Content-Type: application/example\n", curl_headers.items);
+
+    var stdlib_headers: std.ArrayList(std.http.Header) = .empty;
+    try headersStdlib(ctx, &stdlib_headers);
+    try std.testing.expectEqual(@as(usize, 1), stdlib_headers.items.len);
+    try std.testing.expectEqualStrings("Content-Type", stdlib_headers.items[0].name);
+    try std.testing.expectEqualStrings("application/example", stdlib_headers.items[0].value);
 }

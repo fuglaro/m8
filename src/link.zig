@@ -24,7 +24,7 @@ pub const hand_lead = ">";
 pub const max_said = 64 * 1024 * 1024;
 
 /// The entry's command that says how a file reaches the api.
-pub const upload_var = "M8_PROVIDER_UPLOAD";
+pub const upload_var = "M8_PROVIDER_upload";
 
 pub const Error = error{
     /// A 🔗 with no `upload` to hand its files over.

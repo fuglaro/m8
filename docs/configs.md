@@ -301,8 +301,8 @@ And what a provider's commands are handed as well:
 M8_PROVIDER_*     every string the entry said
 ```
 
-The two m8 ships with read `M8_PROVIDER_URL` and
-`M8_PROVIDER_HEADER_*` between them, and `m8 url-provider
+The two m8 ships with read `M8_PROVIDER_url` and
+`M8_PROVIDER_header_*` between them, and `m8 url-provider
 --help` says what each is for. A provider you write reads
 whatever its entry says, under its own name.
 

@@ -428,13 +428,13 @@ happen:
 ```bash
 m8 say --no-send :demo/mathy "Say hi." \
   | m8 encode openai-responses \
-  | M8_PROVIDER_URL=http://127.0.0.1:8000/v1/responses m8 url-provider \
+  | M8_PROVIDER_url=http://127.0.0.1:8000/v1/responses m8 url-provider \
   | m8 parse openai-responses
 ```
 
 * `url-provider` on its own knows no provider, so the
   endpoint is said in its environment.
-* A header goes the same way, as `M8_PROVIDER_HEADER_*`.
+* A header goes the same way, as `M8_PROVIDER_header_*`.
   See [Providers](providers.md).
 
 Reading is incremental whether or not the provider streamed.

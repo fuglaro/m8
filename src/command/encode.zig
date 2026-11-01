@@ -14,6 +14,7 @@ const address = @import("../address.zig");
 const agent = @import("../agent.zig");
 const ledger = @import("../ledger.zig");
 const doc = @import("../m8/doc.zig");
+const model = @import("../m8/model.zig");
 const api = @import("../api.zig");
 const link = @import("../link.zig");
 const Ctx = api.Ctx;
@@ -72,20 +73,97 @@ fn run(ctx: Ctx) !u8 {
     return 0;
 }
 
-/// What the ledger says the request is, plus what this run adds. The ledger
-/// carries the model and its parameters, so no provider needs consulting: a
-/// request can be built for a provider m8 has never been told about.
+/// Provider defaults are request parameters, not codec policy. Explicit model
+/// parameters win; null removes a field from either source.
 fn target(ctx: Ctx, records: []const doc.Record) !codec.Target {
     const def = try agent.project(ctx.arena, records);
+    var params: std.ArrayList(model.Param) = .empty;
+    if (def.provider.len > 0 and std.mem.eql(u8, ctx.env.get("M8_PROVIDER_NAME") orelse "", def.provider)) {
+        var it = ctx.env.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const prefix = "M8_PROVIDER_param_";
+            if (!std.mem.startsWith(u8, key, prefix)) continue;
+            const field = key[prefix.len..];
+            if (field.len == 0) continue;
+            for (def.params) |p| {
+                if (std.mem.eql(u8, p.key, field)) break;
+            } else {
+                if (model.json(ctx.arena, entry.value_ptr.*) != .null)
+                    try params.append(ctx.arena, .{ .key = field, .value = entry.value_ptr.* });
+            }
+        }
+    }
+    for (def.params) |p| {
+        if (model.json(ctx.arena, p.value) != .null) try params.append(ctx.arena, p);
+    }
     return .{
         .mode = ctx.mode,
         .model = def.model,
-        .params = def.params,
+        .params = params.items,
         .tools = try agent.offer(ctx.arena, def),
         // A hint rather than a contract: a provider that cannot stream
         // answers whole, and `parse` reads either.
         .stream = true,
     };
+}
+
+test "provider param env defaults preserve names and explicit values override" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try invocation.env.put("M8_PROVIDER_NAME", "local");
+    try invocation.env.put("M8_PROVIDER_param_temperature", "0.4");
+    try invocation.env.put("M8_PROVIDER_param_x-y_A", "[1,\"x\"]");
+    try invocation.env.put("M8_PROVIDER_param_omit", "null");
+    try invocation.env.put("M8_PROVIDER_params_temperature", "99");
+    const ctx = invocation.ctx(&.{}, null);
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(ctx.arena, "* :brain::/local/tiny,temperature:0.2,x-y_A:null,max_tokens:10\n", &diag);
+    const params = (try target(ctx, records)).params;
+    try std.testing.expectEqual(@as(usize, 2), params.len);
+    try std.testing.expectEqualStrings("temperature", params[0].key);
+    try std.testing.expectEqualStrings("0.2", params[0].value);
+    try std.testing.expectEqualStrings("max_tokens", params[1].key);
+    try std.testing.expectEqualStrings("10", params[1].value);
+}
+
+test "provider param defaults require matching selection" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try invocation.env.put("M8_PROVIDER_param_temperature", "0.4");
+    const ctx = invocation.ctx(&.{}, null);
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(ctx.arena, "* :brain::/local/tiny\n", &diag);
+    try std.testing.expectEqual(@as(usize, 0), (try target(ctx, records)).params.len);
+    try invocation.env.put("M8_PROVIDER_NAME", "elsewhere");
+    try std.testing.expectEqual(@as(usize, 0), (try target(ctx, records)).params.len);
+}
+
+test "provider config defaults reach request fields verbatim" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const provider_mod = @import("../provider.zig");
+    const responses = @import("../codec/openai_responses.zig");
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    const arena = invocation.arena.allocator();
+    const config_json = try std.json.parseFromSliceLeaky(std.json.Value, arena,
+        \\{"local":{"cmd":["unused"],"param_store":false,"param_maxOutputTokens":12,"param_exact-Name":["x"],"param_removed":null}}
+    , .{});
+    const configured = try provider_mod.read(arena, config_json.object, "local");
+    try provider_mod.addEnvironment(arena, configured, &invocation.env);
+    const ctx = invocation.ctx(&.{}, null);
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(ctx.arena, "* :brain::/local/tiny\n", &diag);
+    const params = (try target(ctx, records)).params;
+    const body = try responses.encode(arena, &.{}, .{ .model = "mock", .params = params });
+    const request = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
+    try std.testing.expect(!request.object.get("store").?.bool);
+    try std.testing.expectEqual(@as(i64, 12), request.object.get("maxOutputTokens").?.integer);
+    try std.testing.expectEqualStrings("x", request.object.get("exact-Name").?.array.items[0].string);
+    try std.testing.expect(request.object.get("removed") == null);
+    try std.testing.expect(request.object.get("include") == null);
 }
 
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
@@ -114,9 +192,11 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 say --no-send :demo/mathy | m8 encode --break mathy/+/tduyxbutjb
         \\  m8 say --no-send :demo/mathy | m8 encode --break mathy     the chat, without its agent
         \\
-        \\A request needs no provider, because the ledger carries the model and
-        \\its parameters — so one can be built for a provider m8 has never been
-        \\told about.
+        \\A provider pipeline may supply defaults in M8_PROVIDER_param_NAME variables,
+        \\where NAME is the request field name. Defaults apply only when
+        \\M8_PROVIDER_NAME matches the model provider. Explicit model parameters
+        \\override defaults; null omits the field. Standalone encoding has no
+        \\provider defaults.
         \\
     );
     try codec.list(w);

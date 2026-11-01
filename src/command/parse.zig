@@ -41,7 +41,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\  m8 say --no-send :demo/mathy "Say hi." \
         \\    | m8 encode openai-responses \
-        \\    | M8_PROVIDER_URL=http://127.0.0.1:8000/v1/responses m8 url-provider \
+        \\    | M8_PROVIDER_url=http://127.0.0.1:8000/v1/responses m8 url-provider \
         \\    | m8 parse openai-responses
         \\
         \\Reading is incremental whether or not the provider streamed, so what

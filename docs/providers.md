@@ -41,13 +41,13 @@ write a program for is a provider.
     "openai-responses"
   ],
   "url": "http://127.0.0.1:8000/v1/responses",
-  "models-url": "http://127.0.0.1:8000/v1/models",
+  "models_url": "http://127.0.0.1:8000/v1/models",
   "models": [
-    "sh",
+    "bash",
     "-c",
-    "\"$M8\" url-provider --get \"$M8_PROVIDER_MODELS_URL\" | tr ',' '\\n' | sed -n 's/.*\"id\" *: *\"\\([^\"]*\\)\".*/\\1/p'"
+    "\"$M8\" url-provider --get \"$M8_PROVIDER_models_url\" | tr ',' '\\n' | sed -n 's/.*\"id\" *: *\"\\([^\"]*\\)\".*/\\1/p'"
   ],
-  "header-authorization": "echo Bearer $(cat ~/.omlx/key)"
+  "header_Authorization": ["sh", "-c", "echo Bearer $(cat ~/.omlx/key)"]
 }
 ```
 
@@ -70,8 +70,8 @@ write a program for is a provider.
     "anthropic-messages"
   ],
   "url": "https://api.anthropic.com/v1/messages",
-  "header-anthropic-version": "echo 2023-06-01",
-  "header-x-api-key": "security find-generic-password -s anthropic-api-key -w"
+  "header_anthropic-version": ["echo", "2023-06-01"],
+  "header_x-api-key": ["security", "find-generic-password", "-s", "anthropic-api-key", "-w"]
 }
 ```
 
@@ -109,24 +109,38 @@ then passed on.
 loader metadata. Every other key reaches the stages as `M8_PROVIDER_*`,
 and means whatever the command makes of it.
 
-* A key is lowercase letters, digits and hyphens: `api-version` arrives as
-  `M8_PROVIDER_API_VERSION`.
+* A key arrives verbatim after `M8_PROVIDER_`: `apiVersion` arrives as
+  `M8_PROVIDER_apiVersion`, and `api-version` as `M8_PROVIDER_api-version`.
+* Keys must be nonempty and contain neither `=` nor NUL.
 * A scalar arrives as written, numbers and booleans as JSON text.
-* An object or array arrives as JSON, so `stats` is `M8_PROVIDER_STATS`, and
+* An object or array arrives as JSON, so `stats` is `M8_PROVIDER_stats`, and
   only `m8 url-provider` gives it a meaning.
 * An unnameable key, or a null, is left out.
+* `M8_PROVIDER_NAME` identifies the selected provider entry.
 
-`header-` is nothing special to m8. It is `m8
+`header_` is nothing special to m8. It is `m8
 url-provider`'s one convention rather than the language's, and it is
 the entry beside the url that knows it: a key named
-`header-x-api-key` arrives as `M8_PROVIDER_HEADER_X_API_KEY`,
+`header_x-api-key` arrives as `M8_PROVIDER_header_x-api-key`,
 what it says is run, and its output is that header's value.
 
+Each is an argv array, like `cmd`, rather than an implicit shell script.
+Its stdout supplies the header value after trimming surrounding whitespace.
+
+* A constant is `["echo", "2023-06-01"]`.
+* Shell syntax is explicit: `["sh", "-c", "echo Bearer $(cat ~/.api-key)"]`.
+  * Direct arguments do not expand `~`, variables or command substitutions.
+* `m8` names the running launcher; other executables use an absolute path or
+  are searched for on `PATH`.
+* Commands inherit the provider environment, including `M8_PROVIDER_*`.
+* Existing string-valued header commands must be changed to argv arrays.
+  * Wrap a shell snippet in `["sh", "-c", "..."]`; strings are not executed.
+
 Each is a command rather than a value so a config can commit
-safely and still reach a keychain, and a constant is `echo`.
+safely and still reach a keychain.
 A command that fails or says nothing leaves its header off,
 so a machine with no key configured still reaches a provider
-that wants none.
+that wants none. A value containing a newline is also omitted.
 
 A bearer token, an api version, a beta flag and a tenant are
 all just headers, and not one of them is a format's business
@@ -164,8 +178,8 @@ m8 models local codex      the ones named
 * `m8 url-provider --get URL` asks a url with the entry's
   headers, so a key is not spelled out twice. `--upload`
   posts a file the same way; see [Uploading](#uploading).
-  * `models-url` is no key of m8's: it arrives as
-    `M8_PROVIDER_MODELS_URL` like any other string.
+  * `models_url` is no key of m8's: it arrives as
+    `M8_PROVIDER_models_url` like any other string.
 * A provider with no `models` is left out.
 * m8 says nothing of its own: what a command says on
   stderr is passed on.
@@ -210,9 +224,35 @@ A provider may name another provider as its `parent`:
 
 The repository's `openai-responses.json` holds the shared transport, encoder,
 parser, stats, inline upload and model-list command for `local-omlx.json` and `codex.json`.
-The model-list command accepts `id` or `slug` and runs only when `models-url`
+The model-list command accepts `id` or `slug` and runs only when `models_url`
 is set, so the base itself emits no models.
 Copy the parent file along with a provider that inherits it.
+
+## Request parameter defaults
+
+A provider's `param_` entries supply defaults to `m8 encode`:
+
+```json
+{
+  "parent": "openai-responses",
+  "param_include": ["reasoning.encrypted_content"]
+}
+```
+
+* `param_top_p` arrives as `M8_PROVIDER_param_top_p` and supplies `top_p`.
+  * The field name after `param_` is preserved exactly, including case.
+* Defaults apply when `M8_PROVIDER_NAME` matches the model's provider.
+* Explicit parameters on the model's 🧠 override provider defaults.
+* A parameter set to `null` is omitted from the request, not sent as JSON null.
+  * `"param_store": null` disables an inherited provider default.
+* Values are interpreted as JSON when valid, otherwise as text, like 🧠 values.
+* Without a matching provider environment, encoding uses only 🧠 parameters.
+  * Standalone `m8 encode` does not load provider defaults from config.
+
+The shared `openai-responses.json` supplies `"param_store": false`.
+Only `codex.json` supplies `"param_include": ["reasoning.encrypted_content"]`,
+so Groq and local oMLX do not receive that OpenAI-specific option.
+Neither field is inserted automatically by the Responses codec.
 
 ## Finding the command
 
@@ -261,7 +301,7 @@ are in [Setting up](#setting-up).
 ## The ones m8 ships with
 
 ```bash
-m8 url-provider              post the request to $M8_PROVIDER_URL
+m8 url-provider              post the request to $M8_PROVIDER_url
 m8 url-provider --get URL    ask a url, with the same headers
 m8 toy-provider              answer it here
 m8 toy-provider --models     its models, one name a line
@@ -355,9 +395,9 @@ named by the id the api gave back.
   "encode": ["m8", "encode", "openai-responses"],
   "parse": ["m8", "parse", "openai-responses"],
   "url": "https://api.openai.com/v1/responses",
-  "files-url": "https://api.openai.com/v1/files",
+  "files_url": "https://api.openai.com/v1/files",
   "upload": "…one of the scripts below, as one string…",
-  "header-authorization": "echo Bearer $(cat ~/.openai/key)"
+  "header_Authorization": ["sh", "-c", "echo Bearer $(cat ~/.openai/key)"]
 }
 ```
 
@@ -366,7 +406,7 @@ named by the id the api gave back.
   * `$1` is the 🔗's line after its `<`, as written.
   * `$2` is the config directory m8 keeps things in, the
     nearest, for whatever the command keeps.
-  * It arrives as `M8_PROVIDER_UPLOAD`, as any string does,
+  * It arrives as `M8_PROVIDER_upload`, as any string does,
     and `encode` runs it.
   * One that fails, or says no such line, fails the encode,
     which is how an entry turns down a file its models do
@@ -424,7 +464,7 @@ case $p in /*) f=$p ;; *) f=$M8_MOB_ST8_DIR/$p ;; esac
 
 t=$(mktemp -d) && trap 'rm -rf "$t"' EXIT && c=$t/$n && cat -- "$f" >"$c" || exit
 [ "$(shasum -a 256 <"$c" | cut -c1-64)" = "$h" ] || { echo "upload: $p is not the file linked" >&2; exit 1; }
-u=$M8_PROVIDER_FILES_URL k=$M8_MOB_ST8_DIR/cache/$M8_PROVIDER_NAME/${M8_PROVIDER_ACCOUNT:-_}/uploads/$h.txt
+u=$M8_PROVIDER_files_url k=$M8_MOB_ST8_DIR/cache/$M8_PROVIDER_NAME/${M8_PROVIDER_account:-_}/uploads/$h.txt
 id() { grep -o '"id": *"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; }
 i=$(cat "$k" 2>/dev/null)
 [ -n "$i" ] && [ "$("$M8" url-provider --get "$u/$i" | id)" = "$i" ] && { echo "$m ref:$i $n"; exit; }
@@ -465,13 +505,39 @@ brew install jundot/omlx/omlx --with-custom-kernel --with-grammar
 ```
 
 
+### Groq setup
+
+Copy `.m8-st8/core/providers/groq.json` and its parent
+`openai-responses.json` into your config's `core/providers/`.
+
+* Put your Groq API key in `~/.config/groq/api-key`, the location read by
+  the shipped authorization command, or edit that command to read your own store.
+  * This path is an example convention, not a Groq-defined default.
+  * Keep the file outside the repository and readable only by you (`chmod 600`).
+  * The secret stays out of the provider config.
+* Groq's Responses endpoint is beta, and support depends on the model.
+  * `m8 models groq` lists Groq's models, not just Responses-compatible ones.
+  * Check [Groq's API reference](https://console.groq.com/docs/api-reference)
+    for compatibility.
+
+For a Responses-compatible model, put this in `mobs/demo/groq.md`:
+
+```m8
+* :brain::/groq/openai/gpt-oss-120b
+```
+
+```bash
+m8 models groq
+m8 :demo/groq -- "Hello."
+```
+
 ### Claude setup on the Anthropic api
 
 The `anthropic.json` entry at the top reaches `https://api.anthropic.com/v1/messages`
 and needs an api key. A Claude subscription does not include
 one — the api is a separate product with its own billing — so
 take a key from platform.claude.com/settings/keys and put it
-where `header-x-api-key` looks:
+where `header_x-api-key` looks:
 
 ```bash
 security add-generic-password -s anthropic-api-key -a "$USER" -w
@@ -524,13 +590,13 @@ plan. So `core/providers/codex.json` is a single object with a url and a command
   "encode": ["m8", "encode", "openai-responses"],
   "parse": ["m8", "parse", "openai-responses"],
   "url": "https://chatgpt.com/backend-api/codex/responses",
-  "models-url": "https://chatgpt.com/backend-api/codex/models?client_version=99.0.0",
-  "models": ["sh", "-c", "\"$M8\" url-provider --get \"$M8_PROVIDER_MODELS_URL\" | tr ',' '\\n' | sed -n 's/.*\"slug\" *: *\"\\([^\"]*\\)\".*/\\1/p'"],
-  "header-authorization": "echo Bearer $(...access_token from ~/.codex/auth.json...)",
-  "header-chatgpt-account-id": "...the account id claim in that token...",
-  "header-originator": "echo m8",
-  "header-openai-beta": "echo responses=experimental",
-  "header-accept": "echo text/event-stream"
+  "models_url": "https://chatgpt.com/backend-api/codex/models?client_version=99.0.0",
+  "models": ["bash", "-c", "\"$M8\" url-provider --get \"$M8_PROVIDER_models_url\" | tr ',' '\\n' | sed -n 's/.*\"slug\" *: *\"\\([^\"]*\\)\".*/\\1/p'"],
+  "header_Authorization": ["sh", "-c", "echo Bearer $(...access_token from ~/.codex/auth.json...)"],
+  "header_ChatGPT-Account-ID": ["sh", "-c", "...the account id claim in that token..."],
+  "header_Originator": ["echo", "m8"],
+  "header_OpenAI-Beta": ["echo", "responses=experimental"],
+  "header_Accept": ["echo", "text/event-stream"]
 }
 ```
 
@@ -571,7 +637,7 @@ An api key instead, in `core/providers/openai.json`, reaches the same codec:
   "encode": ["m8", "encode", "openai-responses"],
   "parse": ["m8", "parse", "openai-responses"],
   "url": "https://api.openai.com/v1/responses",
-  "header-authorization": "echo Bearer $(security find-generic-password -s openai-api-key -w)"
+  "header_Authorization": ["sh", "-c", "echo Bearer $(security find-generic-password -s openai-api-key -w)"]
 }
 ```
 
@@ -590,7 +656,7 @@ is that endpoint's business rather than this file's.
 ## Stats commands
 
 Stats configuration is an ordinary provider value to the generic framework.
-It serializes the object as JSON in `M8_PROVIDER_STATS`; only `m8 url-provider`
+It serializes the object as JSON in `M8_PROVIDER_stats`; only `m8 url-provider`
 interprets it. A custom provider command can use that value for
 its own purposes. For the url transport, an optional object can select
 response metadata and name a formatter:

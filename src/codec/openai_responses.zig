@@ -36,8 +36,8 @@
 //! Read against three implementations, because this api is large and most of
 //! it is not a ledger's business: Codex's `codex-rs/core/src/client.rs`, Pi's
 //! `packages/ai/src/api/openai-responses*.ts`, and opencode's codex auth
-//! plugin. Where they agreed, this agrees; `store` and `include` are what all
-//! three set and the two things a ledger cannot do without.
+//! plugin. Endpoint defaults such as `store` and `include` belong to provider
+//! configuration or explicit model parameters, not the wire format.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -70,38 +70,9 @@ pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) 
         try s.objectField("stream");
         try s.write(true);
     }
-    // The ledger's own, in this api's words, passed through untranslated.
-    var said_store = false;
-    var said_include = false;
     for (target.params) |p| {
-        if (std.mem.eql(u8, p.key, "store")) said_store = true;
-        if (std.mem.eql(u8, p.key, "include")) said_include = true;
         try s.objectField(p.key);
         try s.write(modelform.json(arena, p.value));
-    }
-    // Two fields this api needs before it behaves the way a ledger needs it
-    // to. Neither is a preference, and both are what the 🧠 overrules if it
-    // says so.
-    //
-    // `store` off is what makes the conversation the ledger's rather than a
-    // server's: with it on, the history is kept and replayed by id at the far
-    // end, which is the thing m8 exists not to do. The subscription endpoint
-    // requires it off in any case.
-    //
-    // `include` is what makes a thought come home at all. Encrypted reasoning
-    // is only returned when it is asked for, so without this a 💭 arrives
-    // with nothing to sign it and could never be replayed — which would look
-    // like the codec silently dropping thoughts rather than like a field
-    // nobody set.
-    if (!said_store) {
-        try s.objectField("store");
-        try s.write(false);
-    }
-    if (!said_include) {
-        try s.objectField("include");
-        try s.beginArray();
-        try s.write("reasoning.encrypted_content");
-        try s.endArray();
     }
 
     try writeInstructions(arena, &s, records);
@@ -1265,32 +1236,19 @@ test "a whole failed response reports status details" {
     );
 }
 
-test "store and include are written unless the ledger said otherwise" {
+test "request params are only those supplied by the target" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-
-    const v = try requestOf(arena, &.{}, .{ .model = "gpt-5.5" });
-    // Off, so the conversation is the ledger's rather than a server's — and
-    // the subscription endpoint will not take it any other way.
-    try testing.expect(!field(v, "store").bool);
-    // Asked for, or a 💭 comes home with nothing to sign it and can never be
-    // replayed.
-    try testing.expectEqualStrings(
-        "reasoning.encrypted_content",
-        field(v, "include").array.items[0].string,
-    );
-
-    // Whatever the 🧠 says wins, as with every other parameter.
-    const said = try requestOf(arena, &.{}, .{
+    const absent = try requestOf(arena, &.{}, .{ .model = "gpt-5.5" });
+    try testing.expect(absent.object.get("store") == null);
+    try testing.expect(absent.object.get("include") == null);
+    const supplied = try requestOf(arena, &.{}, .{
         .model = "gpt-5.5",
-        .params = &.{
-            .{ .key = "store", .value = "true" },
-            .{ .key = "include", .value = "[]" },
-        },
+        .params = &.{ .{ .key = "store", .value = "false" }, .{ .key = "include", .value = "[]" } },
     });
-    try testing.expect(field(said, "store").bool);
-    try testing.expectEqual(@as(usize, 0), field(said, "include").array.items.len);
+    try testing.expect(!field(supplied, "store").bool);
+    try testing.expectEqual(@as(usize, 0), field(supplied, "include").array.items.len);
 }
 
 test "an incomplete response says why last, in this api's own word" {

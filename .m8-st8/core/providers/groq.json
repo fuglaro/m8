@@ -1,0 +1,6 @@
+{
+  "parent": "openai-responses",
+  "url": "https://api.groq.com/openai/v1/responses",
+  "models_url": "https://api.groq.com/openai/v1/models",
+  "header_Authorization": ["sh", "-c", "printf 'Bearer %s\\n' \"$(cat \"$HOME/.config/groq/api-key\" || echo _)\""]
+}

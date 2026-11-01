@@ -20,7 +20,7 @@ pub fn load(ctx: api.Ctx) ?Config {
 }
 
 fn readConfig(ctx: api.Ctx) !?Config {
-    const raw = ctx.env.get("M8_PROVIDER_STATS") orelse return null;
+    const raw = ctx.env.get("M8_PROVIDER_stats") orelse return null;
     const settings = try std.json.parseFromSliceLeaky(Config, ctx.arena, raw, .{});
     if (settings.cmd.len == 0) return error.InvalidStats;
     return settings;
