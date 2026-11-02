@@ -12,18 +12,9 @@
 * :brain::shared/utils/shields
 * :brain::shared/utils/runners
 * :brain::shared/toolbox/explore-files
-* :brain::shared/toolbox/edit-files
 * :toolbox::read byte_cap 5000
+* :brain::shared/toolbox/edit-files
 * :brain::shared/toolbox/bash
 * :brain::shared/toolbox/webfetch
-
-* :toolbox::cody
-* :toolbox::cody
-  > > Give Cody a bounded task with clear objectives, scope, and constraints,
-  > > or continue=true to give feedback on the previous task.
-  >
-  > `m8` `call` `--md` `m8` `say` `--answer` `--unwrap` `{{continue!--new}}` `:crew/cody//delegated` `{{task|}}`
-  > * task string
-  >   The task to complete and any relevant scope or constraints.
-  > * continue boolean
-  >   Set true to continue the conversation; otherwise start fresh.
+* :brain::shared/toolbox/delegate
+* :toolbox::delegate agent :crew/cody
