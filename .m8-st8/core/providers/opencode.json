@@ -1,0 +1,10 @@
+{
+  "parent": "openai-responses",
+  "url": "https://opencode.ai/inference/openai/v1/responses",
+  "models_url": "https://opencode.ai/inference/v1/models",
+  "header_Authorization": [
+    "sh",
+    "-c",
+    "key=$(sqlite3 -readonly \"${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db\" \"SELECT json_extract(value, '$.key') FROM credential WHERE integration_id = 'opencode' AND active = 1 LIMIT 1;\" 2>/dev/null) || key=\nif [ -z \"$key\" ]; then\n  key=$(tr -d '\\r\\n' < \"$HOME/.config/opencode/api-key\") || exit $?\nfi\nprintf 'Bearer %s\\n' \"$key\""
+  ]
+}

@@ -35,7 +35,7 @@ definition's business.
 │ ```bash
 │ grep -r "$__pattern__" .
 │ ```
-│ * pattern string
+│ * `pattern` **string**
 │   what to look for
 ```
 
@@ -48,7 +48,7 @@ definition's business.
 >   > ```bash
 >   > grep -r "$__pattern__" .
 >   > ```
->   > * pattern string
+>   > * `pattern` **string**
 >   >   what to look for
 
 What a tool is handed:
@@ -82,7 +82,7 @@ command's own business rather than the framework's.
 │ │ Run a bash command.
 │
 │ `m8` `call` `bash` `-euo` `pipefail` `{{command|-c}}`
-│ * command string
+│ * `command` **string**
 │   The bash command to run.
 ```
 
@@ -90,7 +90,7 @@ command's own business rather than the framework's.
 >   > > Run a bash command.
 >   >
 >   > `m8` `call` `bash` `-euo` `pipefail` `{{command|-c}}`
->   > * command string
+>   > * `command` **string**
 >   >   The bash command to run.
 
 Given `__command__=echo hi`:
@@ -102,12 +102,23 @@ Given `__command__=echo hi`:
 {{deep?--deep}}   --deep, when the value is exactly true
 {{}}              -- followed by the whole call as JSON
 {{|}}             the whole call as JSON, without a flag
+{{[files]}}       --files "a.txt" --files "two words.txt"
+{{[files]|-f}}    -f "a.txt" -f "two words.txt"
+{{[files]|}}      "a.txt" "two words.txt"
 ```
 
 The flag a bare placeholder carries is the argument's
 own name, preserving its spelling. An empty name is the
 whole call: `{{}}` gives it the `--` flag, while `{{|}}`
 injects it directly.
+
+The list examples use `files = ["a.txt", "two words.txt"]`.
+Brackets read a top-level array from the whole-call JSON in `____`,
+repeating the flag for each item, or emitting positional arguments
+when the flag is empty. Missing and empty lists emit nothing.
+Items may be strings, numbers or booleans; other items and non-array
+values are errors. Each item stays one argument, including empty
+strings, and its contents are never expanded again.
 
 A placeholder is a whole argument and is never spliced
 into a larger one, so a value cannot become syntax in
@@ -118,7 +129,7 @@ reads what it was told from its environment.
 * An unset variable leaves nothing behind. An empty one
   is a value a command was given, and is passed as an
   empty argument.
-* Only `?` reads a value: `true` emits the flag, `false`
+* `?` requires a boolean: `true` emits the flag, `false`
   emits nothing, and anything else is an error naming
   what arrived, because a call that looked like it
   succeeded while ignoring what was asked is worse than
@@ -144,7 +155,7 @@ blockless header, and a final bare header offers the tool:
 │ │ Read a file or directory.
 │
 │ `m8` `call` `m8` `munge` `read` `{{page_lines|--page-lines}}` `--` `{{path|}}`
-│ * path string
+│ * `path` **string**
 
 ▐ 🧰:read page_lines 100
 ▐ 🧰:read
@@ -154,7 +165,7 @@ blockless header, and a final bare header offers the tool:
 >   > > Read a file or directory.
 >   >
 >   > `m8` `call` `m8` `munge` `read` `{{page_lines|--page-lines}}` `--` `{{path|}}`
->   > * path string
+>   > * `path` **string**
 >
 > * :toolbox::read page_lines 100
 > * :toolbox::read

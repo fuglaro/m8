@@ -6,7 +6,7 @@
   > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `read` `--` `{{path|}}`
-  > * path string
+  > * `path` **string**
   >   Path of the directory to inspect (relative, absolute, or ~).
   >   Use "." for the project root.
 
@@ -19,13 +19,13 @@
   > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `{{glob}}`
-  > * regex? string
+  > * `regex?` **string**
   >   Regex to search with using a Perl-style pattern (no
   >   backrefs, lookaround, or multi-line matching).
-  > * glob? string
+  > * `glob?` **string**
   >   Glob match for files with ** and * expansion (relative,
   >   absolute, or ~) e.g. "src/**/*.js" or "**".
-  > * pages? string
+  > * `pages?` **string**
   >   Paginate results to browse through many matches e.g. "11-20".
 
 * :toolbox::read
@@ -37,9 +37,9 @@
   > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `read` `{{byte_cap|--byte-cap}}` `--` `{{path|}}`
-  > * path string
+  > * `path` **string**
   >   Path of the file to read (relative, absolute, or ~).
-  > * pages? string
+  > * `pages?` **string**
   >   Page range to read e.g. "10-10" or "11-20" or "21-100", or
   >   "2@string_match" to read 2 pages starting at string_match.
   >   About 30 lines per page, fewer when lines are very long.

@@ -16,6 +16,9 @@ pub const Error = error{
     FlaglessNegation,
     /// `?` on a value that is neither `true` nor `false`.
     NotABoolean,
+    /// List expansion needs an array of scalar values.
+    NotAList,
+    NotAListItem,
 };
 
 /// Placeholders are logical argument names. Their process spelling is made
@@ -66,6 +69,10 @@ fn expand(
         };
     }
 
+    const list = (form == .own or form == .given) and
+        name.len >= 2 and name[0] == '[' and name[name.len - 1] == ']';
+    if (list) name = name[1 .. name.len - 1];
+
     // The flag a bare placeholder carries is the argument's own name. An
     // empty name therefore naturally becomes `--`, the all-arguments form.
     if (form == .own) flag = try std.fmt.allocPrint(arena, "--{s}", .{name});
@@ -82,6 +89,7 @@ fn expand(
     }
 
     const key = (try argname.envName(arena, name)) orelse return out.append(arena, word);
+    if (list) return expandList(arena, env, err, out, name, flag);
     const value = env.get(key) orelse {
         if (form == .unless_true) return out.append(arena, flag);
         return;
@@ -103,6 +111,43 @@ fn expand(
     }
     if (flag.len > 0) try out.append(arena, flag);
     try out.append(arena, value);
+}
+
+/// Arrays have no scalar environment spelling; read them from the whole call.
+fn expandList(
+    arena: std.mem.Allocator,
+    env: *const std.process.Environ.Map,
+    err: *std.Io.Writer,
+    out: *std.ArrayList([]const u8),
+    name: []const u8,
+    flag: []const u8,
+) !void {
+    const raw = env.get("____") orelse return;
+    const call = try std.json.parseFromSlice(std.json.Value, arena, raw, .{
+        .allocate = .alloc_always,
+        .parse_numbers = false,
+    });
+    if (call.value != .object) {
+        try err.writeAll("m8 call: list expansion requires a JSON object in ____\n");
+        return Error.NotAList;
+    }
+    const value = call.value.object.get(name) orelse return;
+    if (value != .array) {
+        try err.print("m8 call: {s} must be a list\n", .{name});
+        return Error.NotAList;
+    }
+    for (value.array.items, 0..) |item, i| {
+        const text = switch (item) {
+            .string, .number_string => |v| v,
+            .bool => |v| if (v) "true" else "false",
+            else => {
+                try err.print("m8 call: {s}[{d}] must be a string, number or boolean\n", .{ name, i });
+                return Error.NotAListItem;
+            },
+        };
+        if (flag.len > 0) try out.append(arena, flag);
+        try out.append(arena, text);
+    }
 }
 
 /// The command line a template becomes. Separate from running it, so what it
@@ -257,5 +302,102 @@ test "a definition that could never work is refused where it is written" {
     try testing.expectError(
         Error.FlaglessQuestion,
         built(arena, &.{}, &.{"{{x?}}"}),
+    );
+}
+
+test "list placeholders expand whole-call JSON items in order" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const json = "{\"items\":[\"a b\",\"\",7,true,false]}";
+    const vars = &[_][2][]const u8{.{ "____", json }};
+
+    try expectArgv(
+        try built(arena, vars, &.{ "before", "{{[items]}}", "after" }),
+        &.{ "before", "--items", "a b", "--items", "", "--items", "7", "--items", "true", "--items", "false", "after" },
+    );
+    try expectArgv(
+        try built(arena, vars, &.{"{{[items]|--foo}}"}),
+        &.{ "--foo", "a b", "--foo", "", "--foo", "7", "--foo", "true", "--foo", "false" },
+    );
+    try expectArgv(
+        try built(arena, vars, &.{"{{[items]|}}"}),
+        &.{ "a b", "", "7", "true", "false" },
+    );
+}
+
+test "missing and empty JSON lists emit nothing" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const placeholder = &.{ "x", "{{[items]}}", "y" };
+
+    try expectArgv(try built(arena, &.{}, placeholder), &.{ "x", "y" });
+    try expectArgv(
+        try built(arena, &.{.{ "____", "{}" }}, placeholder),
+        &.{ "x", "y" },
+    );
+    try expectArgv(
+        try built(arena, &.{.{ "____", "{\"items\":[]}" }}, placeholder),
+        &.{ "x", "y" },
+    );
+}
+
+test "list placeholders reject non-arrays and non-scalar items" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const template = &.{"{{[items]}}"};
+
+    inline for (.{
+        "{\"items\":null}",
+        "{\"items\":\"text\"}",
+        "{\"items\":3}",
+        "{\"items\":true}",
+        "{\"items\":{}}",
+    }) |json| try testing.expectError(
+        Error.NotAList,
+        built(arena, &.{.{ "____", json }}, template),
+    );
+    inline for (.{
+        "null",
+        "{}",
+        "[]",
+        "[1]",
+    }) |item| {
+        const json = try std.fmt.allocPrint(arena, "{{\"items\":[{s}]}}", .{item});
+        try testing.expectError(
+            Error.NotAListItem,
+            built(arena, &.{.{ "____", json }}, template),
+        );
+    }
+}
+
+test "scalar placeholders remain unchanged beside list placeholders" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const vars = &[_][2][]const u8{
+        .{ "____", "{\"items\":[\"first\",\"last\"]}" },
+        .{ "__name__", "value with spaces" },
+    };
+    try expectArgv(
+        try built(arena, vars, &.{ "{{name}}", "{{[items]|}}", "{{name|-n}}" }),
+        &.{ "--name", "value with spaces", "first", "last", "-n", "value with spaces" },
+    );
+}
+
+test "list items are literal and number spellings are preserved" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const vars = &[_][2][]const u8{
+        .{ "____", "{\"items\":[\"{{name}}\",\"$(echo nope)\",1.25,1e3]}" },
+        .{ "__name__", "not expanded" },
+        .{ "__items__", "not the list" },
+    };
+    try expectArgv(
+        try built(arena, vars, &.{"{{[items]|}}"}),
+        &.{ "{{name}}", "$(echo nope)", "1.25", "1e3" },
     );
 }

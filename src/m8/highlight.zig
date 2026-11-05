@@ -90,34 +90,38 @@ pub const Style = struct {
 //
 // Every colour the highlighter uses, and nothing else reads them.
 
+/// The built-in highlights setting, also usable verbatim in core/highlights.txt.
+pub const default_highlights = "quote:fg245,list:fg245,hash:fg245,heading:+fg75,strong:+fg231,em:i,strike:/,code:fg180,json:string:fg2,json:key:fg180,json:atom:+fg75,json:sep:fg245,link:_fg75,rule:fg245,table:pipe:fg245,table:head:+,fence:fg245,block:fg180,diff:add:fg2,diff:remove:fg1,diff:hunk:fg6,indent:fg181,wrap:literal:70,wrap:word:90";
+
+/// Styles start neutral; the config loader selects the built-in or user setting.
 pub const Palette = struct {
     /// `>`, list markers, and heading hashes.
-    quote: Style = .{ .fg = 245 },
-    list: Style = .{ .fg = 245 },
-    hash: Style = .{ .fg = 245 },
-    heading: Style = .{ .bold = true, .fg = 75 },
-    strong: Style = .{ .bold = true, .fg = 231 },
-    emphasis: Style = .{ .italic = true },
-    strike: Style = .{ .strike = true },
-    code: Style = .{ .fg = 180 },
-    json_string: Style = .{ .fg = 2 },
-    json_key: Style = .{ .fg = 180 },
-    json_atom: Style = .{ .bold = true, .fg = 75 },
-    json_sep: Style = .{ .fg = 245 },
-    link: Style = .{ .underline = true, .fg = 75 },
-    rule: Style = .{ .fg = 245 },
+    quote: Style = .{},
+    list: Style = .{},
+    hash: Style = .{},
+    heading: Style = .{},
+    strong: Style = .{},
+    emphasis: Style = .{},
+    strike: Style = .{},
+    code: Style = .{},
+    json_string: Style = .{},
+    json_key: Style = .{},
+    json_atom: Style = .{},
+    json_sep: Style = .{},
+    link: Style = .{},
+    rule: Style = .{},
     /// A table's `|`, and the first row it opens with.
-    pipe: Style = .{ .fg = 245 },
-    header: Style = .{ .bold = true },
+    pipe: Style = .{},
+    header: Style = .{},
     /// A fence's own lines, and what is inside one that is not a diff.
-    fence: Style = .{ .fg = 245 },
-    block: Style = .{ .fg = 180 },
-    added: Style = .{ .fg = 2 },
-    removed: Style = .{ .fg = 1 },
-    hunk: Style = .{ .fg = 6 },
+    fence: Style = .{},
+    block: Style = .{},
+    added: Style = .{},
+    removed: Style = .{},
+    hunk: Style = .{},
     context: Style = .{},
     /// A line opening with four spaces.
-    indented: Style = .{ .fg = 181 },
+    indented: Style = .{},
 };
 
 // ----------------------------------------------------------------
@@ -787,6 +791,24 @@ fn listMarker(s: []const u8) usize {
 
 const testing = std.testing;
 
+/// Tests that exercise the built-in theme load it just as the config loader does.
+fn themed(opts: Options) Options {
+    var look = opts;
+    parseHighlights(&look, default_highlights) catch unreachable;
+    return look;
+}
+
+test "palette starts neutral and the built-in setting supplies its styles" {
+    const neutral: Palette = .{};
+    inline for (std.meta.fields(Palette)) |field| {
+        try testing.expectEqualDeep(Style{}, @field(neutral, field.name));
+    }
+    const look = themed(.{});
+    try testing.expectEqualDeep((Style{ .bold = true, .fg = 75 }), look.palette.heading);
+    try testing.expectEqualDeep((Style{ .fg = 181 }), look.palette.indented);
+    try testing.expectEqualDeep(Style{}, look.palette.context);
+}
+
 /// What `src` looks like, each change of style written `{params}` so a test
 /// can read it: `{}` is plain, `{1}` bold, `{38;5;245}` a colour.
 fn shown(src: []const u8, opts: Options, lead: []const u8) ![]const u8 {
@@ -833,7 +855,7 @@ test "compact palette syntax composes and validates" {
     try testing.expectError(error.BadHighlight, parsePalette(&p, "quote:f"));
 }
 test "quote, list, and heading marker styles are independent" {
-    var opts: Options = .{};
+    var opts: Options = themed(.{});
     opts.palette.quote = .{ .fg = 1 };
     opts.palette.list = .{ .fg = 2 };
     opts.palette.hash = .{ .fg = 3 };
@@ -841,7 +863,7 @@ test "quote, list, and heading marker styles are independent" {
 }
 
 test "terminal palette indices use ANSI foreground and background codes" {
-    var opts: Options = .{};
+    var opts: Options = themed(.{});
     opts.palette.quote = .{ .fg = 256, .bg = 271 };
     try expectShown("{30;107}>{} x", "> x", opts);
     opts.palette.quote = .{ .fg = 263, .bg = 264 };
@@ -853,58 +875,58 @@ test "every character arrives, and nothing else does without colour or reflow" {
 }
 
 test "emphasis opens with no word before and no space after, and ends with its line" {
-    try expectShown("{1;38;5;231}**a**{} b", "**a** b", .{});
-    try expectShown("{3}*a*{}", "*a*", .{});
-    try expectShown("{1;3;38;5;231}***a***{}", "***a***", .{});
-    try expectShown("{9}~~a~~{}", "~~a~~", .{});
+    try expectShown("{1;38;5;231}**a**{} b", "**a** b", themed(.{}));
+    try expectShown("{3}*a*{}", "*a*", themed(.{}));
+    try expectShown("{1;3;38;5;231}***a***{}", "***a***", themed(.{}));
+    try expectShown("{9}~~a~~{}", "~~a~~", themed(.{}));
     // A word before, or a space after, and it is only text.
-    try expectShown("snake_case_name a * b", "snake_case_name a * b", .{});
+    try expectShown("snake_case_name a * b", "snake_case_name a * b", themed(.{}));
     // Never closed, so the line's end closes it.
-    try expectShown("{1;38;5;231}**a{}\nb", "**a\nb", .{});
+    try expectShown("{1;38;5;231}**a{}\nb", "**a\nb", themed(.{}));
 }
 
 test "a code span opens after an emoji as after punctuation, but not after a letter" {
-    try expectShown("\u{1F50F}{38;5;180}`a-_b_`{}", "\u{1F50F}`a-_b_`", .{});
-    try expectShown("\u{00E9}`a`", "\u{00E9}`a`", .{});
+    try expectShown("\u{1F50F}{38;5;180}`a-_b_`{}", "\u{1F50F}`a-_b_`", themed(.{}));
+    try expectShown("\u{00E9}`a`", "\u{00E9}`a`", themed(.{}));
 }
 
 test "a code span holds everything inside it" {
-    try expectShown("{38;5;180}`*a*`{} {3}*b*{}", "`*a*` *b*", .{});
-    try expectShown("{38;5;180}``a`b``{}", "``a`b``", .{});
+    try expectShown("{38;5;180}`*a*`{} {3}*b*{}", "`*a*` *b*", themed(.{}));
+    try expectShown("{38;5;180}``a`b``{}", "``a`b``", themed(.{}));
 }
 
 test "code spans allow whitespace at either edge and close only on a matching run" {
-    try expectShown("{38;5;180}`` a ``{} plain", "`` a `` plain", .{});
-    try expectShown("{38;5;180}` leading`{} plain", "` leading` plain", .{});
-    try expectShown("{38;5;180}`trailing `{} plain", "`trailing ` plain", .{});
-    try expectShown("{38;5;180}`   `{} plain", "`   ` plain", .{});
-    try expectShown("{38;5;180}`\ta\t`{} plain", "`\ta\t` plain", .{});
-    try expectShown("{38;5;180}`` `a` ``` b ``{} plain", "`` `a` ``` b `` plain", .{});
+    try expectShown("{38;5;180}`` a ``{} plain", "`` a `` plain", themed(.{}));
+    try expectShown("{38;5;180}` leading`{} plain", "` leading` plain", themed(.{}));
+    try expectShown("{38;5;180}`trailing `{} plain", "`trailing ` plain", themed(.{}));
+    try expectShown("{38;5;180}`   `{} plain", "`   ` plain", themed(.{}));
+    try expectShown("{38;5;180}`\ta\t`{} plain", "`\ta\t` plain", themed(.{}));
+    try expectShown("{38;5;180}`` `a` ``` b ``{} plain", "`` `a` ``` b `` plain", themed(.{}));
     // An unmatched opener colours only the rest of its line.
-    try expectShown("{38;5;180}` *a*{}\nplain", "` *a*\nplain", .{});
+    try expectShown("{38;5;180}` *a*{}\nplain", "` *a*\nplain", themed(.{}));
 }
 
 test "a link is what follows the brackets" {
-    try expectShown("[a]{4;38;5;75}(b){} [c] (d)", "[a](b) [c] (d)", .{});
+    try expectShown("[a]{4;38;5;75}(b){} [c] (d)", "[a](b) [c] (d)", themed(.{}));
 }
 
 test "a marker is coloured, and nothing after it" {
-    try expectShown("{38;5;245}>{} {38;5;245}- {}a", "> - a", .{});
-    try expectShown("{38;5;245}12. {}a", "12. a", .{});
-    try expectShown("3.14 a", "3.14 a", .{});
-    try expectShown("{38;5;245}##{1;38;5;75} a *b*{}", "## a *b*", .{});
-    try expectShown("#a", "#a", .{});
+    try expectShown("{38;5;245}>{} {38;5;245}- {}a", "> - a", themed(.{}));
+    try expectShown("{38;5;245}12. {}a", "12. a", themed(.{}));
+    try expectShown("3.14 a", "3.14 a", themed(.{}));
+    try expectShown("{38;5;245}##{1;38;5;75} a *b*{}", "## a *b*", themed(.{}));
+    try expectShown("#a", "#a", themed(.{}));
 }
 
 test "a rule is told from a list and from emphasis" {
-    try expectShown("{38;5;245}- - -{}", "- - -", .{});
-    try expectShown("{38;5;245}***{}", "***", .{});
-    try expectShown("{38;5;245}- --{}", "- --", .{});
-    try expectShown("{38;5;245}- {}-x", "- -x", .{});
+    try expectShown("{38;5;245}- - -{}", "- - -", themed(.{}));
+    try expectShown("{38;5;245}***{}", "***", themed(.{}));
+    try expectShown("{38;5;245}- --{}", "- --", themed(.{}));
+    try expectShown("{38;5;245}- {}-x", "- -x", themed(.{}));
 }
 
 test "json fences highlight strings, keywords and numbers without changing text" {
-    var opts: Options = .{};
+    var opts: Options = themed(.{});
     opts.palette.block = .{ .fg = 6 };
     opts.palette.code = .{ .fg = 8 };
     opts.palette.heading = .{ .fg = 9 };
@@ -942,23 +964,23 @@ test "a fence holds until it closes, and a diff is coloured a line at a time" {
     try expectShown(
         "{38;5;245}```diff{}\n{38;5;2}+a{}\n{38;5;1}-b{}\n{38;5;6}@@{}\n c\n{38;5;245}```{}\n{3}*d*{}",
         "```diff\n+a\n-b\n@@\n c\n```\n*d*",
-        .{},
+        themed(.{}),
     );
-    try expectShown("{38;5;245}```{}\n{38;5;180}*a*{}\n{38;5;245}````{}", "```\n*a*\n````", .{});
+    try expectShown("{38;5;245}```{}\n{38;5;180}*a*{}\n{38;5;245}````{}", "```\n*a*\n````", themed(.{}));
     // Only at the start of a line; inside a quote it is only backticks.
-    try expectShown("{38;5;245}>{} {38;5;180}```a{}", "> ```a", .{});
+    try expectShown("{38;5;245}>{} {38;5;180}```a{}", "> ```a", themed(.{}));
     // Never closed, and the block's end closes it.
-    try expectShown("{38;5;245}~~~{}\n{38;5;180}a{}", "~~~\na", .{});
+    try expectShown("{38;5;245}~~~{}\n{38;5;180}a{}", "~~~\na", themed(.{}));
 }
 
 test "a fence opens at its list item's indent, and is read from there" {
     try expectShown(
         "{38;5;245}1. {}a\n   {38;5;245}```diff{}\n{38;5;2}   +*b*{}\n{38;5;245} ```{}\n{38;5;245}- {3}*c*{}",
         "1. a\n   ```diff\n   +*b*\n ```\n- *c*",
-        .{},
+        themed(.{}),
     );
     // Not at the item's indent, and it is only backticks.
-    try expectShown("{38;5;245}- {}a\n {38;5;180}```b{}", "- a\n ```b", .{});
+    try expectShown("{38;5;245}- {}a\n {38;5;180}```b{}", "- a\n ```b", themed(.{}));
 }
 
 test "a table's pipes take their share of the width, or a space past a wide cell" {
@@ -968,7 +990,7 @@ test "a table's pipes take their share of the width, or a space past a wide cell
         .{ .color = false, .width = 13 },
     );
     // The first line is the header.
-    try expectShown("{38;5;245}|{1} a {38;5;245}|{}\n{38;5;245}|{} b {38;5;245}|{}", "| a |\n| b |", .{});
+    try expectShown("{38;5;245}|{1} a {38;5;245}|{}\n{38;5;245}|{} b {38;5;245}|{}", "| a |\n| b |", themed(.{}));
 }
 
 test "a table's last column gets three times the width share" {
@@ -990,22 +1012,22 @@ test "a long line is broken at the width, carrying its quote and indent" {
 }
 
 test "a broken line carries its style past its quote and indent" {
-    const got = try shown("> **abcdef**", .{ .width = 6 }, "| ");
+    const got = try shown("> **abcdef**", themed(.{ .width = 6 }), "| ");
     defer testing.allocator.free(got);
     try testing.expectEqualStrings("{38;5;245}>{} {1;38;5;231}**{}\n| > {1;38;5;231}ab{}\n| > {1;38;5;231}cd{}\n| > {1;38;5;231}ef{}\n| > {1;38;5;231}**{}", got);
 }
 
 test "a line indented four past its list item is literal, unless it continues a paragraph" {
-    try expectShown("{38;5;181}    *a* `b`{}", "    *a* `b`", .{});
-    try expectShown("\n{38;5;181}    *a*{}", "\n    *a*", .{});
+    try expectShown("{38;5;181}    *a* `b`{}", "    *a* `b`", themed(.{}));
+    try expectShown("\n{38;5;181}    *a*{}", "\n    *a*", themed(.{}));
     // Continuing a paragraph, and inside a list item's own indent.
-    try expectShown("a\n    {3}*b*{}", "a\n    *b*", .{});
-    try expectShown("{38;5;245}- {}a\n\n    {3}*b*{}", "- a\n\n    *b*", .{});
-    try expectShown("{38;5;245}- {}a\n\n{38;5;181}      *b*{}", "- a\n\n      *b*", .{});
+    try expectShown("a\n    {3}*b*{}", "a\n    *b*", themed(.{}));
+    try expectShown("{38;5;245}- {}a\n\n    {3}*b*{}", "- a\n\n    *b*", themed(.{}));
+    try expectShown("{38;5;245}- {}a\n\n{38;5;181}      *b*{}", "- a\n\n      *b*", themed(.{}));
     // A line back at the margin ends the item.
-    try expectShown("{38;5;245}- {}a\n\nb\n\n{38;5;181}    *c*{}", "- a\n\nb\n\n    *c*", .{});
+    try expectShown("{38;5;245}- {}a\n\nb\n\n{38;5;181}    *c*{}", "- a\n\nb\n\n    *c*", themed(.{}));
     // Literal lines run on, since they open no paragraph.
-    try expectShown("{38;5;181}    *a*{}\n{38;5;181}    *b*{}", "    *a*\n    *b*", .{});
+    try expectShown("{38;5;181}    *a*{}\n{38;5;181}    *b*{}", "    *a*\n    *b*", themed(.{}));
 }
 
 test "a code span is never broken, and what follows it is" {
@@ -1017,7 +1039,7 @@ test "wide characters count as two" {
 }
 
 test "highlights accepts percentages alongside styles" {
-    var opts: Options = .{};
+    var opts: Options = themed(.{});
     try testing.expectEqual(@as(u8, 70), opts.wrap_literal);
     try testing.expectEqual(@as(u8, 90), opts.wrap_word);
     try parseHighlights(&opts, "quote:fg4,wrap:literal:0,wrap:word:100");
@@ -1079,8 +1101,8 @@ test "early breaks preserve styles across streamed delimiters" {
     for ([_][]const u8{ "abcdef ", "`", "`", "long ", "literal", "`", "`" }) |chunk| try h.write(chunk);
     try h.finish();
     try testing.expectEqualStrings("abcdef \n``long literal``", out.written());
-    try expectShown("abcdef \n{38;5;180}`literal`{}", "abcdef `literal`", .{ .width = 10 });
-    try expectShown("{1;38;5;231}**abcdef {}\n{1;38;5;231}word**{}", "**abcdef word**", .{ .width = 10 });
+    try expectShown("abcdef \n{38;5;180}`literal`{}", "abcdef `literal`", themed(.{ .width = 10 }));
+    try expectShown("{1;38;5;231}**abcdef {}\n{1;38;5;231}word**{}", "**abcdef word**", themed(.{ .width = 10 }));
 }
 
 test "one percent of a thousand cells is ten cells" {

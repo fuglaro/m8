@@ -30,6 +30,8 @@ pub const Dirs = struct {
     system_root: []const u8 = system_dir,
     data_root: ?[]const u8 = null,
     mob: ?[]const u8 = null,
+    /// Owning definition root, resolved once when a mob is pinned.
+    mob_root: ?[]const u8 = null,
 };
 
 /// Resolve native discovery once, including the writable XDG data location.
@@ -366,25 +368,26 @@ fn hasFile(io: std.Io, path: []const u8) bool {
     return true;
 }
 
+/// The mob owning a generated-state filename; definitions still use overlays.
+fn stateMob(rel: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, rel, "mobs/")) return null;
+    const tail = rel[5..];
+    const slash = std.mem.indexOfScalar(u8, tail, '/') orelse return null;
+    if (!std.mem.startsWith(u8, tail[slash + 1 ..], state_dir ++ "/")) return null;
+    return tail[0..slash];
+}
+
 /// Which config directory holds `rel`, nearest first.
 ///
 /// `read` answers with the bytes. This answers with where they came from, for
 /// anything that has to write beside a file rather than read it.
 pub fn where(arena: Allocator, io: std.Io, dirs: Dirs, rel: []const u8) !?[]const u8 {
-    if (std.mem.startsWith(u8, rel, "mobs/")) {
-        const tail = rel[5..];
-        const slash = std.mem.indexOfScalar(u8, tail, '/') orelse return null;
-        const mob = tail[0..slash];
-        const is_state = std.mem.startsWith(u8, tail[slash + 1 ..], state_dir ++ "/");
-        if (is_state) {
-            const selected = (try mobSelection(arena, io, dirs, try std.fmt.allocPrint(arena, "{s}/lookup", .{mob}))) orelse return null;
-            const root = try stateRoot(arena, dirs, selected.root);
-            return if (hasFile(io, try std.fs.path.join(arena, &.{ root, rel }))) root else null;
-        }
-        // Authored files overlay independently of the layer that owns state.
-        for (dirs.roots) |root| if (hasFile(io, try std.fs.path.join(arena, &.{ root, rel }))) return root;
-        return null;
+    if (stateMob(rel)) |mob| {
+        const selected = (try mobSelection(arena, io, dirs, try std.fmt.allocPrint(arena, "{s}/lookup", .{mob}))) orelse return null;
+        const root = try stateRoot(arena, dirs, selected.root);
+        return if (hasFile(io, try std.fs.path.join(arena, &.{ root, rel }))) root else null;
     }
+    // Authored files overlay independently of the layer that owns state.
     for (dirs.roots) |dir| {
         if (hasFile(io, try std.fs.path.join(arena, &.{ dir, rel }))) return dir;
     }
@@ -393,7 +396,10 @@ pub fn where(arena: Allocator, io: std.Io, dirs: Dirs, rel: []const u8) !?[]cons
 
 fn mobSelection(arena: Allocator, io: std.Io, dirs: Dirs, agent: []const u8) !?struct { root: []const u8, name: []const u8 } {
     const mob = mobName(agent) orelse return null;
-    if (dirs.mob) |scope| if (!std.mem.eql(u8, scope, mob)) return error.CrossMobReference;
+    if (dirs.mob) |scope| {
+        if (!std.mem.eql(u8, scope, mob)) return error.CrossMobReference;
+        if (dirs.mob_root) |root| return .{ .root = root, .name = mob };
+    }
     for (dirs.roots) |root| {
         const candidate = try std.fs.path.join(arena, &.{ root, "mobs", mob });
         if (directoryExists(io, candidate) catch false) return .{ .root = root, .name = mob };
@@ -410,6 +416,7 @@ pub fn pin(arena: Allocator, io: std.Io, dirs: Dirs, name: []const u8) !Dirs {
     const selected = (try mobSelection(arena, io, dirs, name)) orelse return error.UnknownAgent;
     var pinned = dirs;
     pinned.mob = selected.name;
+    pinned.mob_root = selected.root;
     return pinned;
 }
 
@@ -501,7 +508,11 @@ pub const DefinitionError = @typeInfo(@typeInfo(@TypeOf(definition)).@"fn".retur
 
 /// Read a file from the nearest config directory that has one.
 pub fn read(arena: Allocator, io: std.Io, dirs: Dirs, rel: []const u8) !?[]const u8 {
-    const root = (try where(arena, io, dirs, rel)) orelse return null;
+    // State has one owner: read it directly, without an existence probe.
+    const root = if (stateMob(rel)) |mob| blk: {
+        const selected = (try mobSelection(arena, io, dirs, try std.fmt.allocPrint(arena, "{s}/lookup", .{mob}))) orelse return null;
+        break :blk try stateRoot(arena, dirs, selected.root);
+    } else (try where(arena, io, dirs, rel)) orelse return null;
     return std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ root, rel }), arena, .limited(max_file)) catch null;
 }
 
@@ -606,7 +617,7 @@ fn mergeProviderObjects(arena: Allocator, parent: std.json.ObjectMap, child: std
 pub const Error = error{
     /// `tui` in core/config.json is not a list of words.
     BadTui,
-    /// `highlights` in core/config.json is not a valid highlight string.
+    /// core/highlights.txt is not a valid highlight setting.
     BadHighlight,
     /// A provider's `parent` is not a non-empty provider name.
     BadProviderParent,
@@ -639,21 +650,27 @@ pub fn tui(
     return null;
 }
 
-/// The markdown styles and wrapping from the nearest core/config.json.
-/// An absent key uses the defaults; there is no key merging.
+/// The markdown styles and wrapping from the nearest core/highlights.txt.
+/// No file uses the built-in string; a supplied file replaces it, even if empty.
 pub fn highlights(
     arena: Allocator,
     io: std.Io,
     env: *const std.process.Environ.Map,
 ) !highlight.Options {
-    var look: highlight.Options = .{};
-    if (try core(arena, io, env, "config.json")) |bytes| {
-        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{});
-        if (parsed != .object) return look;
-        const value = parsed.object.get("highlights") orelse return look;
-        if (value != .string) return Error.BadHighlight;
-        highlight.parseHighlights(&look, value.string) catch return Error.BadHighlight;
+    var text: []const u8 = highlight.default_highlights;
+    if (try core(arena, io, env, "highlights.txt")) |bytes| {
+        // Line breaks are formatting only; commas and all other bytes stay literal.
+        const flat = try arena.alloc(u8, bytes.len);
+        var n: usize = 0;
+        for (bytes) |c| {
+            if (c == '\r' or c == '\n') continue;
+            flat[n] = c;
+            n += 1;
+        }
+        text = flat[0..n];
     }
+    var look: highlight.Options = .{};
+    highlight.parseHighlights(&look, text) catch return Error.BadHighlight;
     return look;
 }
 
@@ -875,7 +892,7 @@ test "the user directory follows XDG, then HOME" {
     try testing.expect((try userDir(arena, &none)) == null);
 }
 
-test "core config is selected per file, never by absent keys" {
+test "highlights resolve per file independently of config.json and replace the theme" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -883,12 +900,13 @@ test "core config is selected per file, never by absent keys" {
     const arena = a.allocator();
     const t = try Tree.init(arena, &threaded, "m8-config-highlights");
     defer t.deinit(arena);
-    try t.write(arena, "near/core/config.json", "{}");
-    try t.write(arena, "m8-st8/core/config.json", "{\"highlights\":\"quote:fg4\"}");
+    // The old JSON key is not read, and a nearer config.json cannot mask a theme.
+    try t.write(arena, "near/core/config.json", "{\"highlights\":\"quote:fg4\"}");
     var env: std.process.Environ.Map = .init(arena);
     try env.put("XDG_CONFIG_HOME", t.root);
     const near = try t.join(arena, "near");
     const far = try t.join(arena, "m8-st8");
+    try std.Io.Dir.cwd().createDirPath(t.io, far);
     try registerPath(arena, t.io, &env, near);
     try registerPath(arena, t.io, &env, far);
     try env.put(dirs_var, try std.mem.join(arena, ":", &.{ near, far }));
@@ -897,15 +915,31 @@ test "core config is selected per file, never by absent keys" {
     try testing.expectEqual(@as(?u16, 245), p.palette.quote.fg);
     try testing.expectEqual(@as(u8, 70), p.wrap_literal);
     try testing.expectEqual(@as(u8, 90), p.wrap_word);
-    try t.write(arena, "near/core/config.json", "{\"highlights\":\"list:fg2,wrap:literal:0,wrap:word:100\"}");
+
+    try t.write(arena, "m8-st8/core/highlights.txt", "quote:fg4\n");
+    p = try highlights(arena, t.io, &env);
+    try testing.expectEqual(@as(?u16, 4), p.palette.quote.fg);
+    try testing.expectEqualDeep(highlight.Style{}, p.palette.heading);
+
+    try t.write(arena, "near/core/highlights.txt", "\r\nlist:fg2,\r\nwrap:literal:0,\nwrap:word:100\r\n");
     p = try highlights(arena, t.io, &env);
     try testing.expectEqual(@as(u8, 0), p.wrap_literal);
     try testing.expectEqual(@as(u8, 100), p.wrap_word);
     try testing.expectEqual(@as(?u16, 2), p.palette.list.fg);
-    try testing.expectEqual(@as(?u16, 245), p.palette.quote.fg);
+    try testing.expectEqual(@as(?u16, null), p.palette.quote.fg);
+    try testing.expectEqualDeep(highlight.Style{}, p.palette.heading);
+
+    // Empty and line-break-only files mask farther themes, but keep wrap defaults.
+    for ([_][]const u8{ "", "\r\n\n\r" }) |text| {
+        try t.write(arena, "near/core/highlights.txt", text);
+        p = try highlights(arena, t.io, &env);
+        try testing.expectEqualDeep(highlight.Palette{}, p.palette);
+        try testing.expectEqual(@as(u8, 70), p.wrap_literal);
+        try testing.expectEqual(@as(u8, 90), p.wrap_word);
+    }
 }
 
-test "highlight config rejects wrong value types and invalid style specs" {
+test "highlight files reject spaces tabs missing commas and invalid style specs" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -918,10 +952,17 @@ test "highlight config rejects wrong value types and invalid style specs" {
     try registerPath(arena, t.io, &env, t.root);
     try env.put(dirs_var, t.root);
 
-    try t.write(arena, "core/config.json", "{\"highlights\":[]}");
-    try testing.expectError(Error.BadHighlight, highlights(arena, t.io, &env));
-    try t.write(arena, "core/config.json", "{\"highlights\":\"quote:fg999\"}");
-    try testing.expectError(Error.BadHighlight, highlights(arena, t.io, &env));
+    for ([_][]const u8{
+        "quote:fg999",
+        " quote:fg4",
+        "quote:fg4 ",
+        "quote:fg4,\n\tlist:fg2",
+        "quote:fg4\nlist:fg2",
+        "quote:fg4,\n",
+    }) |bad| {
+        try t.write(arena, "core/highlights.txt", bad);
+        try testing.expectError(Error.BadHighlight, highlights(arena, t.io, &env));
+    }
 }
 
 test "the system's directory is never where anything is kept" {
@@ -1073,7 +1114,17 @@ test "pin preserves roots for authored overlays while refusing another mob's sta
     try t.write(arena, "near/mobs/other/agent.md", "other agent");
     const dirs: Dirs = .{ .roots = &.{ near, far } };
     const pinned = try pin(arena, t.io, dirs, "team/agent");
+    try testing.expectEqualStrings(far, pinned.mob_root.?);
+    try t.write(arena, "far/mobs/team/.chats/agent/+/one.md", "first turn");
+    try t.write(arena, "far/mobs/team/.chats/agent/+/two.md", "second turn");
     try t.write(arena, "near/mobs/team/helper.md", "new shadow");
+    // The walk keeps its selected owner even if a nearer mob appears.
+    const repinned = try pin(arena, t.io, pinned, "team/agent/+/two");
+    try testing.expectEqualStrings(far, repinned.mob_root.?);
+    try testing.expectEqualStrings("first turn", (try read(arena, t.io, repinned, try nameFile(arena, "team/agent/+/one"))).?);
+    try testing.expectEqualStrings("second turn", (try read(arena, t.io, repinned, try nameFile(arena, "team/agent/+/two"))).?);
+    try testing.expect((try read(arena, t.io, repinned, try nameFile(arena, "team/agent/+/missing"))) == null);
+    try testing.expect((try read(arena, t.io, dirs, try nameFile(arena, "team/agent/+/one"))) == null);
     try testing.expectEqualStrings("new shadow", (try read(arena, t.io, pinned, try nameFile(arena, "team/helper"))).?);
     try testing.expectEqualStrings("other agent", (try read(arena, t.io, pinned, try nameFile(arena, "other/agent"))).?);
     try testing.expectError(error.CrossMobReference, read(arena, t.io, pinned, try nameFile(arena, "other/agent/+")));

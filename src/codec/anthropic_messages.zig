@@ -769,7 +769,7 @@ test "an extra that collides with m8's own key never reaches the wire" {
     const arena = a.allocator();
 
     const tool = try toolbox.parse(arena, .md, "grep",
-        \\* q string,description:extra,pattern:^a
+        \\* `q` **string,description:extra,pattern:^a**
         \\  native
     );
     const records = [_]doc.Record{.{ .sigil = .user, .content = "Hi." }};

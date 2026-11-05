@@ -1,9 +1,9 @@
 //! The ledger: what a name expands to, in the order it was written.
 //!
-//! A name resolves to a file of records. A 🧠 inside it names something else,
-//! and expanding replaces that record with what it names — in place, so
-//! whatever stood before an inclusion still stands before it. A 🧠 that names
-//! no document is a model, and stays as itself.
+//! A name resolves to a file of records. An authored 🧠 inclusion expands in
+//! place. A turn 🧠 at the document's first record continues its lineage;
+//! later turn references are retained identity anchors, not inclusions.
+//! A model 🧠 stays as itself.
 //!
 //! Nothing is dropped and nothing is reordered. That is the whole contract.
 //! The facts a request needs, and a provider's wire format, are both taken
@@ -11,8 +11,8 @@
 //!
 //! Two different things are written that same way. A 🧠 naming an authored
 //! agent is a definition inclusion, which may cross mob boundaries; generated
-//! turns and chats are state and remain confined to the activated mob. A 🧠
-//! naming a generated one is lineage, the turn this turn continues. Chains can
+//! turns and chats are state and remain confined to the activated mob. An
+//! opening turn reference is lineage, the turn this turn continues. Chains can
 //! be arbitrarily long; depth alone is not a fault.
 //!
 //! The one fault either can have is a loop, and a loop is not a depth. It is a
@@ -151,6 +151,8 @@ const Frame = struct {
     /// This frame is a chat or turn; references made directly from it must
     /// stay inside the activated mob. Authored includes have their own scope.
     state_context: bool = false,
+    /// Whether this slice starts at the source document's first record.
+    starts_document: bool = true,
     /// Which half was asked for, which is also which path it is on.
     part: Part = .body,
 };
@@ -163,13 +165,15 @@ pub fn expand(
     name: []const u8,
 ) ExpandError!Ledger {
     const scoped = try config.pin(arena, io, dirs, name);
-    const definition = if (session.isChat(name)) null else try config.definition(arena, io, scoped, name, null);
+    const definition = if (config.authored(name)) try config.definition(arena, io, scoped, name, null) else null;
     const src = if (definition) |d| d.bytes else (try source(arena, io, scoped, name)) orelse return Error.UnknownAgent;
 
     var diag: doc.Diagnostic = .{};
     const parsed = try doc.parse(arena, src, &diag);
+    const body = (try Split.of(parsed)).body;
     return walk(arena, io, scoped, .{
-        .records = (try Split.of(parsed)).body,
+        .records = body,
+        .starts_document = body.len == parsed.len,
         .mode = doc.detect(src) orelse .md,
         .name = name,
         .source_root = if (definition) |d| d.root else "",
@@ -180,9 +184,9 @@ pub fn expand(
 /// Expand the 🧠 references inside records that are already in hand.
 ///
 /// This is what the command line assembles into: a ledger may name what it
-/// continues rather than carry it, and every reader expands the same way. An
-/// inclusion is replaced where it stands, so a document that named its parent
-/// halfway down still reads in the order it was written.
+/// continues rather than carry it, and every reader expands the same way.
+/// Authored inclusions expand in place; only an opening turn reference follows
+/// lineage. Later turn references remain anchors.
 pub fn expandRecords(
     arena: Allocator,
     io: std.Io,
@@ -217,7 +221,12 @@ pub fn expandUntil(
     mode: doc.Mode,
     breaks: Breaks,
 ) ExpandError!Ledger {
-    return walk(arena, io, dirs, .{ .records = (try Split.of(records)).body, .mode = mode }, breaks);
+    const body = (try Split.of(records)).body;
+    return walk(arena, io, dirs, .{
+        .records = body,
+        .starts_document = body.len == records.len,
+        .mode = mode,
+    }, breaks);
 }
 
 /// Read a document and everything it names, in order.
@@ -277,7 +286,19 @@ fn walk(
         }
 
         const r = top.records[top.at];
+        const first = top.starts_document and top.at == 0;
         top.at += 1;
+
+        // Only an opening turn reference continues lineage. Interior ones
+        // retain a turn's identity without reading its history again. Snips
+        // share the folder but are content inclusions, not turn anchors.
+        if (r.sigil == .agent and session.isTurn(r.value) and !session.namesSnip(r.value) and !first) {
+            if (scoped.mob) |scope| {
+                if (!std.mem.eql(u8, scope, config.mobName(r.value).?)) return Error.CrossMobReference;
+            }
+            try out.append(arena, try canonical(arena, top.mode, r));
+            continue;
+        }
 
         // Two sigils reach into another document, and which one it is decides
         // which half comes back. 🧠 wants what a file says; 📚 wants what it
@@ -323,8 +344,10 @@ fn walk(
         if (paths[@intFromEnum(want)].contains(identity)) return if (session.isGenerated(r.value)) Error.LineageLoops else Error.IncludeLoops;
         var diag: doc.Diagnostic = .{};
         const parsed = try doc.parse(arena, src, &diag);
+        const half = (try Split.of(parsed)).half(want);
         const next: Frame = .{
-            .records = (try Split.of(parsed)).half(want),
+            .records = half,
+            .starts_document = half.len == parsed.len,
             .mode = doc.detect(src) orelse .md,
             .name = r.value,
             .part = want,
@@ -584,6 +607,70 @@ test "a chat expands through its turns to the agent it began with" {
     try testing.expectEqualStrings("tiny", (try runsOn(arena, l.records)).?.name);
 }
 
+test "only a source document's opening turn reference continues lineage" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const f = try Fixture.init(arena, &threaded, "m8-ledger-anchors");
+    defer f.deinit(arena);
+    const dirs: config.Dirs = .{ .roots = &.{f.dir} };
+    try f.agent(arena, "test/agent", "* :brain::/local/tiny\n");
+    try f.agent(arena, "test/helper", "* :compass::\n  > Included.\n");
+    try f.agent(arena, "test/agent/+/one", "* :brain::test/agent\n\n* :robot::\n  > Earlier.\n");
+    try f.agent(arena, "test/agent/+/two", "* :brain::test/agent/+/one\n\n" ++
+        "* :brain::test/agent/+/missing\n\n" ++
+        "* :brain::test/agent/+/two\n\n" ++
+        "* :brain::test/helper\n\n" ++
+        "* :robot::\n  > Later.\n");
+
+    const l = try expand(arena, f.io, dirs, "test/agent/+/two");
+    try testing.expectEqual(@as(usize, 6), l.records.len);
+    try testing.expectEqualStrings("/local/tiny", l.records[0].value);
+    try testing.expectEqualStrings("Earlier.", l.records[1].content.?);
+    try testing.expectEqualStrings("test/agent/+/missing", l.records[2].value);
+    try testing.expectEqualStrings("test/agent/+/two", l.records[3].value);
+    try testing.expectEqualStrings("Included.", l.records[4].content.?);
+    try testing.expectEqualStrings("Later.", l.records[5].content.?);
+    try testing.expectEqualStrings("test/agent", l.origin);
+    try testing.expectEqualStrings("tiny", (try runsOn(arena, l.records)).?.name);
+
+    // A nested document's first record is still first, even after outer text.
+    try f.agent(arena, "test/wrapper", "* :brain::test/agent/+/one\n");
+    const nested = try expandRecords(arena, f.io, dirs, &.{
+        .{ .sigil = .user, .content = "Before." },
+        .{ .sigil = .agent, .value = "test/wrapper" },
+    }, .md);
+    try testing.expectEqual(@as(usize, 3), nested.records.len);
+    try testing.expectEqualStrings("Earlier.", nested.records[2].content.?);
+
+    // An opening missing parent is still an error; an interior one is not.
+    try testing.expectError(Error.UnknownAgent, expandRecords(arena, f.io, dirs, &.{
+        .{ .sigil = .agent, .value = "test/agent/+/missing" },
+    }, .md));
+    const anchored = try expandRecords(arena, f.io, dirs, &.{
+        .{ .sigil = .user, .content = "Already here." },
+        .{ .sigil = .agent, .value = "test/agent/+/missing" },
+    }, .md);
+    try testing.expectEqual(@as(usize, 2), anchored.records.len);
+    try testing.expectEqualStrings("test/agent/+/missing", anchored.records[1].value);
+
+    // Removing the top fence must not turn the body's first record into lineage.
+    const fenced = try expandRecords(arena, f.io, dirs, &.{
+        .{ .sigil = .top },
+        .{ .sigil = .top },
+        .{ .sigil = .agent, .value = "test/agent/+/missing" },
+    }, .md);
+    try testing.expectEqual(@as(usize, 1), fenced.records.len);
+    try testing.expectEqualStrings("test/agent/+/missing", fenced.records[0].value);
+    const pinned = try config.pin(arena, f.io, dirs, "test/agent");
+    try testing.expectError(Error.CrossMobReference, expandRecords(arena, f.io, pinned, &.{
+        .{ .sigil = .user, .content = "Here." },
+        .{ .sigil = .agent, .value = "other/agent/+/missing" },
+    }, .md));
+}
+
 test "a thought kept aside is a snip on disk and whole again when read" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
@@ -823,7 +910,7 @@ test "nested content is kept in one spelling and restated for the reader" {
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .tool, .value = "say", .content = "> Says a thing.\n\n:shield:jail\n`say`\n* text string" },
+        .{ .sigil = .tool, .value = "say", .content = "> Says a thing.\n\n:shield:jail\n`say`\n* `text` **string**" },
         .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
     };
 

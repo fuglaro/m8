@@ -272,9 +272,9 @@ pub fn stages(
 /// writes more than a pipe holds before reading, which is not a thing a
 /// provider does.
 ///
-/// What a stage says on stderr is held until the turn is in. A provider that
-/// answered has it passed on as it was said, and one that failed has it
-/// given as the reason.
+/// Ordinary stage stderr is forwarded as complete lines while the turn is
+/// read. Stats stay with the turn, and a failed stage's stderr is also kept
+/// as its failure explanation.
 ///
 /// Packed records are an editing spelling, not provider input. Expand them to
 /// the ordinary markdown ledger at the process boundary.
@@ -295,6 +295,66 @@ fn providerInput(arena: Allocator, input: []const u8) ![]const u8 {
     for (records) |record| try doc.write(&out.writer, .md, record);
     return out.written();
 }
+
+/// The turn and diagnostics share one poll loop, so a provider can explain a
+/// wait even while the turn parser is blocked waiting for its next record.
+const PipelineReader = struct {
+    interface: std.Io.Reader,
+    streams: *std.Io.File.MultiReader,
+    arena: Allocator,
+    err: *std.Io.Writer,
+    said: [3]std.ArrayList(u8) = @splat(.empty),
+    stages: []const usize,
+
+    fn diagnostics(self: *PipelineReader) !void {
+        for (self.stages, 1..) |stage, index| {
+            const reader = self.streams.reader(index);
+            const text = reader.buffered();
+            var start: usize = 0;
+            while (start < text.len) {
+                const end = if (std.mem.indexOfScalarPos(u8, text, start, '\n')) |end|
+                    end + 1
+                else if (self.streams.streams.contexts()[index].err != null)
+                    text.len
+                else
+                    break;
+                const line = text[start..end];
+                // Keep the existing bounded failure explanation, but drain and
+                // show diagnostics even after that explanation is full.
+                const room = 8192 - self.said[stage].items.len;
+                try self.said[stage].appendSlice(self.arena, line[0..@min(room, line.len)]);
+                if (!(line[line.len - 1] == '\n' and std.mem.startsWith(u8, line, "::stats::"))) {
+                    try self.err.writeAll(line);
+                    try self.err.flush();
+                }
+                start = end;
+            }
+            reader.toss(start);
+        }
+    }
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const self: *PipelineReader = @alignCast(@fieldParentPtr("interface", r));
+        while (true) {
+            self.diagnostics() catch return error.ReadFailed;
+            const output = self.streams.reader(0);
+            const bytes = limit.slice(output.buffered());
+            if (bytes.len > 0) {
+                const n = try w.write(bytes);
+                output.toss(n);
+                return n;
+            }
+            if (self.streams.streams.contexts()[0].err) |e| switch (e) {
+                error.EndOfStream => return error.EndOfStream,
+                else => return error.ReadFailed,
+            };
+            self.streams.fill(4096, .none) catch |e| switch (e) {
+                error.EndOfStream => return error.EndOfStream,
+                else => return error.ReadFailed,
+            };
+        }
+    }
+};
 
 pub fn run(
     arena: Allocator,
@@ -336,20 +396,52 @@ pub fn run(
     try w.interface.flush();
     first.?.close(io);
 
+    var files: [4]std.Io.File = undefined;
+    var stage_indices: [3]usize = undefined;
+    files[0] = last.?;
+    var count: usize = 0;
+    for (children, 0..) |child, n| if (child) |c| {
+        stage_indices[count] = n;
+        count += 1;
+        files[count] = c.stderr.?;
+    };
+    var two_streams: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var three_streams: std.Io.File.MultiReader.Buffer(3) = undefined;
+    var four_streams: std.Io.File.MultiReader.Buffer(4) = undefined;
+    const stream_storage = switch (count) {
+        1 => two_streams.toStreams(),
+        2 => three_streams.toStreams(),
+        3 => four_streams.toStreams(),
+        else => unreachable,
+    };
+    var streams: std.Io.File.MultiReader = undefined;
+    streams.init(arena, io, stream_storage, files[0 .. count + 1]);
+    defer streams.deinit();
     var read_buf: [64 * 1024]u8 = undefined;
-    var r = last.?.readerStreaming(io, &read_buf);
+    var r: PipelineReader = .{
+        .interface = .{ .vtable = &.{ .stream = PipelineReader.stream }, .buffer = &read_buf, .seek = 0, .end = 0 },
+        .streams = &streams,
+        .arena = arena,
+        .err = err,
+        .stages = stage_indices[0..count],
+    };
     const reply = codec.m8.codec.parse(arena, &r.interface, sink);
-    // A parser may have stopped at the first malformed line. Drain what
-    // remains before waiting, or a stage that wrote a large response can stay
-    // blocked with its stdout pipe full and hide the diagnostic.
-    if (reply) |_| {} else |_| _ = r.interface.discardRemaining() catch {};
+    // Drain after an early parser return too: unread stdout must not keep a
+    // stage blocked or accumulate while the remaining diagnostics arrive.
+    _ = r.interface.discardRemaining() catch {};
 
+    while (streams.fill(4096, .none)) |_| {
+        try r.diagnostics();
+    } else |e| switch (e) {
+        error.EndOfStream => {},
+        else => return e,
+    }
+    try r.diagnostics();
+    try streams.checkAnyError();
     var failed = false;
     var said: [3][]const u8 = @splat("");
     for (&children, 0..) |*c, n| if (c.*) |*child| {
-        var err_buf: [8 * 1024]u8 = undefined;
-        var e = child.stderr.?.readerStreaming(io, &err_buf);
-        said[n] = e.interface.allocRemaining(arena, .limited(8192)) catch "";
+        said[n] = r.said[n].items;
         const why = std.mem.trimEnd(u8, said[n], "\n");
         const code: ?u8 = switch (child.wait(io) catch std.process.Child.Term{ .unknown = 0 }) {
             .exited => |code| if (code == 0) continue else code,
@@ -367,13 +459,12 @@ pub fn run(
     };
     if (failed) return Error.ProviderFailed;
     for (said) |diagnostic| if (diagnostic.len > 0) {
-        try routeDiagnostics(arena, diagnostic, &turn.aside, err);
+        try routeDiagnostics(arena, diagnostic, &turn.aside);
     };
     return turn;
 }
 
-fn routeDiagnostics(arena: Allocator, text: []const u8, aside: *[]const u8, err: *std.Io.Writer) !void {
-    var ordinary: std.ArrayList(u8) = .empty;
+fn routeDiagnostics(arena: Allocator, text: []const u8, aside: *[]const u8) !void {
     var start: usize = 0;
     while (start < text.len) {
         const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
@@ -382,12 +473,8 @@ fn routeDiagnostics(arena: Allocator, text: []const u8, aside: *[]const u8, err:
         const line = text[start..next];
         if (complete and std.mem.startsWith(u8, line, "::stats::")) {
             aside.* = try std.mem.concat(arena, u8, &.{ aside.*, line });
-        } else try ordinary.appendSlice(arena, line);
+        }
         start = next;
-    }
-    if (ordinary.items.len > 0) {
-        try err.writeAll(ordinary.items);
-        if (ordinary.items[ordinary.items.len - 1] != '\n') try err.writeAll("\n");
     }
 }
 
@@ -652,7 +739,7 @@ test "a provider that fails says why, and the run stops" {
     try testing.expect(std.mem.indexOf(u8, thrown.written(), "not supported") != null);
 }
 
-test "the stages are one pipeline, and what each says aside is kept for the end" {
+test "the stages are one pipeline, diagnostics stream and stats stay with the turn" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -760,4 +847,43 @@ test "null disables optional provider commands" {
     try testing.expect(p.encode == null);
     try testing.expect(p.parse == null);
     try testing.expect(p.models == null);
+}
+
+test "provider diagnostics are forwarded and flushed while it is still running" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const io = threaded.io();
+
+    const dir = try test_tmp.make(testing.allocator, io, "provider-live-stderr");
+    defer {
+        std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+        testing.allocator.free(dir);
+    }
+    const path = try std.fs.path.join(arena, &.{ dir, "diagnostics" });
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    var file_buf: [256]u8 = undefined;
+    var file_writer = file.writerStreaming(io, &file_buf);
+    defer file.close(io);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try run(
+        arena,
+        io,
+        .{ .cmd = &.{
+            "/bin/sh",
+            "-c",
+            "printf 'waiting\\n' >&2; i=0; while [ \"$i\" -lt 200 ]; do if grep -q waiting \"$1\"; then break; fi; i=$((i+1)); sleep .01; done; grep -q waiting \"$1\" || exit 7; printf '* :robot::\\n  > answer\\n'",
+            "provider-test",
+            path,
+        } },
+        null,
+        "",
+        collect.sink(),
+        &file_writer.interface,
+    );
+    try testing.expectEqualStrings("answer", try collect.got.said(arena));
+    try testing.expectEqualStrings("waiting\n", try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited));
+    try testing.expectEqual(@as(usize, 0), reply.calls.len);
 }

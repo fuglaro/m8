@@ -48,7 +48,7 @@
   > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `read` `--` `{{path|}}`
-  > * path string
+  > * `path` **string**
   >   Path of the directory to inspect (relative, absolute, or ~).
   >   Use "." for the project root.
 * :toolbox::list
@@ -61,9 +61,9 @@
   > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `read` `--` `{{path|}}`
-  > * path string
+  > * `path` **string**
   >   Path of the file to read (relative, absolute, or ~).
-  > * pages? string
+  > * `pages?` **string**
   >   Page range to read e.g. "10-10" or "11-20" or "21-100", or
   >   "2@string_match" to read 2 pages starting at string_match.
   >   About 100 lines per page, fewer when lines are very long.
@@ -79,13 +79,13 @@
   > :shield:workbench
   > :shield:secure contain-reads
   > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
-  > * path string
+  > * `path` **string**
   >   Path of the file to edit or create (relative, absolute, or ~).
-  > * new_string string
+  > * `new_string` **string**
   >   The text to insert.
-  > * old_string? string
+  > * `old_string?` **string**
   >   The text to replace. Omit to write or append.
-  > * pages? string
+  > * `pages?` **string**
   >   Page range to scope the matches during replace e.g.
   >   "10-10" or "11-20" or "21-100", or "2@string_match" to
   >   scope within 2 pages starting at string match.
@@ -99,13 +99,13 @@
   > :shield:workbench
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `{{glob}}`
-  > * regex? string
+  > * `regex?` **string**
   >   Regex to search with using a Perl-style pattern (no
   >   backrefs, lookaround, or multi-line matching).
-  > * glob? string
+  > * `glob?` **string**
   >   Glob match for files with ** and * expansion (relative,
   >   absolute, or ~) e.g. "src/**/*.js" or "**".
-  > * pages? string
+  > * `pages?` **string**
   >   Paginate results to browse through many matches e.g. "11-20".
 * :toolbox::grep
 
@@ -126,9 +126,9 @@
   > (sleep "${__timeout__:-30}"; kill -TERM -"$p" 2>/dev/null) & t=$!
   > s=0; wait "$p" 2>/dev/null || s=$?; kill -TERM -"$t" 2>/dev/null || :; wait "$t" 2>/dev/null || :; exit "$s"
   > ```
-  > * command string
+  > * `command` **string**
   >   The bash command to run.
-  > * timeout? number
+  > * `timeout?` **number**
   >   Seconds before stopping the command (default 30).
 * :toolbox::bash
 
@@ -145,7 +145,7 @@
   > curl -q -fsSL -g --proto '=http,https' --max-time 30 --max-filesize 10000000 -o "$out" --url "$__url__"
   > echo "Downloaded for viewing at: ${out#"$PWD"/}"
   > ```
-  > * url string
+  > * `url` **string**
   >   The url of the page to download.
 * :toolbox::webfetch
 
@@ -180,7 +180,7 @@
   > hash=$(shasum -a 256 -- "$part" | cut -c1-64)
   > printf '* :link::%s\n  > <%s (%s)\n' "$M8_CALL_ID" "$part" "$hash"
   > ```
-  > * file string
+  > * `file` **string**
   >   Path of the image or PDF (relative or absolute).
 * :toolbox::see
 
@@ -197,8 +197,8 @@
   > > Give Cody a bounded task, or continue=true to give feedback on the previous task.
   >
   > `m8` `call` `--md` `m8` `say` `--answer` `--unwrap` `{{continue!--new}}` `:crew/cody//delegated` `{{task|}}`
-  > * task string
+  > * `task` **string**
   >   The task to complete and any relevant scope or constraints.
-  > * continue boolean
+  > * `continue` **boolean**
   >   Set true to continue the conversation; otherwise start fresh.
 * :toolbox::cody

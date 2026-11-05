@@ -96,10 +96,10 @@ one's input:
   The ones it ships are `m8 encode` and `m8 parse`,
   named the way a command of your own would be.
 
-What a stage says on stderr is diagnostic, held until the turn is in and
-then passed on.
+Ordinary stage stderr is forwarded as complete lines while the turn streams.
+A final fragment is forwarded when the stage closes stderr.
 
-* A failed provider has its stderr given as the reason.
+* A failed provider also has its stderr given as the reason.
 * A complete `::stats::` line is the one exception. It goes to the chat's
   `+.log`, and to the terminal under `-v`. See [Stats commands](#stats-commands).
 * `-v` reaches every stage as `M8_VERBOSITY`, so each says no more than was
@@ -157,6 +157,8 @@ under its own `M8_PROVIDER_` name, and owes none of this.
 as directed and replaying the request **once**. This applies to both HTTP
 transports, including GET and upload requests; it needs no provider config.
 
+* Before waiting, stderr reports HTTP 429 and the delay in seconds from `Retry-After`.
+  * The notice is flushed immediately, including during `m8 say`.
 * Integer-second delays are used unchanged.
 * IMF-shaped date values ending in `GMT` are treated as short-range time hints:
   only minutes and seconds are parsed and compared with local UTC, modulo one
@@ -164,8 +166,9 @@ transports, including GET and upload requests; it needs no provider config.
   the wait is forward, less than 55 minutes. A two-second cushion is added.
   Calendar dates and hours are deliberately ignored, and old formats are not
   supported. This assumes a nearby deadline, not an arbitrary future date.
-* The initial rate-limit body is discarded; only the replay's response is
-  passed to the parser and response stats.
+* The initial rate-limit body goes verbatim to stderr before the wait notice.
+  * A missing final newline is added to separate it from the notice.
+  * Only the replay's response is passed to the parser and response stats.
 * A missing or invalid header means no retry. Other status codes are passed
   through unchanged, and the replay is never retried, even if it is another 429.
 * There is no fallback delay, exponential backoff, or curl retry policy.

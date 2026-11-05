@@ -36,6 +36,10 @@ pub const Error = error{
     BadEnvironmentName,
     /// Definition, variable, and activation are separate header forms.
     VariableOnDefinition,
+    BadPropertyName,
+    MissingSchema,
+    BadSchemaDelimiter,
+    TrailingPropertyText,
 };
 
 pub const Property = struct {
@@ -108,23 +112,53 @@ pub fn envName(arena: Allocator, name: []const u8) Allocator.Error!?[]const u8 {
     return argname.envName(arena, name);
 }
 
-/// `NAME TYPE` or `NAME? TYPE`, from a bullet with its `*` already gone,
-/// and either followed by `,key:value` extras.
-///
-/// The name runs to the first space and the type is the rest of the line, so
-/// the last field may hold one safely and an enum keeps its spaces. `?` on the
-/// name carries optional, which used to be a sigil of its own. A comma ends
-/// the type rather than a space for the same reason, and the extras after it
-/// are split the way a 🧠's parameters are, so a JSON value keeps its commas.
+/// Parse a pretty parameter declaration. Only `\*` and `\\` are decoded
+/// in the schema span; other backslashes are literal.
 fn property(arena: Allocator, rest: []const u8) !Property {
     const line = std.mem.trim(u8, rest, " \t");
-    const cut = std.mem.indexOfAny(u8, line, " \t") orelse return Error.MissingType;
-    var name = line[0..cut];
+    if (line.len < 4 or line[0] != '`') return Error.BadPropertyName;
+    const name_end = std.mem.indexOfScalarPos(u8, line, 1, '`') orelse return Error.BadPropertyName;
+    var name = line[1..name_end];
+    if (name.len == 0) return Error.BadPropertyName;
+    for (name) |c| if (std.ascii.isWhitespace(c)) return Error.BadPropertyName;
     const optional = std.mem.endsWith(u8, name, "?");
     if (optional) name = name[0 .. name.len - 1];
-    const parts = try model.fields(arena, line[cut + 1 ..]);
+    if (name.len == 0 or std.mem.endsWith(u8, name, "?")) return Error.BadPropertyName;
+
+    var pos = name_end + 1;
+    if (pos < line.len and line[pos] != ' ' and line[pos] != '\t') return Error.BadPropertyName;
+    while (pos < line.len and (line[pos] == ' ' or line[pos] == '\t')) : (pos += 1) {}
+    if (pos + 1 >= line.len or line[pos] != '*' or line[pos + 1] != '*') return Error.MissingSchema;
+    pos += 2;
+    const start = pos;
+    var close: ?usize = null;
+    while (pos + 1 < line.len) : (pos += 1) {
+        if (line[pos] == '\\') {
+            pos += 1;
+            continue;
+        }
+        if (line[pos] == '*' and line[pos + 1] == '*') {
+            close = pos;
+            break;
+        }
+    }
+    const end = close orelse return Error.BadSchemaDelimiter;
+    var tail = end + 2;
+    while (tail < line.len and (line[tail] == ' ' or line[tail] == '\t')) : (tail += 1) {}
+    if (tail != line.len) return Error.TrailingPropertyText;
+    const raw = line[start..end];
+    var decoded: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < raw.len) : (i += 1) {
+        if (raw[i] == '\\' and i + 1 < raw.len and (raw[i + 1] == '*' or raw[i + 1] == '\\')) {
+            i += 1;
+        }
+        try decoded.append(arena, raw[i]);
+    }
+    const parts = try model.fields(arena, decoded.items);
+    if (parts.len == 0) return Error.MissingType;
     const kind = std.mem.trim(u8, parts[0], " \t");
-    if (name.len == 0 or kind.len == 0) return Error.MissingType;
+    if (kind.len == 0) return Error.MissingType;
 
     var extras: std.ArrayList(Extra) = .empty;
     for (parts[1..]) |one| {
@@ -452,9 +486,15 @@ pub fn render(arena: Allocator, mode: Mode, t: Tool) ![]const u8 {
         .block => |b| try markdown.writeFence(w, "", b.runner, b.code),
     }
     for (t.properties) |p| {
-        try w.print("* {s}{s} {s}", .{ p.name, if (p.required) "" else "?", p.type });
-        for (p.extras) |e| try w.print(",{s}:{s}", .{ e.key, try model.written(arena, e.value) });
-        try w.writeByte('\n');
+        try w.print("* `{s}{s}` **", .{ p.name, if (p.required) "" else "?" });
+        var schema: std.Io.Writer.Allocating = .init(arena);
+        try schema.writer.writeAll(p.type);
+        for (p.extras) |e| try schema.writer.print(",{s}:{s}", .{ e.key, try model.written(arena, e.value) });
+        for (schema.written()) |byte| {
+            if (byte == '\\' or byte == '*') try w.writeByte('\\');
+            try w.writeByte(byte);
+        }
+        try w.writeAll("**\n");
         var it = std.mem.splitScalar(u8, p.description, '\n');
         while (it.next()) |d| {
             if (p.description.len == 0) break;
@@ -601,9 +641,9 @@ test "a toolbox reads its template, properties and description" {
     const t = try parse(a.allocator(), .md, "shell",
         \\`m8` `call` `bash` `{{cmd|-c}}`
         \\:shield:jail
-        \\* cmd string
+        \\* `cmd` **string**
         \\  The command to run
-        \\* dir? string
+        \\* `dir?` **string**
         \\  Where to run it
         \\> Run a command.
         \\> Carefully.
@@ -627,8 +667,8 @@ test "a toolbox reads the same in either spelling" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
-    const md = try parse(arena, .md, "x", "* cmd string\n  Desc\n> Runs.");
-    const m8 = try parse(arena, .m8, "x", "* cmd string\n  Desc\n\u{2502} Runs.");
+    const md = try parse(arena, .md, "x", "* `cmd` **string**\n  Desc\n> Runs.");
+    const m8 = try parse(arena, .m8, "x", "* `cmd` **string**\n  Desc\n\u{2502} Runs.");
     try testing.expectEqualStrings(md.description, m8.description);
     try testing.expectEqualStrings(md.properties[0].description, m8.properties[0].description);
 }
@@ -649,6 +689,65 @@ test "a command is backtick spans, and a line without them is not one" {
     try testing.expectEqualStrings("-c", spans.command.argv[1]);
 }
 
+test "pretty parameters reject malformed declarations and legacy syntax" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    for ([_][]const u8{
+        "name string",            "`` **string**",          "`?` **string**",           "`bad name` **string**",
+        "`bad\tname` **string**", "`bad\rname` **string**", "`bad\x0bname` **string**", "`bad\x0cname` **string**",
+    }) |input| try testing.expectError(error.BadPropertyName, property(arena, input));
+    try testing.expectError(error.BadPropertyName, property(arena, "`name??` **string**"));
+    try testing.expectError(error.BadPropertyName, property(arena, "`missing **string**"));
+    try testing.expectError(error.BadPropertyName, property(arena, "`na`me` **string**"));
+    try testing.expectError(error.TrailingPropertyText, property(arena, "`bad` **string** garbage"));
+    try testing.expectError(error.MissingSchema, property(arena, "`ok` string"));
+    try testing.expectError(error.BadSchemaDelimiter, property(arena, "`ok` **string"));
+    try testing.expectError(error.MissingType, property(arena, "`ok` ****"));
+    try testing.expectError(error.TrailingPropertyText, property(arena, "`ok` **string** junk"));
+}
+
+test "pretty parameter schema escapes roundtrip without changing JSON extras" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const src = "* `p` **string,default:\"\\*\\*/.zig\"**";
+    const first = try parse(arena, .md, "t", src);
+    const extra = first.properties[0].extras[0].value;
+    try testing.expectEqualStrings("**/.zig", extra.string);
+    const rendered = try render(arena, .md, first);
+    const again = try parse(arena, .md, "t", rendered);
+    try testing.expectEqualStrings(first.properties[0].type, again.properties[0].type);
+    try testing.expectEqualStrings(extra.string, again.properties[0].extras[0].value.string);
+    try testing.expectEqualStrings(rendered, try render(arena, .md, again));
+    try testing.expect(std.mem.indexOf(u8, rendered, "\\*\\*/.zig") != null);
+    const odd = try property(arena, "`odd` **string\\***");
+    try testing.expectEqualStrings("string*", odd.type);
+    const even = try property(arena, "`even` **string\\\\**");
+    try testing.expectEqualStrings("string\\", even.type);
+    const unknown = try property(arena, "`unknown` **odd\\q and * single**");
+    try testing.expectEqualStrings("odd\\q and * single", unknown.type);
+    const json = try property(arena, "`json` **string,default:\"a, \\\"b\\\" \\\\\\\\ tail\"**");
+    try testing.expectEqualStrings("a, \"b\" \\ tail", json.extras[0].value.string);
+    try testing.expectError(error.TrailingPropertyText, property(arena, "`star` **string***"));
+
+    // The renderer must quote the JSON spelling, not just the JSON value.
+    for ([_][]const u8{
+        "* `json` **string,default:\"a, \\\"b\\\" \\\\\\\\ tail\",examples:[1,2]**",
+        "* `unit?` **degrees celsius|degrees fahrenheit**",
+        "* `stars` **a\\*\\*b|single* star**",
+        "* `slashes` **odd\\q and \\\\**",
+    }) |input| {
+        const tool = try parse(arena, .md, "t", input);
+        for ([_]Mode{ .md, .m8 }) |mode| {
+            const text = try render(arena, mode, tool);
+            const roundtrip = try parse(arena, mode, "t", text);
+            try testing.expectEqualStrings(try schemaOf(arena, tool), try schemaOf(arena, roundtrip));
+            try testing.expectEqualStrings(text, try render(arena, mode, roundtrip));
+        }
+    }
+}
+
 fn schemaOf(arena: Allocator, t: Tool) ![]const u8 {
     var buf: std.Io.Writer.Allocating = .init(arena);
     var s: std.json.Stringify = .{ .writer = &buf.writer };
@@ -661,9 +760,9 @@ test "a flat tool becomes a function declaration" {
     defer a.deinit();
     const arena = a.allocator();
     const t = try parse(arena, .md, "shell",
-        \\* cmd string
+        \\* `cmd` **string**
         \\  The command
-        \\* quiet? boolean
+        \\* `quiet?` **boolean**
         \\> Runs a command.
     );
     try testing.expectEqualStrings(
@@ -676,11 +775,11 @@ test "enums, arrays and nesting reach the wire" {
     defer a.deinit();
     const arena = a.allocator();
     const t = try parse(arena, .md, "t",
-        \\* unit celsius|fahrenheit
-        \\* tags string[]
-        \\* opts object
-        \\* opts.depth integer
-        \\* opts.name? string
+        \\* `unit` **celsius|fahrenheit**
+        \\* `tags` **string[]**
+        \\* `opts` **object**
+        \\* `opts.depth` **integer**
+        \\* `opts.name?` **string**
     );
     const got = try schemaOf(arena, t);
     try testing.expect(std.mem.indexOf(u8, got, "\"enum\":[\"celsius\",\"fahrenheit\"]") != null);
@@ -696,12 +795,12 @@ test "extras after the type reach the wire as written, before m8's own keys" {
     defer a.deinit();
     const arena = a.allocator();
     const t = try parse(arena, .md, "t",
-        \\* limit integer,minimum:0,examples:[1,2]
+        \\* `limit` **integer,minimum:0,examples:[1,2]**
         \\  How many
-        \\* tone warm | dry,note:"a, b"
-        \\* ids? string[],maxItems:5
-        \\* opts object,additionalProperties:false
-        \\* opts.depth PositiveInt
+        \\* `tone` **warm | dry,note:"a, b"**
+        \\* `ids?` **string[],maxItems:5**
+        \\* `opts` **object,additionalProperties:false**
+        \\* `opts.depth` **PositiveInt**
     );
     try testing.expectEqualStrings("integer", t.properties[0].type);
     try testing.expectEqualStrings("warm | dry", t.properties[1].type);
@@ -721,14 +820,14 @@ test "a key written twice goes out once, as m8's own" {
     defer a.deinit();
     const arena = a.allocator();
     const t = try parse(arena, .md, "t",
-        \\* q string,description:extra,pattern:^a
+        \\* `q` **string,description:extra,pattern:^a**
         \\  native
     );
     const got = try schemaOf(arena, t);
     try testing.expect(std.mem.indexOf(u8, got, "{\"pattern\":\"^a\",\"type\":\"string\",\"description\":\"native\"}") != null);
 
     // With nothing of m8's own to lose to, the extra is what goes out.
-    const bare = try parse(arena, .md, "t", "* q string,description:extra");
+    const bare = try parse(arena, .md, "t", "* `q` **string,description:extra**");
     try testing.expect(std.mem.indexOf(u8, try schemaOf(arena, bare), "{\"description\":\"extra\",\"type\":\"string\"}") != null);
 }
 
@@ -736,7 +835,7 @@ test "logical property names become their environment spellings" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     // The logical name is preserved, including its capitalization.
-    const t = try parse(a.allocator(), .md, "x", "* self string\n* secures string");
+    const t = try parse(a.allocator(), .md, "x", "* `self` **string**\n* `secures` **string**");
     try testing.expectEqual(@as(usize, 2), t.properties.len);
     try testing.expectEqualStrings("__self__", (try envName(a.allocator(), t.properties[0].name)).?);
 }
@@ -751,13 +850,13 @@ test "a tool survives being rendered and read back, in either spelling" {
         \\:shield:jail
         \\:shield:secure contain-reads no-writes
         \\:shield:check crew/reviewer
-        \\* cmd string
+        \\* `cmd` **string**
         \\  What to run.
         \\  Two lines of it.
-        \\* with? check|sandbox
+        \\* `with?` **check|sandbox**
         \\  Extras.
-        \\* opts object
-        \\* opts.depth integer
+        \\* `opts` **object**
+        \\* `opts.depth` **integer**
         \\> Runs a command.
     ;
     const first = try parse(arena, .md, "shell", src);
@@ -835,8 +934,8 @@ test "argument environment names preserve case and spelling" {
     const arena = a.allocator();
 
     // These are distinct environment variables under the new convention.
-    _ = try parse(arena, .md, "t", "* myArg string\n* MYARG string\n");
-    _ = try parse(arena, .md, "t", "* myArg string\n* my_arg string\n");
+    _ = try parse(arena, .md, "t", "* `myArg` **string**\n* `MYARG` **string**\n");
+    _ = try parse(arena, .md, "t", "* `myArg` **string**\n* `my_arg` **string**\n");
 }
 
 test "a call is handed its arguments named, and all of them as JSON" {

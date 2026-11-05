@@ -13,6 +13,6 @@
   > curl -q -fsSL -g --proto '=http,https' --max-time 30 --max-filesize 10000000 -o "$out" --url "$__url__"
   > echo "Downloaded for viewing at: ${out#"$PWD"/}"
   > ```
-  > * url string
+  > * `url` **string**
   >   The url of the page to download.
 

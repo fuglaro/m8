@@ -126,7 +126,7 @@ test "launcher persists storage, resets sessions, and inherits roots in delegate
         "* :brain::/toy/runner\n\n" ++
             "* :toolbox::delegate\n" ++
             "  > `m8` `call` `sh` `-c` `HOME=\"$TMPDIR\" XDG_CONFIG_HOME=/narrow XDG_DATA_HOME=/narrow \"$M8\" say --answer --unwrap :useronly/echo//delegated \"$__message__\"`\n" ++
-            "  > * message string\n\n* :toolbox::delegate\n",
+            "  > * `message` **string**\n\n* :toolbox::delegate\n",
     );
     try s.expect(&.{ "say", "--answer", "--unwrap", ":demo/runner", "RUN;;;delegate;;;message=delegated" }, "Done");
     try std.testing.expect(exists(try path(a, &.{ root, "data/m8-st8/user/mobs/useronly/.chats/echo/_/delegated/+.md" })));

@@ -15,9 +15,9 @@ Agent definition:
 │
 │ 🛡️ShieldName
 │ `m8` `call` `cmd` `{{propertyname|--flag}}`
-│ * PropertyName string
+│ * `PropertyName` **string**
 │   Property Description
-│ * Other? integer
+│ * `Other?` **integer**
 │   Optional, so ? on the name
 
 ▐ 🏃:bash
@@ -29,13 +29,13 @@ Agent definition:
 │ ```bash
 │ echo "$__propertyname__"
 │ ```
-│ * PropertyName celsius|fahrenheit
+│ * `PropertyName` **celsius|fahrenheit**
 │   An enum is its values, which may hold a space
-│ * PropertyName string[]
+│ * `PropertyName` **string[]**
 │   Arrays suffix []
-│ * ParentName object
+│ * `ParentName` **object**
 │   Mandatory Parent Def
-│ * ParentName.PropertyName integer
+│ * `ParentName.PropertyName` **integer**
 │   Nested
 
 ▐ 🧰:Tool Name
@@ -62,9 +62,9 @@ Agent definition:
 >   >
 >   > :shield:ShieldName
 >   > `m8` `call` `cmd` `{{propertyname|--flag}}`
->   > * PropertyName string
+>   > * `PropertyName` **string**
 >   >   Property Description
->   > * Other? integer
+>   > * `Other?` **integer**
 >   >   Optional, so ? on the name
 >
 > * :runner::bash
@@ -76,13 +76,13 @@ Agent definition:
 >   > ```bash
 >   > echo "$__propertyname__"
 >   > ```
->   > * PropertyName celsius|fahrenheit
+>   > * `PropertyName` **celsius|fahrenheit**
 >   >   An enum is its values, which may hold a space
->   > * PropertyName string[]
+>   > * `PropertyName` **string[]**
 >   >   Arrays suffix []
->   > * ParentName object
+>   > * `ParentName` **object**
 >   >   Mandatory Parent Def
->   > * ParentName.PropertyName integer
+>   > * `ParentName.PropertyName` **integer**
 >   >   Nested
 >
 > * :toolbox::Tool Name
@@ -110,6 +110,13 @@ converted argument strings (so `true` and `"true"` match the same enum item).
 Optional enums, nested fields, and enum arrays are not checked.
 
 Query:
+
+A 🧠 naming a turn (`MOB/AGENT/.../+/TURN`) continues lineage only when it
+is the source document's first record, before any other sigil. Later turn
+references are identity anchors: they retain the turn ID without reading or
+expanding that turn. Position is local to each source document, not the expanded
+ledger. Authored-agent inclusions and model references are unchanged; snips
+(`snip-...` files beside turns) remain content inclusions wherever they occur.
 
 ```m8
 ▐ 🧠:Agent or Model Name
@@ -641,11 +648,35 @@ drags in the other, and a 🔝 never reaches a ledger.
 
 ## Types
 
-An argument is a bullet: `* NAME TYPE`, and its
-description on the lines indented under it. The name
-runs to the first space and the type to the first comma,
-so the last field may hold one safely and an enum keeps
-whatever spaces its values have.
+An argument declaration is a bullet with a backtick-delimited
+name and a bold schema specification:
+
+```markdown
+* `limit?` **integer,minimum:0**
+  Optional limit on the number of results.
+```
+
+Names are nonempty and contain no whitespace or backticks.
+A trailing `?` inside the backticks marks optionality and is
+not part of the name. Descriptions go on the lines indented
+under the bullet. Enum values may still contain spaces.
+
+The schema span holds the type and all its extras. An
+unescaped `**` closes it; a single `*` is literal. Inside
+that span, `\*` means `*` and `\\` means `\`; other
+backslashes remain unchanged. Delimiters are located before
+these escapes are decoded, and only then are the type and
+extras parsed. JSON escaping in extras is a separate inner
+layer. Renderers escape literal asterisks and backslashes
+after serializing that layer. For example:
+
+```markdown
+* `pattern` **string,default:"\*\*/*.zig"**
+```
+
+The default is `**/*.zig`. Only whitespace may follow the
+closing schema span. The old plain `NAME TYPE` spelling is
+not accepted. Tool-call argument bullets are unchanged.
 
 A type is JSON Schema's own and goes to the wire exactly
 as it is written, so it is lowercase: `string`, `number`,
@@ -654,7 +685,8 @@ enum — a type holding a `|` is one, and its values are what
 it lists.
 
 Anything else JSON Schema says goes after the type as
-`,key:value` extras — `* limit integer,minimum:0` — split
+`,key:value` extras inside the bold schema span —
+for example, `**integer,minimum:0**` — split
 and read the way a 🧠's parameters are, so a value may be
 JSON with commas of its own. m8 has no vocabulary for
 them and checks none of it, a type included: a mistake

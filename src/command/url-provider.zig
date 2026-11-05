@@ -184,21 +184,18 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8, body: ?[]const u8, content_type: []
             return 1;
         };
 
+        var retry_seconds: ?u64 = null;
         if (!retried and @intFromEnum(response.head.status) == 429) {
             var it = response.head.iterateHeaders();
             while (it.next()) |h| {
                 if (std.ascii.eqlIgnoreCase(h.name, "retry-after")) {
-                    if (retryAfterSeconds(h.value, std.Io.Timestamp.now(ctx.io, .real).toSeconds())) |seconds| {
-                        try waitToRetry(ctx, seconds);
-                        retried = true;
-                        break;
-                    }
+                    retry_seconds = retryAfterSeconds(h.value, std.Io.Timestamp.now(ctx.io, .real).toSeconds());
+                    if (retry_seconds != null) break;
                 }
             }
-            if (retried) continue;
         }
 
-        const settings = stats.load(ctx);
+        const settings = if (retry_seconds == null) stats.load(ctx) else null;
         var response_headers: std.Io.Writer.Allocating = .init(ctx.arena);
         if (settings) |s| if (s.headers.len > 0) {
             var it = response.head.iterateHeaders();
@@ -210,16 +207,25 @@ fn runStdlib(ctx: Ctx, endpoint: []const u8, body: ?[]const u8, content_type: []
         var response_body: std.ArrayList(u8) = .empty;
         var transfer_buf: [64 * 1024]u8 = undefined;
         const reader = response.reader(&transfer_buf);
+        const output = if (retry_seconds != null) ctx.err else ctx.out;
+        var last_byte: u8 = '\n';
         while (true) {
             reader.fill(1) catch |e| switch (e) {
                 error.EndOfStream => break,
                 else => return e,
             };
             const chunk = reader.buffered();
-            ctx.out.writeAll(chunk) catch return 0;
-            ctx.out.flush() catch return 0;
+            output.writeAll(chunk) catch return 0;
+            output.flush() catch return 0;
+            last_byte = chunk[chunk.len - 1];
             if (settings) |s| if (s.body.len > 0) try response_body.appendSlice(ctx.arena, chunk);
             reader.toss(chunk.len);
+        }
+        if (retry_seconds) |seconds| {
+            if (last_byte != '\n') try ctx.err.writeAll("\n");
+            try waitToRetry(ctx, seconds);
+            retried = true;
+            continue;
         }
         if (settings) |s| stats.finish(ctx, s, response_headers.written(), response_body.items);
         return 0;
@@ -254,6 +260,8 @@ fn retryTimePair(s: []const u8) ?u8 {
 }
 
 fn waitToRetry(ctx: Ctx, seconds: u64) !void {
+    try ctx.err.print("m8 url-provider: HTTP 429; retrying after Retry-After: {d} seconds\n", .{seconds});
+    try ctx.err.flush();
     try ctx.io.sleep(.{ .nanoseconds = @as(i96, seconds) * std.time.ns_per_s }, .awake);
 }
 
@@ -350,6 +358,7 @@ fn runCurl(ctx: Ctx, args: []const []const u8, forward_stdin: bool) !u8 {
         var head_ready = false;
         var pending: std.ArrayList(u8) = .empty;
         var retry_seconds: ?u64 = null;
+        var retry_body_last: u8 = '\n';
         const response = streams.reader(0);
         while (streams.fill(4096, .none)) |_| {
             // Both pipes are drained together. Body bytes may be observed before
@@ -365,7 +374,14 @@ fn runCurl(ctx: Ctx, args: []const []const u8, forward_stdin: bool) !u8 {
             const chunk = response.buffered();
             if (!head_ready) {
                 try pending.appendSlice(ctx.arena, chunk);
-            } else if (retry_seconds == null) {
+            } else if (retry_seconds) |_| {
+                try ctx.err.writeAll(pending.items);
+                try ctx.err.writeAll(chunk);
+                if (pending.items.len > 0) retry_body_last = pending.items[pending.items.len - 1];
+                if (chunk.len > 0) retry_body_last = chunk[chunk.len - 1];
+                try ctx.err.flush();
+                pending.clearRetainingCapacity();
+            } else {
                 ctx.out.writeAll(pending.items) catch return 0;
                 ctx.out.writeAll(chunk) catch return 0;
                 ctx.out.flush() catch return 0;
@@ -374,7 +390,7 @@ fn runCurl(ctx: Ctx, args: []const []const u8, forward_stdin: bool) !u8 {
                     try body.appendSlice(ctx.arena, chunk);
                 };
                 pending.clearRetainingCapacity();
-            } else pending.clearRetainingCapacity();
+            }
             response.toss(chunk.len);
         } else |e| switch (e) {
             error.EndOfStream => {},
@@ -383,6 +399,7 @@ fn runCurl(ctx: Ctx, args: []const []const u8, forward_stdin: bool) !u8 {
         try streams.checkAnyError();
         const raw_stderr = streams.reader(1).buffered();
         const separated = try stats.splitCurlStderr(ctx.arena, raw_stderr);
+        if (retry_body_last != '\n') try ctx.err.writeAll("\n");
         try ctx.err.writeAll(separated.diagnostics);
         try ctx.err.flush();
         const code: u8 = switch (try child.wait(ctx.io)) {
@@ -775,14 +792,20 @@ test "curl pump replays once only with Retry-After and preserves final error and
             \\else
             \\  cat > "$d/request"
             \\  printf 'HTTP/1.1 %s Response\r\n%s\r\n\r\n' "$M8_RETRY_TEST_STATUS" "$M8_RETRY_TEST_HEADER" >&2
-            \\  printf first
+            \\  printf first-body
             \\fi
         ;
         try std.testing.expectEqual(@as(u8, 0), try runCurl(invocation.ctx(&.{}, &input), &.{ transport, "test transport" }, true));
-        try std.testing.expectEqualStrings(if (case.retry_expected) "second" else "first", invocation.out.written());
+        try std.testing.expectEqualStrings(if (case.retry_expected) "second" else "first-body", invocation.out.written());
         const count = try tmp.dir.readFileAlloc(std.testing.io, "count", arena, .unlimited);
         try std.testing.expectEqualStrings(if (case.retry_expected) "xx" else "x", count);
-        try std.testing.expectEqualStrings("", invocation.err.written());
+        try std.testing.expectEqualStrings(
+            if (case.retry_expected)
+                "first-body\nm8 url-provider: HTTP 429; retrying after Retry-After: 0 seconds\n"
+            else
+                "",
+            invocation.err.written(),
+        );
     }
 }
 

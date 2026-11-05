@@ -22,36 +22,46 @@ missing keys do not fall through to another layer.
   Different names may come from different layers; the same name is never merged.
   * An explicit `parent` inherits another selected provider's keys recursively.
     See [Inheriting a provider](providers.md#inheriting-a-provider).
-* `core/config.json` holds optional `tui` and `highlights` settings.
+* `core/config.json` holds optional `tui` settings.
+* `core/highlights.txt` holds optional highlight and wrapping settings.
 * `core/mac-sandbox.sb` supplies the native sandbox profile, with the built-in
   profile used when no file exists.
 * m8 carries no provider configuration.
 
-For example:
+Each core file resolves independently, nearest first. A selected file is taken
+whole; missing settings do not fall through to another layer. Thus
+`core/highlights.txt` can come from a different layer than `core/config.json`.
+If no `core/highlights.txt` exists in any layer, the built-in highlight palette and
+wrapping defaults are used. An empty file makes all highlight styles neutral.
 
-```json
-{ "highlights": "quote:fgt4bg255+i_!/,list:fg244,table:pipe:fgt8,wrap:literal:70,wrap:word:90" }
+For example, `core/highlights.txt` is plain text (entries may span lines):
+
+```text
+quote:fgt4bg255+i_!/,list:fg244,table:pipe:fgt8,wrap:literal:70,
+wrap:word:90
 ```
 
-Highlight entries are comma-separated `name:style` pairs. Names include `quote`,
-`list`, `hash`, `heading`, `strong`, `em`, `strike`, `code`, `link`, `rule`,
-`table:pipe`, `table:head`, `fence`, `block`, `diff:add`, `diff:remove`,
-`diff:hunk`, `diff:context`, `json:string`, `json:key`, `json:atom`, `json:sep`,
-and `indent`. JSON fences get best-effort string, key, atom and separator
-highlighting; `json:sep` styles key delimiters and escape introducers. JSON
-contents are not validated.
+Highlight entries are comma-separated `name:style` pairs. Newline and carriage
+return characters are stripped; spaces and tabs are not ignored and make an
+entry invalid. Commas are still required between entries. Names
+include `quote`, `list`, `hash`, `heading`, `strong`, `em`, `strike`, `code`,
+`link`, `rule`, `table:pipe`, `table:head`, `fence`, `block`, `diff:add`,
+`diff:remove`, `diff:hunk`, `diff:context`, `json:string`, `json:key`,
+`json:atom`, `json:sep`, and `indent`. JSON fences get best-effort string, key,
+atom and separator highlighting; `json:sep` styles key delimiters and escape
+introducers. JSON contents are not validated.
 Styles combine `fgN`/`bgN` (0–255),
 `fgtN`/`bgtN` terminal palette indices (0–15), and modifiers `+` (bold),
 `-` (faint), `i` (italic), `_` (underline), `!` (inverse), `/` (strike).
 Styles are read left to right; bold and faint are mutually exclusive, with
-the last taking effect. Duplicate entries also use the last value. Each
-supplied style replaces that style; unspecified styles retain defaults.
-
-Wrapping thresholds share the same comma-separated string:
+the last taking effect. Duplicate entries also use the last value. A custom
+highlight file replaces the built-in palette: styles omitted from it are
+neutral. Wrapping thresholds share the same comma-separated entries:
 
 * `wrap:literal:70` breaks before an opening inline code span at 70% full.
 * `wrap:word:90` breaks before a new word at 90% full.
-* These are the defaults; each accepts an integer from 0 to 100.
+* These are the defaults and remain in effect with custom highlights unless
+  overridden; each accepts an integer from 0 to 100.
   * `0` disables that early-break rule, not ordinary hard wrapping.
   * `100` waits until the content area is full.
 * Percentages use terminal cells after the repeated quote and indent prefix.
@@ -63,6 +73,16 @@ Wrapping thresholds share the same comma-separated string:
   * Existing spaces are preserved, including spaces before an inserted break.
 * Wrapping needs a known terminal width and enabled reflow.
   * `render --parsable` disables it; `--no-highlight` only disables colour.
+
+The built-in palette and wrap defaults, as a copyable `core/highlights.txt`:
+
+```text
+quote:fg245,list:fg245,hash:fg245,heading:+fg75,strong:+fg231,em:i,strike:/,code:fg180,json:string:fg2,json:key:fg180,json:atom:+fg75,json:sep:fg245,link:_fg75,rule:fg245,table:pipe:fg245,table:head:+,fence:fg245,block:fg180,diff:add:fg2,diff:remove:fg1,diff:hunk:fg6,indent:fg181,wrap:literal:70,wrap:word:90
+```
+
+Previously, highlights were read from the `highlights` key in
+`core/config.json`. That JSON key is no longer read; migrate its value to
+`core/highlights.txt`.
 
 ## Mobs
 

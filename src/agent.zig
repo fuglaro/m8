@@ -196,7 +196,7 @@ test "a definition yields its model, shields and tools" {
         \\
         \\* :toolbox::say
         \\  > `echo` `{{text|}}`
-        \\  > * text string
+        \\  > * `text` **string**
         \\  > > Echoes.
         \\
         \\* :toolbox::say
