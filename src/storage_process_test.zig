@@ -1,5 +1,6 @@
 //! End-to-end storage, dispatch, and discovery checks against the built launcher.
 const std = @import("std");
+const build_options = @import("build_options");
 const launcher = @import("test_options").launcher;
 const A = std.mem.Allocator;
 const io = std.testing.io;
@@ -38,6 +39,8 @@ const Setup = struct {
     root: []const u8,
     env: std.process.Environ.Map,
     executable: []const u8,
+    config_root: []const u8,
+    data_root: []const u8,
 
     fn init(a: A) !Setup {
         const root = try @import("test_tmp.zig").make(a, io, "storage-process");
@@ -46,21 +49,30 @@ const Setup = struct {
         const len = try std.Io.Dir.cwd().realPathFile(io, launcher, &resolved);
         const executable = try a.dupe(u8, resolved[0..len]);
         var env: std.process.Environ.Map = .init(a);
-        try env.put("HOME", try path(a, &.{ root, "home" }));
+        const home = try path(a, &.{ root, "home" });
+        const config_root = if (build_options.xdg)
+            try path(a, &.{ root, "config", std.fs.path.basename(build_options.user_config_subpath) })
+        else
+            try path(a, &.{ home, build_options.user_config_subpath });
+        const data_root = if (build_options.xdg)
+            try path(a, &.{ root, "data", std.fs.path.basename(build_options.user_data_subpath) })
+        else
+            try path(a, &.{ home, build_options.user_data_subpath });
+        try env.put("HOME", home);
         try env.put("XDG_CONFIG_HOME", try path(a, &.{ root, "config" }));
         try env.put("XDG_DATA_HOME", try path(a, &.{ root, "data" }));
         try env.put("TMPDIR", root);
-        try env.put("M8_ST8_DIRS", try std.fmt.allocPrint(a, "{s}:{s}", .{ try path(a, &.{ root, "project" }), try path(a, &.{ root, "config", "m8-st8" }) }));
+        try env.put("M8_ST8_DIRS", try std.fmt.allocPrint(a, "{s}:{s}", .{ try path(a, &.{ root, "project" }), config_root }));
         try env.put("M8_CALL_ID", "storage-process-test");
         try mkdir(try path(a, &.{ root, "project/mobs/demo" }));
         try mkdir(try path(a, &.{ root, "project/core/providers" }));
-        try mkdir(try path(a, &.{ root, "config/m8-st8/mobs/useronly" }));
-        try mkdir(try path(a, &.{ root, "config/m8-st8/mobs/demo" }));
+        try mkdir(try path(a, &.{ config_root, "mobs/useronly" }));
+        try mkdir(try path(a, &.{ config_root, "mobs/demo" }));
         try put(try path(a, &.{ root, "project/mobs/demo/echo.md" }), "* :brain::/toy/echo\n");
-        try put(try path(a, &.{ root, "config/m8-st8/mobs/useronly/echo.md" }), "* :brain::/toy/echo\n");
-        try put(try path(a, &.{ root, "config/m8-st8/mobs/demo/hidden.md" }), "* :brain::/toy/echo\n");
+        try put(try path(a, &.{ config_root, "mobs/useronly/echo.md" }), "* :brain::/toy/echo\n");
+        try put(try path(a, &.{ config_root, "mobs/demo/hidden.md" }), "* :brain::/toy/echo\n");
         try put(try path(a, &.{ root, "project/core/providers/toy.json" }), "{\"cmd\":[\"m8\",\"toy-provider\"],\"models\":[\"m8\",\"toy-provider\",\"--models\"]}\n");
-        return .{ .a = a, .root = root, .env = env, .executable = executable };
+        return .{ .a = a, .root = root, .env = env, .executable = executable, .config_root = config_root, .data_root = data_root };
     }
     fn run(self: *Setup, args: []const []const u8) !Result {
         return self.runAt(self.root, args);
@@ -117,9 +129,9 @@ test "launcher persists storage, resets sessions, and inherits roots in delegate
     try s.expect(&.{":demo/echo//job--"}, "");
     try std.testing.expectEqualStrings("* :brain::demo/echo\n", try std.Io.Dir.cwd().readFileAlloc(io, job, a, .limited(1 << 20)));
     try s.expect(&.{ "say", "--answer", "--unwrap", ":useronly/echo", "relocated" }, "relocated");
-    try std.testing.expect(exists(try path(a, &.{ root, "data/m8-st8/user/mobs/useronly/.chats/echo/+.md" })));
-    try std.testing.expect(exists(try path(a, &.{ root, "data/m8-st8/user/mobs/useronly/.mob-space" })));
-    try std.testing.expect(!exists(try path(a, &.{ root, "config/m8-st8/mobs/useronly/.chats" })));
+    try std.testing.expect(exists(try path(a, &.{ s.data_root, "user/mobs/useronly/.chats/echo/+.md" })));
+    try std.testing.expect(exists(try path(a, &.{ s.data_root, "user/mobs/useronly/.mob-space" })));
+    try std.testing.expect(!exists(try path(a, &.{ s.config_root, "mobs/useronly/.chats" })));
     const runner = try path(a, &.{ root, "project/mobs/demo/runner.md" });
     try put(
         runner,
@@ -129,7 +141,11 @@ test "launcher persists storage, resets sessions, and inherits roots in delegate
             "  > * `message` **string**\n\n* :toolbox::delegate\n",
     );
     try s.expect(&.{ "say", "--answer", "--unwrap", ":demo/runner", "RUN;;;delegate;;;message=delegated" }, "Done");
-    try std.testing.expect(exists(try path(a, &.{ root, "data/m8-st8/user/mobs/useronly/.chats/echo/_/delegated/+.md" })));
+    const delegated_data = if (build_options.xdg)
+        try path(a, &.{ root, "data", std.fs.path.basename(build_options.user_data_subpath), "user/mobs/useronly/.chats/echo/_/delegated/+.md" })
+    else
+        try path(a, &.{ root, "home", build_options.user_data_subpath, "user/mobs/useronly/.chats/echo/_/delegated/+.md" });
+    try std.testing.expect(exists(delegated_data));
     try std.testing.expect(exists(try path(a, &.{ root, "project/mobs/demo/.chats/runner/+.md" })));
 }
 
@@ -167,10 +183,11 @@ test "launcher discovers only the registered nearest project" {
     _ = s.env.swapRemove("M8");
     const inner = try path(a, &.{ root, "work/child" });
     const outer = try path(a, &.{ root, "work" });
-    try mkdir(try path(a, &.{ outer, ".m8-st8/mobs/outer" }));
-    try mkdir(try path(a, &.{ inner, ".m8-st8/mobs/inner" }));
-    try put(try path(a, &.{ outer, ".m8-st8/mobs/outer/echo.md" }), "* :brain::/toy/echo\n");
-    try put(try path(a, &.{ inner, ".m8-st8/mobs/inner/echo.md" }), "* :brain::/toy/echo\n");
+    const project_name = build_options.project_config_dir_name;
+    try mkdir(try path(a, &.{ outer, project_name, "mobs/outer" }));
+    try mkdir(try path(a, &.{ inner, project_name, "mobs/inner" }));
+    try put(try path(a, &.{ outer, project_name, "mobs/outer/echo.md" }), "* :brain::/toy/echo\n");
+    try put(try path(a, &.{ inner, project_name, "mobs/inner/echo.md" }), "* :brain::/toy/echo\n");
     try s.env.put("XDG_CONFIG_HOME", try path(a, &.{ root, "registry" }));
     const registered = try s.runAt(inner, &.{"register"});
     try std.testing.expect(registered.ok);

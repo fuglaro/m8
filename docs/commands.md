@@ -25,7 +25,7 @@ The reply went to a tty, so it is rendered. The turn
 it saved is a file, so it is markdown:
 
 ```bash
-cat ".m8-st8/mobs/demo/.chats/mathy/+/tduyxbutjb.md"
+cat ".m8st8/mobs/demo/.chats/mathy/+/tduyxbutjb.md"
 ```
 ```
 * :brain::demo/mathy

@@ -188,7 +188,7 @@ test "a child environment adds process state without changing its base" {
     var base: std.process.Environ.Map = .init(arena);
     try base.put("KEPT", "yes");
     try base.put("M8", "/wrong");
-    try base.put(config.dirs_var, "/p/.m8-st8:/u/m8-st8");
+    try base.put(config.dirs_var, "/p/.m8st8:/u/m8st8");
     var out: std.Io.Writer.Allocating = .init(arena);
     var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
     defer threaded.deinit();
@@ -216,14 +216,14 @@ test "a child environment adds process state without changing its base" {
     try base.put("XDG_CONFIG_HOME", "/dev/null");
     const inherited = try childEnvironment(arena, ctx, &.{.{ .key = config.dirs_var, .value = "/wrong" }});
     try std.testing.expectEqualStrings(base.get(config.dirs_var).?, inherited.get(config.dirs_var).?);
-    try base.put(config.user_root_var, "/u/m8-st8");
-    try base.put(config.data_root_var, "/data/m8-st8");
+    try base.put(config.user_root_var, "/u/m8st8");
+    try base.put(config.data_root_var, "/data/m8st8");
     const layered = try childEnvironment(arena, ctx, &.{
         .{ .key = config.user_root_var, .value = "/wrong" },
         .{ .key = config.data_root_var, .value = "/wrong" },
     });
-    try std.testing.expectEqualStrings("/u/m8-st8", layered.get(config.user_root_var).?);
-    try std.testing.expectEqualStrings("/data/m8-st8", layered.get(config.data_root_var).?);
+    try std.testing.expectEqualStrings("/u/m8st8", layered.get(config.user_root_var).?);
+    try std.testing.expectEqualStrings("/data/m8st8", layered.get(config.data_root_var).?);
 
     // No inherited context means no eager discovery, even with an overlay.
     _ = base.swapRemove(config.dirs_var);

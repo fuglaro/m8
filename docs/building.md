@@ -130,7 +130,7 @@ zig build -Dcore=true       # minimal, with riff apart
 
 ## System config directory
 
-The system configuration directory is `/etc/m8-st8/` by default, but can be
+The system configuration directory is `/etc/m8st8/` by default, but can be
 configured at build time:
 
 ```bash
@@ -142,3 +142,28 @@ This is the directory where an administrator places shared agents and core
 resources for all users on the system. It is searched last, after project
 and user configuration. A project does not become trusted merely by existing
 beneath this directory; it still needs to be registered with `m8 register`.
+
+## Config and data paths
+
+Build-time options set the names and locations used for project, user, and
+system configuration and user data. These are the defaults:
+
+```bash
+zig build \
+  -Dproject-config-dir-name=.m8st8 \
+  -Duser-config-subpath=.config/m8st8 \
+  -Duser-data-subpath=.local/share/m8st8 \
+  -Dsystem-config-dir=/etc/m8st8 \
+  -Dxdg=true
+```
+
+* XDG handling is enabled by default; `-Dxdg=false` disables it.
+* A nonempty, absolute `XDG_CONFIG_HOME` or `XDG_DATA_HOME` takes precedence.
+  * Its suffix is the last component of the corresponding user subpath.
+  * For example, `.settings/custom` gives `$XDG_CONFIG_HOME/custom`.
+* Otherwise, the complete user subpath is appended to an absolute `HOME`.
+  * Empty or relative XDG values fall back to `HOME` too.
+* User subpaths must be nonempty and relative, with normal directory components.
+  * Empty, `.` and `..` components and trailing slashes are rejected.
+  * The project directory name must be one component.
+* `M8_ST8_*` environment names do not depend on the configured layout.

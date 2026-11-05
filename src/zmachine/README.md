@@ -152,8 +152,8 @@ file to live in.
 m8 ships with none and plays whichever are there.
 
 ```
-./.m8-st8/models/Z-Machine/          nearest first
-~/.config/m8-st8/models/Z-Machine/
+./.m8st8/models/Z-Machine/          nearest first
+~/.config/m8st8/models/Z-Machine/
 ```
 
 `.z1` through `.z8`, and Blorb containers, whose story data is

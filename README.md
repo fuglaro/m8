@@ -73,9 +73,9 @@ export PATH=$PWD/zig-out/bin:$PATH
 A first agent, with no network or key, on the toy provider:
 
 ```bash
-c=${XDG_CONFIG_HOME:-~/.config}/m8-st8
+c=${XDG_CONFIG_HOME:-~/.config}/m8st8
 mkdir -p $c/core/providers $c/mobs/demo
-cp .m8-st8/core/providers/toy.json $c/core/providers/
+cp .m8st8/core/providers/toy.json $c/core/providers/
 echo '* :brain::/toy/eliza' >$c/mobs/demo/eliza.md
 
 m8 :demo/eliza -- "I am not sleeping well."
@@ -99,7 +99,7 @@ m8 :demo/mathy//aside -- "And the Möbius strip?"     # a subchat, forked
 Each turn it keeps is a markdown file:
 
 ```bash
-cat .m8-st8/mobs/demo/.chats/mathy/+/tduyxbutjb.md
+cat .m8st8/mobs/demo/.chats/mathy/+/tduyxbutjb.md
 ```
 ```
 * :brain::demo/mathy

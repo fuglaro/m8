@@ -1,6 +1,6 @@
 //! Finding configuration.
 //!
-//! Config directories are searched nearest first: registered `.m8-st8/` paths
+//! Config directories are searched nearest first: registered `.m8st8/` paths
 //! from the nearest project, then the user's own and the system's.
 //! Children inherit the parent's validated `M8_ST8_DIRS` without revalidation.
 //!
@@ -37,12 +37,7 @@ pub const Dirs = struct {
 /// Resolve native discovery once, including the writable XDG data location.
 pub fn discover(arena: Allocator, io: std.Io, env: *const std.process.Environ.Map) !Dirs {
     var user = try userDir(arena, env);
-    var data: ?[]const u8 = if (absoluteEnv(env, "XDG_DATA_HOME")) |home|
-        try std.fs.path.join(arena, &.{ home, "m8-st8" })
-    else if (absoluteEnv(env, "HOME")) |home|
-        try std.fs.path.join(arena, &.{ home, ".local", "share", "m8-st8" })
-    else
-        null;
+    var data = try homeDir(arena, env, "XDG_DATA_HOME", build_options.user_data_subpath);
     if (env.get(dirs_var) != null) {
         if (env.get(user_root_var)) |root| user = if (root.len == 0) null else root;
         if (env.get(data_root_var)) |root| data = if (root.len == 0) null else root;
@@ -98,9 +93,8 @@ pub fn inherit(arena: Allocator, dirs: Dirs, env: *std.process.Environ.Map) !voi
     try env.put(data_root_var, dirs.data_root orelse "");
 }
 
-/// Hidden beside a project, plain under the user's config root.
-pub const dir_name = ".m8-st8";
-pub const user_dir_name = "m8-st8";
+/// The project discovery name, selected when building.
+pub const dir_name = build_options.project_config_dir_name;
 
 /// What an administrator puts beneath everyone, and so the last searched. Its
 /// Authored mobs and core resources are read here; writable system-mob state
@@ -116,11 +110,17 @@ pub fn saveDir(dirs: Dirs) ?[]const u8 {
 
 /// The user's own config directory, if there is one.
 pub fn userDir(arena: Allocator, env: *const std.process.Environ.Map) !?[]const u8 {
-    if (absoluteEnv(env, "XDG_CONFIG_HOME")) |xdg| {
-        return try std.fs.path.resolve(arena, &.{ xdg, user_dir_name });
-    } else if (absoluteEnv(env, "HOME")) |home| {
-        return try std.fs.path.resolve(arena, &.{ home, ".config", user_dir_name });
+    return homeDir(arena, env, "XDG_CONFIG_HOME", build_options.user_config_subpath);
+}
+
+/// XDG roots use the leaf name; HOME uses the whole configured subpath.
+fn homeDir(arena: Allocator, env: *const std.process.Environ.Map, xdg_var: []const u8, subpath: []const u8) !?[]const u8 {
+    if (build_options.xdg) {
+        if (absoluteEnv(env, xdg_var)) |xdg|
+            return try std.fs.path.resolve(arena, &.{ xdg, std.fs.path.basename(subpath) });
     }
+    if (absoluteEnv(env, "HOME")) |home|
+        return try std.fs.path.resolve(arena, &.{ home, subpath });
     return null;
 }
 
@@ -254,7 +254,7 @@ fn deregisterContents(arena: Allocator, io: std.Io, env: *const std.process.Envi
     }
 }
 
-/// Existing .m8-st8 directories from cwd upward, never descendants.
+/// Existing .m8st8 directories from cwd upward, never descendants.
 pub fn candidates(arena: Allocator, io: std.Io, cwd: []const u8) ![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     var walk = cwd;
@@ -682,9 +682,11 @@ test "registry filenames use st8 and double-dash path separators" {
     defer state.deinit();
     const arena = state.allocator();
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", "/home/test");
     try env.put("XDG_CONFIG_HOME", "/config");
-    const file = (try registrationFile(arena, &env, "/Users/jvl/dev/m8/.m8-st8")).?;
-    try testing.expectEqualStrings("/config/m8-st8/core/registry/st8--Users--jvl--dev--m8--.m8-st8--74f65428bd20454e", file);
+    const file = (try registrationFile(arena, &env, "/Users/jvl/dev/m8/.m8st8")).?;
+    const expected_root = try std.fs.path.join(arena, &.{ (try userDir(arena, &env)).?, "core", registry_dir_name });
+    try testing.expect(std.mem.startsWith(u8, file, expected_root));
 }
 
 test "config trust entries are canonical path contents indexed by wyhash" {
@@ -695,16 +697,17 @@ test "config trust entries are canonical path contents indexed by wyhash" {
     const arena = arena_state.allocator();
     const t = try Tree.init(arena, &threaded, "m8-register-test");
     defer t.deinit(arena);
-    const st8 = try t.join(arena, "work/.m8-st8");
+    const st8 = try t.join(arena, "work/.m8st8");
     try std.Io.Dir.cwd().createDirPath(t.io, st8);
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", t.root);
     try env.put("XDG_CONFIG_HOME", t.root);
     try testing.expect(!(try registered(arena, t.io, &env, st8)));
     try registerPath(arena, t.io, &env, st8);
     try testing.expect(try registered(arena, t.io, &env, st8));
     // A copied entry name cannot authorize a different canonical path because
     // the stored contents are checked as well as the hash-derived filename.
-    const sibling = try t.join(arena, "else/.m8-st8");
+    const sibling = try t.join(arena, "else/.m8st8");
     try std.Io.Dir.cwd().createDirPath(t.io, sibling);
     try testing.expect(!(try registered(arena, t.io, &env, sibling)));
     try std.Io.Dir.cwd().deleteTree(t.io, st8);
@@ -725,6 +728,7 @@ test "inherited configs retain only registered directories and user/system roots
     const t = try Tree.init(arena, &threaded, "m8-trusted-discovery");
     defer t.deinit(arena);
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", t.root);
     try env.put("XDG_CONFIG_HOME", t.root);
     const home = (try userDir(arena, &env)).?;
     _ = try std.Io.Dir.cwd().createDirPathStatus(t.io, home, .fromMode(0o700));
@@ -732,8 +736,8 @@ test "inherited configs retain only registered directories and user/system roots
         const stat = try std.Io.Dir.cwd().statFile(t.io, home, .{});
         try testing.expectEqual(@as(std.posix.mode_t, 0o700), stat.permissions.toMode() & 0o777);
     }
-    const trusted = try t.join(arena, "work/.m8-st8");
-    const untrusted = try t.join(arena, "other/.m8-st8");
+    const trusted = try t.join(arena, "work/.m8st8");
+    const untrusted = try t.join(arena, "other/.m8st8");
     try std.Io.Dir.cwd().createDirPath(t.io, trusted);
     try std.Io.Dir.cwd().createDirPath(t.io, untrusted);
     try registerPath(arena, t.io, &env, trusted);
@@ -847,9 +851,12 @@ test "core is read from the user's directory and nowhere else" {
 
     const t = try Tree.init(arena, &threaded, "m8-config-core");
     defer t.deinit(arena);
-    try t.write(arena, "m8-st8/core/mac-sandbox.sb", "(user profile)");
+    const user_rel = if (build_options.xdg) std.fs.path.basename(build_options.user_config_subpath) else build_options.user_config_subpath;
+    const user_file = try std.fs.path.join(arena, &.{ user_rel, "core/mac-sandbox.sb" });
+    try t.write(arena, user_file, "(user profile)");
 
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", t.root);
     try env.put("XDG_CONFIG_HOME", t.root);
     try testing.expectEqualStrings(
         "(user profile)",
@@ -870,7 +877,7 @@ test "unregistered config paths in inherited M8_ST8_DIRS are filtered" {
     const arena = a.allocator();
 
     var env: std.process.Environ.Map = .init(arena);
-    try env.put(dirs_var, "/p/.m8-st8:/u/m8-st8");
+    try env.put(dirs_var, "/p/.m8st8:/u/m8st8");
     const dirs = try discover(arena, threaded.io(), &env);
     try testing.expectEqual(@as(usize, 0), dirs.roots.len);
 }
@@ -882,11 +889,14 @@ test "the user directory follows XDG, then HOME" {
 
     var xdg: std.process.Environ.Map = .init(arena);
     try xdg.put("XDG_CONFIG_HOME", "/x");
-    try testing.expectEqualStrings("/x/m8-st8", (try userDir(arena, &xdg)).?);
+    if (build_options.xdg)
+        try testing.expectEqualStrings(try std.fs.path.resolve(arena, &.{ "/x", std.fs.path.basename(build_options.user_config_subpath) }), (try userDir(arena, &xdg)).?)
+    else
+        try testing.expect((try userDir(arena, &xdg)) == null);
 
     var home: std.process.Environ.Map = .init(arena);
     try home.put("HOME", "/h");
-    try testing.expectEqualStrings("/h/.config/m8-st8", (try userDir(arena, &home)).?);
+    try testing.expectEqualStrings(try std.fs.path.resolve(arena, &.{ "/h", build_options.user_config_subpath }), (try userDir(arena, &home)).?);
 
     var none: std.process.Environ.Map = .init(arena);
     try testing.expect((try userDir(arena, &none)) == null);
@@ -903,9 +913,11 @@ test "highlights resolve per file independently of config.json and replace the t
     // The old JSON key is not read, and a nearer config.json cannot mask a theme.
     try t.write(arena, "near/core/config.json", "{\"highlights\":\"quote:fg4\"}");
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", t.root);
     try env.put("XDG_CONFIG_HOME", t.root);
+    const user_rel = if (build_options.xdg) std.fs.path.basename(build_options.user_config_subpath) else build_options.user_config_subpath;
+    const far = try t.join(arena, user_rel);
     const near = try t.join(arena, "near");
-    const far = try t.join(arena, "m8-st8");
     try std.Io.Dir.cwd().createDirPath(t.io, far);
     try registerPath(arena, t.io, &env, near);
     try registerPath(arena, t.io, &env, far);
@@ -916,7 +928,7 @@ test "highlights resolve per file independently of config.json and replace the t
     try testing.expectEqual(@as(u8, 70), p.wrap_literal);
     try testing.expectEqual(@as(u8, 90), p.wrap_word);
 
-    try t.write(arena, "m8-st8/core/highlights.txt", "quote:fg4\n");
+    try t.write(arena, try std.fs.path.join(arena, &.{ user_rel, "core/highlights.txt" }), "quote:fg4\n");
     p = try highlights(arena, t.io, &env);
     try testing.expectEqual(@as(?u16, 4), p.palette.quote.fg);
     try testing.expectEqualDeep(highlight.Style{}, p.palette.heading);
@@ -948,6 +960,7 @@ test "highlight files reject spaces tabs missing commas and invalid style specs"
     const t = try Tree.init(arena, &threaded, "m8-config-bad-highlights");
     defer t.deinit(arena);
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", t.root);
     try env.put("XDG_CONFIG_HOME", t.root);
     try registerPath(arena, t.io, &env, t.root);
     try env.put(dirs_var, t.root);
@@ -988,6 +1001,7 @@ test "child validation preserves stale registrations and normal validation clean
     const root = try test_tmp.make(arena, io, "m8-child-registry");
     defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", root);
     try env.put("XDG_CONFIG_HOME", root);
     const project = try std.fs.path.join(arena, &.{ root, "project" });
     try std.Io.Dir.cwd().createDir(io, project, .default_dir);
@@ -1012,6 +1026,7 @@ test "children use the validated inherited list without a registry" {
     const root = try test_tmp.make(arena, io, "m8-inherited-dirs");
     defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
     var parent: std.process.Environ.Map = .init(arena);
+    try parent.put("HOME", root);
     try parent.put("XDG_CONFIG_HOME", root);
     const trusted = try std.fs.path.join(arena, &.{ root, "trusted" });
     const untrusted = try std.fs.path.join(arena, &.{ root, "untrusted" });
@@ -1040,7 +1055,12 @@ test "children use the validated inherited list without a registry" {
     // A normal invocation still validates, rather than trusting the input list.
     try parent.put("XDG_CONFIG_HOME", "/dev/null");
     try parent.put(dirs_var, untrusted);
-    try testing.expectError(error.NotDir, discover(arena, io, &parent));
+    if (build_options.xdg)
+        try testing.expectError(error.NotDir, discover(arena, io, &parent))
+    else {
+        const cleaned = try discover(arena, io, &parent);
+        try testing.expectEqual(@as(usize, 0), cleaned.roots.len);
+    }
 }
 
 test "a mob directory owns state placement while definitions overlay independently" {
@@ -1211,11 +1231,13 @@ test "provider filename selects a whole entry, without merging fields" {
     const t = try Tree.init(arena, &threaded, "m8-provider-files");
     defer t.deinit(arena);
     const near = try t.join(arena, "project");
-    const user = try t.join(arena, "m8-st8");
+    const user_rel = if (build_options.xdg) std.fs.path.basename(build_options.user_config_subpath) else build_options.user_config_subpath;
+    const user = try t.join(arena, user_rel);
+    try t.write(arena, try std.fs.path.join(arena, &.{ user_rel, "core/providers/local.json" }), "{\"cmd\":[\"far\"],\"url\":\"secret\"}");
+    try t.write(arena, try std.fs.path.join(arena, &.{ user_rel, "core/providers/other.json" }), "{\"cmd\":[\"other\"]}");
     try t.write(arena, "project/core/providers/local.json", "{\"cmd\":[\"near\"]}");
-    try t.write(arena, "m8-st8/core/providers/local.json", "{\"cmd\":[\"far\"],\"url\":\"secret\"}");
-    try t.write(arena, "m8-st8/core/providers/other.json", "{\"cmd\":[\"other\"]}");
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", t.root);
     try env.put("XDG_CONFIG_HOME", t.root);
     try env.put("M8_CALL_ID", "fixture");
     try env.put(dirs_var, try std.mem.join(arena, ":", &.{ near, user }));
@@ -1248,16 +1270,24 @@ test "discovery selects at most one project and resolves the data home explicitl
     defer a.deinit();
     const arena = a.allocator();
     var env: std.process.Environ.Map = .init(arena);
-    try env.put("HOME", "/home/test");
+    const project_name = build_options.project_config_dir_name;
+    const user = try std.fs.path.resolve(arena, &.{ "/home/test", build_options.user_config_subpath });
+    const near = try std.fmt.allocPrint(arena, "/near/{s}", .{project_name});
+    const far = try std.fmt.allocPrint(arena, "/far/{s}", .{project_name});
     try env.put("M8_CALL_ID", "fixture");
-    try env.put(dirs_var, "/near/.m8-st8:/far/.m8-st8:/home/test/.config/m8-st8:/etc/m8-st8");
+    try env.put("HOME", "/home/test");
+    try env.put(dirs_var, try std.mem.join(arena, ":", &.{ near, far, user, system_dir }));
     var dirs = try discover(arena, threaded.io(), &env);
     try testing.expectEqual(@as(usize, 3), dirs.roots.len);
-    try testing.expectEqualStrings("/near/.m8-st8", dirs.roots[0]);
-    try testing.expectEqualStrings("/home/test/.local/share/m8-st8", dirs.data_root.?);
+    try testing.expectEqualStrings(near, dirs.roots[0]);
+    try testing.expectEqualStrings(try std.fs.path.resolve(arena, &.{ "/home/test", build_options.user_data_subpath }), dirs.data_root.?);
     try env.put("XDG_DATA_HOME", "/data");
     dirs = try discover(arena, threaded.io(), &env);
-    try testing.expectEqualStrings("/data/m8-st8", dirs.data_root.?);
+    const expected_data = if (build_options.xdg)
+        try std.fs.path.resolve(arena, &.{ "/data", std.fs.path.basename(build_options.user_data_subpath) })
+    else
+        try std.fs.path.resolve(arena, &.{ "/home/test", build_options.user_data_subpath });
+    try testing.expectEqualStrings(expected_data, dirs.data_root.?);
 }
 
 test "child storage layer identity survives a narrowed HOME and XDG environment" {
@@ -1271,10 +1301,10 @@ test "child storage layer identity survives a narrowed HOME and XDG environment"
     var env: std.process.Environ.Map = .init(arena);
     try env.put("HOME", t.root);
     try env.put("M8_CALL_ID", "fixture");
-    const user = try t.join(arena, ".config/m8-st8");
+    const user = try t.join(arena, build_options.user_config_subpath);
     const project = try t.join(arena, "project");
     try env.put(dirs_var, try std.mem.join(arena, ":", &.{ project, user, system_dir }));
-    try t.write(arena, ".config/m8-st8/mobs/team/agent.md", "user definition");
+    try t.write(arena, try std.fs.path.join(arena, &.{ build_options.user_config_subpath, "mobs/team/agent.md" }), "user definition");
     const parent = try discover(arena, t.io, &env);
     try inherit(arena, parent, &env);
     try env.put("HOME", try t.join(arena, "project/mobs/other/.mob-space"));
@@ -1285,4 +1315,62 @@ test "child storage layer identity survives a narrowed HOME and XDG environment"
     try testing.expectEqualStrings(parent.user_root.?, child.user_root.?);
     try testing.expectEqualStrings(parent.data_root.?, child.data_root.?);
     try testing.expectEqualStrings(try filePath(arena, t.io, parent, "team/agent/+"), try filePath(arena, t.io, child, "team/agent/+"));
+}
+
+test "home locations honor build layout and only absolute environment roots" {
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    try testing.expect((try userDir(arena, &env)) == null);
+    try env.put("HOME", "relative");
+    try env.put("XDG_CONFIG_HOME", "relative");
+    try testing.expect((try userDir(arena, &env)) == null);
+    try env.put("HOME", "/home/person");
+    const config_home = try std.fs.path.resolve(arena, &.{ "/home/person", build_options.user_config_subpath });
+    try testing.expectEqualStrings(config_home, (try userDir(arena, &env)).?);
+    try env.put("XDG_CONFIG_HOME", "");
+    try testing.expectEqualStrings(config_home, (try userDir(arena, &env)).?);
+    try env.put("XDG_CONFIG_HOME", "/config");
+    const config_xdg = try std.fs.path.resolve(arena, &.{ "/config", std.fs.path.basename(build_options.user_config_subpath) });
+    try testing.expectEqualStrings(if (build_options.xdg) config_xdg else config_home, (try userDir(arena, &env)).?);
+    // A non-default suffix proves XDG does not keep a separate built-in name.
+    try testing.expectEqualStrings(if (build_options.xdg) "/config/custom" else "/home/person/.settings/custom", (try homeDir(arena, &env, "XDG_CONFIG_HOME", ".settings/custom")).?);
+    try env.put("XDG_DATA_HOME", "/data");
+    const data_home = try std.fs.path.resolve(arena, &.{ "/home/person", build_options.user_data_subpath });
+    const data_xdg = try std.fs.path.resolve(arena, &.{ "/data", std.fs.path.basename(build_options.user_data_subpath) });
+    try testing.expectEqualStrings(if (build_options.xdg) data_xdg else data_home, (try homeDir(arena, &env, "XDG_DATA_HOME", build_options.user_data_subpath)).?);
+    try env.put("XDG_DATA_HOME", "relative");
+    try testing.expectEqualStrings(data_home, (try homeDir(arena, &env, "XDG_DATA_HOME", build_options.user_data_subpath)).?);
+}
+
+test "home locations use configured subpaths and XDG leaf names" {
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    const cases = [_]struct { xdg: []const u8, path: []const u8 }{
+        .{ .xdg = "XDG_CONFIG_HOME", .path = build_options.user_config_subpath },
+        .{ .xdg = "XDG_DATA_HOME", .path = build_options.user_data_subpath },
+    };
+    for (cases) |case| {
+        try testing.expect((try homeDir(arena, &env, case.xdg, case.path)) == null);
+        try env.put("HOME", "/home/person");
+        const fallback = try std.fs.path.join(arena, &.{ "/home/person", case.path });
+        try testing.expectEqualStrings(fallback, (try homeDir(arena, &env, case.xdg, case.path)).?);
+        for ([_][]const u8{ "", "relative/root" }) |invalid| {
+            try env.put(case.xdg, invalid);
+            try testing.expectEqualStrings(fallback, (try homeDir(arena, &env, case.xdg, case.path)).?);
+        }
+        try env.put(case.xdg, "/xdg/root");
+        const expected = if (build_options.xdg)
+            try std.fs.path.join(arena, &.{ "/xdg/root", std.fs.path.basename(case.path) })
+        else
+            fallback;
+        try testing.expectEqualStrings(expected, (try homeDir(arena, &env, case.xdg, case.path)).?);
+        _ = env.swapRemove("HOME");
+        if (!build_options.xdg)
+            try testing.expect((try homeDir(arena, &env, case.xdg, case.path)) == null);
+        _ = env.swapRemove(case.xdg);
+    }
 }

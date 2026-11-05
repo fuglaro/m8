@@ -384,8 +384,8 @@ hash is the seed the world is built from, so "hello" and
 "hello!" are two different games.
 
 ```
-.m8-st8/core/Z-Machine/       nearest first, like everything
-~/.config/m8-st8/core/Z-Machine/
+.m8st8/core/Z-Machine/       nearest first, like everything
+~/.config/m8st8/core/Z-Machine/
 ```
 
 m8 ships with no story files: it plays whichever are there,
@@ -529,7 +529,7 @@ brew install jundot/omlx/omlx --with-custom-kernel --with-grammar
 
 ### Groq setup
 
-Copy `.m8-st8/core/providers/groq.json` and its parent
+Copy `.m8st8/core/providers/groq.json` and its parent
 `openai-responses.json` into your config's `core/providers/`.
 
 * Put your Groq API key in `~/.config/groq/api-key`, the location read by
@@ -735,7 +735,7 @@ no live-timing guarantee is made.
 [The Anthropic stats fragment](examples/stats-anthropic.json) is self-contained:
 its inline POSIX awk formatter handles whole-response and streaming usage,
 retaining counts across events. The existing
-[Codex configuration](../.m8-st8/core/providers/codex.json) shows OpenAI usage.
+[Codex configuration](../.m8st8/core/providers/codex.json) shows OpenAI usage.
 Neither requires an installed helper script.
 
 ### Watching stats

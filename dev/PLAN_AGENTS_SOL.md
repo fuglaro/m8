@@ -108,7 +108,7 @@ No special subagent subsystem is needed.
 complications.
 
 If a `no-writes` shield wraps the outer `m8 query` command, it can also prevent
-that command from writing its child turns and moving its chat under `.m8-st8`.
+that command from writing its child turns and moving its chat under `.m8st8`.
 Persistent job history and a no-write outer wrapper are therefore in tension.
 
 The cleaner distinction is:
@@ -507,7 +507,7 @@ The first experiment is successful when:
 - The delegation and returned answer are present in Devyn's ledger.
 - The child's detailed work is present in its own immutable chat history.
 - No mutable handoff summary is needed to resume the job.
-- Scout cannot edit repository files, `.git`, or `.m8-st8` through its tools.
+- Scout cannot edit repository files, `.git`, or `.m8st8` through its tools.
 - The child provider remains reachable through the intended delegation path.
 - A failed child call is recorded as a failure rather than hidden by a summary.
 - Removing the experiment means deleting ordinary agent/tool definitions, not

@@ -29,11 +29,16 @@ pub fn build(b: *std.Build) void {
         "no-curl-dep",
         "Use Zig's stdlib HTTP client instead of requiring curl at runtime",
     ) orelse false;
-    const system_config = b.option(
-        []const u8,
-        "system-config-dir",
-        "System config directory (default: /etc/m8-st8)",
-    ) orelse "/etc/m8-st8";
+    const layout = Layout{
+        .system_config_dir = b.option([]const u8, "system-config-dir", "System config directory (default: /etc/m8st8)") orelse "/etc/m8st8",
+        .project_config_dir_name = b.option([]const u8, "project-config-dir-name", "Project config directory name (default: .m8st8)") orelse ".m8st8",
+        .user_config_subpath = b.option([]const u8, "user-config-subpath", "HOME-relative config path (default: .config/m8st8)") orelse ".config/m8st8",
+        .user_data_subpath = b.option([]const u8, "user-data-subpath", "HOME-relative data path (default: .local/share/m8st8)") orelse ".local/share/m8st8",
+        .xdg = b.option(bool, "xdg", "Honor XDG_CONFIG_HOME and XDG_DATA_HOME (default: true)") orelse true,
+    };
+    validateSubpath("project-config-dir-name", layout.project_config_dir_name, true);
+    validateSubpath("user-config-subpath", layout.user_config_subpath, false);
+    validateSubpath("user-data-subpath", layout.user_data_subpath, false);
     const formats = wireFormats(b, small);
     const every = commands(b);
     const said_split = b.option(
@@ -52,7 +57,7 @@ pub fn build(b: *std.Build) void {
 
     // The launcher: every command but the ones named apart, reached by
     // calling it.
-    const exe = command(b, target, optimize, small, "m8", "src/main.zig", "", every, no_curl_dep, formats, split, system_config);
+    const exe = command(b, target, optimize, small, "m8", "src/main.zig", "", every, no_curl_dep, formats, split, layout);
     b.getInstallStep().dependOn(install(b, target, exe, small));
 
     const run = b.addRunArtifact(exe);
@@ -64,7 +69,7 @@ pub fn build(b: *std.Build) void {
     var apart = std.mem.tokenizeAny(u8, split, ", ");
     while (apart.next()) |name| {
         if (!among(every, name)) std.process.fatal("-Dsplit: no command named '{s}'", .{name});
-        const leaf = command(b, target, optimize, small, b.fmt("m8-{s}", .{name}), "src/leaf.zig", name, every, no_curl_dep, formats, split, system_config);
+        const leaf = command(b, target, optimize, small, b.fmt("m8-{s}", .{name}), "src/leaf.zig", name, every, no_curl_dep, formats, split, layout);
         b.getInstallStep().dependOn(install(b, target, leaf, small));
     }
 
@@ -77,8 +82,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     // The tests are of the sources, so they are handed every command.
-    tests.root_module.addOptions("build_options", options(b, "", every, no_curl_dep, formats, "", system_config));
-    const test_launcher = command(b, target, optimize, small, "m8-test-launcher", "src/main.zig", "", every, no_curl_dep, formats, "", system_config);
+    tests.root_module.addOptions("build_options", options(b, "", every, no_curl_dep, formats, "", layout));
+    const test_launcher = command(b, target, optimize, small, "m8-test-launcher", "src/main.zig", "", every, no_curl_dep, formats, "", layout);
     const test_options = b.addOptions();
     test_options.addOptionPath("launcher", test_launcher.getEmittedBin());
     tests.root_module.addOptions("test_options", test_options);
@@ -112,7 +117,7 @@ fn command(
     no_curl_dep: bool,
     formats: Formats,
     split: []const u8,
-    system_config_dir: []const u8,
+    layout: Layout,
 ) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = name,
@@ -124,7 +129,7 @@ fn command(
             .strip = if (small) true else null,
         }),
     });
-    exe.root_module.addOptions("build_options", options(b, which, every, no_curl_dep, formats, split, system_config_dir));
+    exe.root_module.addOptions("build_options", options(b, which, every, no_curl_dep, formats, split, layout));
     return exe;
 }
 
@@ -159,7 +164,7 @@ fn options(
     no_curl_dep: bool,
     formats: Formats,
     split: []const u8,
-    system_config_dir: []const u8,
+    layout: Layout,
 ) *std.Build.Step.Options {
     const o = b.addOptions();
     o.addOption([]const u8, "command", which);
@@ -169,7 +174,9 @@ fn options(
     o.addOption(bool, "format_openai_completions", formats.openai_completions);
     o.addOption(bool, "format_anthropic_messages", formats.anthropic_messages);
     o.addOption(bool, "format_openai_responses", formats.openai_responses);
-    o.addOption([]const u8, "system_config_dir", system_config_dir);
+    inline for (std.meta.fields(Layout)) |field| {
+        o.addOption(field.type, field.name, @field(layout, field.name));
+    }
     return o;
 }
 
@@ -242,4 +249,28 @@ fn among(names: []const u8, name: []const u8) bool {
     var it = std.mem.tokenizeScalar(u8, names, ',');
     while (it.next()) |one| if (std.mem.eql(u8, one, name)) return true;
     return false;
+}
+
+const Layout = struct {
+    system_config_dir: []const u8,
+    project_config_dir_name: []const u8,
+    user_config_subpath: []const u8,
+    user_data_subpath: []const u8,
+    xdg: bool,
+};
+
+/// Home subpaths cannot escape HOME; the project name is one component.
+fn validateSubpath(option: []const u8, path: []const u8, single: bool) void {
+    if (path.len == 0 or std.fs.path.isAbsolute(path) or
+        std.mem.indexOfAny(u8, path, "\\:\x00") != null or path[path.len - 1] == '/')
+        std.process.fatal("-D{s}: expected a relative directory path", .{option});
+    var parts = std.mem.splitScalar(u8, path, '/');
+    var count: usize = 0;
+    while (parts.next()) |part| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, ".."))
+            std.process.fatal("-D{s}: expected normal directory components", .{option});
+        count += 1;
+    }
+    if (single and count != 1)
+        std.process.fatal("-D{s}: expected one directory name", .{option});
 }

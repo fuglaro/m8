@@ -2,11 +2,17 @@
 
 There are three layers, ordered project → user → system:
 
-* The **nearest** `.m8-st8/` from the working directory upward. It participates
+* The **nearest** `.m8st8/` from the working directory upward. It participates
   only when registered with `m8 register`; ancestor projects are not additional
   overlay layers. `m8 register -l` lists candidates and their trust status.
-* `$XDG_CONFIG_HOME/m8-st8/`, defaulting to `~/.config/m8-st8/`.
-* `/etc/m8-st8/`, built in at compile time (configurable with `-Dsystem-config-dir` at build time).
+* `$XDG_CONFIG_HOME/m8st8/`, defaulting to `~/.config/m8st8/`.
+* `/etc/m8st8/`, built in at compile time (configurable with `-Dsystem-config-dir` at build time).
+
+Build-time path defaults and overrides are documented in [Building](building.md#config-and-data-paths):
+`-Dproject-config-dir-name`, `-Duser-config-subpath`, `-Duser-data-subpath`, and
+`-Dxdg=false` to disable XDG path handling. With XDG enabled, the path suffix
+under each XDG home is the basename of its corresponding configured subpath.
+The `M8_ST8_*` environment variable names remain unchanged.
 
 Registration is machine-local and records canonical paths in the user's
 private config registry. A cloned project does not become trusted merely by
@@ -100,7 +106,7 @@ it starts a separate home for those conversations; it does not move or resume
 state from a higher layer.
 
 ```
-.m8-st8/
+.m8st8/
   core/
     providers/local.json
     config.json
@@ -178,16 +184,16 @@ an agent is a subagent, running inside that tool's shields.
 ## State and workspace locations
 
 Project mobs keep writable state inside their project mob directory. User and
-system mobs keep it under `$XDG_DATA_HOME/m8-st8/`, defaulting to
-`~/.local/share/m8-st8/`:
+system mobs keep it under `$XDG_DATA_HOME/m8st8/`, defaulting to
+`~/.local/share/m8st8/`:
 
 ```
-<project>/.m8-st8/mobs/demo/.chats/
-<project>/.m8-st8/mobs/demo/.mob-space/
-<data>/m8-st8/user/mobs/demo/.chats/
-<data>/m8-st8/user/mobs/demo/.mob-space/
-<data>/m8-st8/system/mobs/demo/.chats/
-<data>/m8-st8/system/mobs/demo/.mob-space/
+<project>/.m8st8/mobs/demo/.chats/
+<project>/.m8st8/mobs/demo/.mob-space/
+<data>/m8st8/user/mobs/demo/.chats/
+<data>/m8st8/user/mobs/demo/.mob-space/
+<data>/m8st8/system/mobs/demo/.chats/
+<data>/m8st8/system/mobs/demo/.mob-space/
 ```
 
 Here `<data>` is `XDG_DATA_HOME` or `~/.local/share`. The nearest mob directory
@@ -203,7 +209,7 @@ Tools and provider stages receive:
 * `TMPDIR`: the pre-created, persistent sibling `.mob-space/` workspace.
 
 Nothing automatically deletes the workspace. Ignore generated project state
-with `mobs/*/.chats/` and `mobs/*/.mob-space/` in `.m8-st8/.gitignore`.
+with `mobs/*/.chats/` and `mobs/*/.mob-space/` in `.m8st8/.gitignore`.
 
 ## Turns and chats
 
@@ -261,7 +267,7 @@ fallback for a bare model. Addressed runs are made with `say`; read-only model
 references can be composed with `say --no-send`.
 
 ```
-.m8-st8/
+.m8st8/
   mobs/local/Ternary-Bonsai-8B-mlx-2bit.md   :local/Ternary-Bonsai-8B-mlx-2bit
   mobs/demo/tiny.md                               :demo/tiny
 ```
@@ -294,9 +300,9 @@ later in the ledger than the agent it took over from.
 What m8 itself reads:
 
 ```
-XDG_CONFIG_HOME   your own config, as m8-st8 under it
+XDG_CONFIG_HOME   your own config, as m8st8 under it
 HOME              that, when XDG_CONFIG_HOME says nothing:
-                  ~/.config/m8-st8
+                  ~/.config/m8st8
 PATH              where a provider or tool named as a bare
                   word is looked for, and where m8 finds itself
 TMPDIR            the selected mob's persistent .mob-space workspace
@@ -312,7 +318,7 @@ M8_VERBOSITY      1 under -v, 2 under -vv; a tool is handed
                   as much without being asked
 M8_ST8_DIRS       validated project/user/system roots, : between
 M8_ST8_USER_ROOT  the user config root associated with that list
-M8_ST8_DATA_ROOT  the resolved XDG data root, including /m8-st8
+M8_ST8_DATA_ROOT  the resolved XDG data root, including /m8st8
 ```
 
 And what a provider's commands are handed as well:

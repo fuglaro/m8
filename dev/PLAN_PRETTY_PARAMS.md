@@ -84,8 +84,8 @@ The decoded default is `**/*.zig`.
   highlighting behavior; change only what the new syntax actually requires.
 - Tests and embedded declarations throughout `src/`, plus docs, examples and
   other authored agent definitions: audit all declaration producers/consumers.
-- `.m8-st8/mobs/`: migrate live tool definitions, particularly
-  `.m8-st8/mobs/shared/toolbox/*.md`, and inspect every other mob subtree too.
+- `.m8st8/mobs/`: migrate live tool definitions, particularly
+  `.m8st8/mobs/shared/toolbox/*.md`, and inspect every other mob subtree too.
   These hidden runtime files need an explicit search; ordinary recursive globs
   may skip them. Do not assume a tracked-file diff covers this migration.
 
@@ -129,7 +129,7 @@ bullet, backtick span, command, enum value, or description in the repository.
 - [x] Update `docs/language.md` in both record spellings, documenting extras
       inside bold, whitespace-free names, and the escape rules.
 - [x] Migrate other docs/examples and authored definitions found in the inventory.
-- [x] Migrate tool parameter declarations throughout `.m8-st8/mobs/`, including
+- [x] Migrate tool parameter declarations throughout `.m8st8/mobs/`, including
       shared toolbox tools used by `crew/devyn` and `cody`.
 - [x] Review each changed live file; preserve descriptions, command bodies,
       schema extras, and required/optional semantics.

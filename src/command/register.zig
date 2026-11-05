@@ -13,15 +13,15 @@ pub const command: api.Command = .{
 
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
-    try w.writeAll(
+    try w.print(
         \\  m8 register [-l]
         \\
-        \\Registers existing .m8-st8 directories from the current directory
+        \\Registers existing {s} directories from the current directory
         \\upward. Registration applies to the canonical directory path.
         \\-l lists candidates and marks those already registered without
         \\changing the registry.
         \\
-    );
+    , .{config.dir_name});
 }
 
 fn run(ctx: Ctx) !u8 {

@@ -299,7 +299,7 @@ A shell wrapper is not automatically a sandbox. Kernel restrictions apply to
 children too, so spawning another program cannot escape them.
 
 Definitions are executable configuration. Read a config directory before
-registering it with `m8 register`; merely finding `.m8-st8` in a checkout does
+registering it with `m8 register`; merely finding `.m8st8` in a checkout does
 not make it trusted. Registration is not a human-only gate—an agent with command
 permissions may run it. Cross-mob document references are not allowed; copy
 shared definitions into the consuming mob.

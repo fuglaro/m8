@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const build_options = @import("build_options");
 const config = @import("config.zig");
 
 pub const template = @embedFile("core/mac-sandbox.sb");
@@ -265,12 +266,13 @@ test "config rules protect home and registered ancestors, not unregistered confi
     const root = try scratch(arena, io, "m8-config-protection");
     defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
     var env: std.process.Environ.Map = .init(arena);
+    try env.put("HOME", root);
     try env.put("XDG_CONFIG_HOME", root);
     const user_config = (try config.userDir(arena, &env)).?;
     _ = try std.Io.Dir.cwd().createDirPathStatus(io, user_config, .fromMode(0o700));
-    const st8 = try std.fs.path.join(arena, &.{ root, "st8", ".m8-st8" });
+    const st8 = try std.fs.path.join(arena, &.{ root, "st8", build_options.project_config_dir_name });
     const cwd = try std.fs.path.join(arena, &.{ root, "st8", "nested" });
-    const untrusted = try std.fs.path.join(arena, &.{ cwd, ".m8-st8" });
+    const untrusted = try std.fs.path.join(arena, &.{ cwd, ".m8st8" });
     const tmp = try std.fs.path.join(arena, &.{ st8, "mobs", "team", ".mob-space" });
     try std.Io.Dir.cwd().createDirPath(io, tmp);
     try std.Io.Dir.cwd().createDirPath(io, untrusted);
@@ -325,7 +327,8 @@ test "no-edit-m8-st8 retains deny for a missing HOME-derived config path" {
     try env.put("HOME", fake_home);
 
     const rules = try injectConfigDenies(arena, io, &env, root, config_deny_placeholder, &.{"no-edit-m8-st8"});
-    const expected = try std.fmt.allocPrint(arena, "(deny file-write* (subpath \"{s}/.config/m8-st8\"))", .{fake_home});
+    const expected_path = try std.fs.path.join(arena, &.{ fake_home, build_options.user_config_subpath });
+    const expected = try std.fmt.allocPrint(arena, "(deny file-write* (subpath \"{s}\"))", .{expected_path});
     try testing.expect(std.mem.indexOf(u8, rules, expected) != null);
     try testing.expect(std.mem.indexOf(u8, rules, "(allow") == null);
     try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, fake_home, .{}));
@@ -468,15 +471,15 @@ test "no-edit-git resolves nearest entries and falls back upward" {
 }
 
 /// The broad pair the two permanent rules are written against.
-const broad_deny = "(deny file-write* (regex #\"(^|/)\\.?m8-st8($|/)\"))";
-const broad_allow = "(allow file-write* (regex #\"(^|/)\\.?m8-st8($|/)\"))";
+const broad_deny = "(deny file-write* (regex #\"(^|/)\\.?m8st8($|/)\"))";
+const broad_allow = "(allow file-write* (regex #\"(^|/)\\.?m8st8($|/)\"))";
 
 test "config protection uses concrete paths rather than name patterns" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
     const out = try res(arena, &.{"no-edit-m8-st8"});
-    try testing.expect(std.mem.indexOf(u8, out, "(regex #\"(^|/)\\.?m8-st8") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "(regex #\"(^|/)\\.?m8st8") == null);
     try testing.expect(std.mem.indexOf(u8, out, broad_allow) == null);
 }
 
@@ -551,11 +554,11 @@ test "no-edit-m8-st8 leaves an unregistered config writable" {
     defer testing.allocator.free(dir);
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
 
-    const core = try std.fs.path.join(testing.allocator, &.{ dir, ".m8-st8", "core" });
+    const core = try std.fs.path.join(testing.allocator, &.{ dir, ".m8st8", "core" });
     defer testing.allocator.free(core);
     try std.Io.Dir.cwd().createDirPath(io, core);
 
-    const write = "echo changed > .m8-st8/core/profile";
+    const write = "echo changed > .m8st8/core/profile";
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{}, write));
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, write));
 }
@@ -674,8 +677,8 @@ test "unregistered config names have no name-based sandbox rule" {
     // Unregistered config-looking paths are ordinary paths. Trust is
     // path-based and only registered existing directories are protected.
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p staging && echo x > staging/evil.md"));
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mv staging .m8-st8"));
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p staging .m8-st8 && mv staging .m8-st8/core"));
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mv staging .m8st8"));
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p staging .m8st8 && mv staging .m8st8/core"));
 }
 
 test "unregistered config paths through symlinks are not name-blocked" {
@@ -690,8 +693,8 @@ test "unregistered config paths through symlinks are not name-blocked" {
     defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
 
     try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p elsewhere"));
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "ln -s elsewhere .m8-st8"));
-    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p .m8-st8 2>/dev/null; ln -s elsewhere .m8-st8/core"));
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "ln -s elsewhere .m8st8"));
+    try testing.expect(try sandboxAllows(testing.allocator, io, dir, &.{"no-edit-m8-st8"}, "mkdir -p .m8st8 2>/dev/null; ln -s elsewhere .m8st8/core"));
 }
 
 test "a restriction leaves ordinary work alone" {

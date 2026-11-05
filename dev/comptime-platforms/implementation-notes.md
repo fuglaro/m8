@@ -5,13 +5,13 @@ This implements the agreed storage/resolution change only. Execution-platform in
 ## Implemented contract
 
 - `core/providers/NAME.json` is one complete provider object. The filename supplies the name; same-name files shadow rather than merge.
-- Discovery selects at most the nearest project `.m8-st8`, plus user and system roots. Project registration remains required. An unregistered nearest project does not expose ancestor project configuration.
+- Discovery selects at most the nearest project `.m8st8`, plus user and system roots. Project registration remains required. An unregistered nearest project does not expose ancestor project configuration.
 - Core resources resolve per file, including `config.json`; absent keys do not fall through.
 - Definitions are `mobs/MOB/AGENT.md`. Mobs are one level; authored agents may nest, but no agent path component may begin with `.` or `_`. Logical `//` introduces a subchat and maps to the reserved `/_/` boundary in generated state.
 - The first `mobs/MOB/` directory owns the whole mob, even when empty. Missing files never fall through to another layer.
 - `config.Dirs` explicitly carries roots, source-layer identity, data home, and optional pinned mob scope. Ledger expansion pins its mob/layer and rejects cross-mob references, including skills and generated lineage. Writes and pointer following validate their scope too.
 - A new command invocation can activate another mob independently; mob scope is not inherited as a global execution restriction.
-- Project state lives in `mobs/MOB/.chats/`; persistent workspace is sibling `.mob-space/`. User/system state lives in `$XDG_DATA_HOME/m8-st8/{user,system}/mobs/MOB/`, defaulting to `~/.local/share/m8-st8/`.
+- Project state lives in `mobs/MOB/.chats/`; persistent workspace is sibling `.mob-space/`. User/system state lives in `$XDG_DATA_HOME/m8st8/{user,system}/mobs/MOB/`, defaulting to `~/.local/share/m8st8/`.
 - Explicit addresses use `:MOB/AGENT`. Agent/subchat tagging, side questions, reset, fresh starts, following, immutable turns, snips, and incremental keeping remain. Global/main chat selection and `@` addresses are removed; bare `m8` shows help.
 - Stateless model references remain available. Stored model-directed conversations retain their explicit mob owner even when their lineage no longer reaches an authored definition; they never fall back to global storage.
 
