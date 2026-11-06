@@ -1,0 +1,10 @@
+{
+  "parent": "openai-completions",
+  "url": "https://openrouter.ai/api/v1/chat/completions",
+  "models_url": "https://openrouter.ai/api/v1/models",
+  "header_Authorization": [
+    "sh",
+    "-c",
+    "key=$(cat \"$HOME/.config/openrouter/api-key\") || exit; [ -n \"$key\" ] && printf 'Bearer %s\\n' \"$key\""
+  ]
+}
