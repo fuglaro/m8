@@ -1,0 +1,6 @@
+{
+  "parent": "openai-completions",
+  "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+  "models_url": "https://generativelanguage.googleapis.com/v1beta/openai/models",
+  "header_Authorization": ["sh", "-c", "key=$(cat \"$HOME/.config/google/api-key\") || exit; [ -n \"$key\" ] && printf 'Bearer %s\\n' \"$key\""]
+}

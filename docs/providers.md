@@ -244,11 +244,19 @@ A provider may name another provider as its `parent`:
   * Parent names resolve against those selected files.
 * `parent` is loader metadata and never reaches `M8_PROVIDER_*`.
 
-The repository's `openai-responses.json` holds the shared transport, encoder,
-parser, stats, inline upload and model-list command for `local-omlx.json` and `codex.json`.
+The repository's `openai-common.json` holds the shared transport, stats formatter,
+inline upload and model-list command. Both `openai-responses.json` and
+`openai-completions.json` inherit it, adding their encoder, parser, request
+parameter defaults and usage selectors. The formatter accepts either API's token
+field names; Completions requests `stream_options.include_usage` for streaming
+stats. Providers may omit cached or reasoning token counts.
+
+`local-omlx.json` and `codex.json` inherit Responses; `google.json` inherits
+Completions. The shared inline uploader verifies the file's hash before emitting
+base64 data; supported attachment types still depend on the encoder and endpoint.
 The model-list command accepts `id` or `slug` and runs only when `models_url`
 is set, so the base itself emits no models.
-Copy the parent file along with a provider that inherits it.
+Copy the full parent chain along with a provider that inherits it.
 
 ## Request parameter defaults
 

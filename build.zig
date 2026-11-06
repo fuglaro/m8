@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
     const said_small = b.option(
         bool,
         "small",
-        "Build ReleaseSmall artifacts with debug symbols omitted; -Dformats then defaults to openai-responses and -Dsplit to cast,toy-provider",
+        "Build ReleaseSmall artifacts with debug symbols omitted; -Dformats then defaults to openai-responses,openai-completions and -Dsplit to cast,toy-provider",
     ) orelse false;
     const minimal = core or said_minimal;
     const small = minimal or said_small;
@@ -188,15 +188,14 @@ const Formats = struct {
     openai_responses: bool = false,
 };
 
-/// A small build that names none carries `openai-responses` alone, the one
-/// most providers answer in.
+/// A small build that names none carries Responses and Chat Completions.
 fn wireFormats(b: *std.Build, small: bool) Formats {
     const said = b.option(
         []const u8,
         "formats",
-        "Wire formats to build in, comma-separated (default: all, or openai-responses with -Dsmall; m8 is always included)",
+        "Wire formats to build in, comma-separated (default: all, or openai-responses,openai-completions with -Dsmall; m8 is always included)",
     ) orelse return if (small)
-        .{ .openai_responses = true }
+        .{ .openai_responses = true, .openai_completions = true }
     else
         .{ .openai_completions = true, .anthropic_messages = true, .openai_responses = true };
 

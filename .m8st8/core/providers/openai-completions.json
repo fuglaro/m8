@@ -1,0 +1,14 @@
+{
+  "parent": "openai-common",
+  "encode": ["m8", "encode", "openai-completions"],
+  "parse": ["m8", "parse", "openai-completions"],
+  "param_stream_options": {"include_usage": true},
+  "stats": {
+    "body": [
+      "usage.prompt_tokens",
+      "usage.completion_tokens",
+      "usage.prompt_tokens_details.cached_tokens",
+      "usage.completion_tokens_details.reasoning_tokens"
+    ]
+  }
+}
