@@ -448,6 +448,12 @@ a whole shape — chat completions changes shape, not just
 delivery, when `stream` is set — the one that actually
 arrived is the one that is read.
 
+* Parse errors name the failure, such as `InvalidResponseJson`,
+  `UnknownOutputItem` or `OutputItemIdMismatch`.
+* For wire capture, compose with `tee`:
+  `... | tee response.sse | m8 parse openai-responses`.
+  * Capture may be incomplete if a pipeline stage exits early.
+
 ## Calling
 
 ```bash

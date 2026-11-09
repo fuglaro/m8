@@ -279,7 +279,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             // The ledger as it stands, in the language itself. What a model
             // is sent of it is the provider's to make.
             const request = try codec.m8.codec.encode(arena, records.items, .{});
-            const answered = try provider.run(
+            const answered = provider.run(
                 arena,
                 io,
                 stages,
@@ -287,7 +287,16 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 request,
                 reply.sink(),
                 ctx.err,
-            );
+            ) catch |run_error| {
+                // Parsing can fail after the codec has closed a partial
+                // record. Finish any record still open, then keep exactly
+                // what arrived before propagating the provider failure.
+                try reply.finish();
+                try out.flush();
+                try turn.appendSlice(arena, reply.kept.items);
+                try progress.keep(arena, turn.items);
+                return run_error;
+            };
             try reply.finish();
             try out.flush();
 

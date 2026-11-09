@@ -393,43 +393,194 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
     }
 }
 
-/// Server-sent events. Every event names its own type, and an item is opened,
-/// deltaed and closed — so this reads as a state machine and nothing has to
-/// be inferred from position.
+/// Server-sent events may interleave output items. Only the earliest item
+/// streams to the sink; later items wait until it closes, keeping both tool
+/// arguments and the sink's single open record attached to their own item.
 fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
-    var built: Building = .{ .arena = arena, .sink = sink };
+    var stream: Stream = .{ .arena = arena, .sink = sink };
 
     var line = first;
     while (true) {
         if (std.mem.startsWith(u8, line, "data:")) {
             const payload = std.mem.trim(u8, line["data:".len..], " ");
-            if (std.mem.eql(u8, payload, "[DONE]")) break;
+            if (std.mem.eql(u8, payload, "[DONE]")) {
+                stream.terminal = true;
+                break;
+            }
             if (std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{})) |v| {
-                if (try event(&built, v)) break;
-            } else |_| {}
+                if (try stream.accept(v)) break;
+            } else |_| return error.InvalidResponseJson;
         }
         const raw = (try api.nextLine(arena, r)) orelse break;
         line = std.mem.trimEnd(u8, raw, "\r\n");
     }
-    return built.finish();
+    return stream.finish();
 }
 
-/// One event. True when the response is over.
-fn event(built: *Building, v: std.json.Value) !bool {
-    if (v != .object) return false;
-    const kind = str(v.object.get("type")) orelse return false;
+const Stream = struct {
+    arena: Allocator,
+    sink: api.Sink,
+    items: std.ArrayList(Item) = .empty,
+    calls: std.ArrayList(api.Call) = .empty,
+    next: i64 = 0,
+    reason: []const u8 = "",
+    incomplete: bool = false,
+    terminal: bool = false,
+    refused: bool = false,
 
-    if (std.mem.eql(u8, kind, "response.output_item.added")) {
-        const item = v.object.get("item") orelse return false;
-        if (item != .object) return false;
-        try built.start(item);
-    } else if (std.mem.eql(u8, kind, "response.output_item.done")) {
-        // The finished item carries what the deltas could not: a reasoning
-        // item's `encrypted_content` is only whole once it has stopped.
-        const item = v.object.get("item") orelse return false;
-        if (item == .object) try built.settle(item);
-        try built.stop();
-    } else if (std.mem.eql(u8, kind, "response.output_text.delta")) {
+    const Item = struct {
+        index: i64,
+        id: []const u8,
+        built: Building,
+        waiting: ?*api.Gather = null,
+        closed: bool = false,
+    };
+
+    fn accept(s: *Stream, v: std.json.Value) !bool {
+        if (v != .object) return false;
+        const kind = str(v.object.get("type")) orelse return false;
+        const index = if (v.object.get("output_index")) |value|
+            num(value) orelse return error.InvalidOutputIndex
+        else
+            null;
+        if (index) |n| if (n < 0) return error.InvalidOutputIndex;
+        const item = v.object.get("item");
+        const event_id = str(v.object.get("item_id"));
+        const item_id = if (item != null and item.? == .object) str(item.?.object.get("id")) else null;
+        if (event_id != null and item_id != null and !std.mem.eql(u8, event_id.?, item_id.?))
+            return error.OutputItemIdMismatch;
+        const id = event_id orelse item_id;
+
+        // The final output item carries the content of these notices, even
+        // when a gateway supplies an item only at completion.
+        if (std.mem.eql(u8, kind, "response.output_text.done") or
+            std.mem.eql(u8, kind, "response.content_part.done")) return false;
+
+        const added = std.mem.eql(u8, kind, "response.output_item.added");
+        const done = std.mem.eql(u8, kind, "response.output_item.done");
+        if (added or done) {
+            const n = index orelse return error.MissingOutputIndex;
+            if (n < s.next) return error.EventForClosedOutputItem;
+            if (item == null or item.? != .object) return error.InvalidOutputItem;
+            const known = for (s.items.items) |existing| {
+                if (existing.index == n) break true;
+            } else false;
+            if (added and known) return error.DuplicateOutputItem;
+            if (!known) {
+                for (s.items.items) |existing| {
+                    if (id != null and std.mem.eql(u8, existing.id, id.?))
+                        return error.DuplicateOutputItem;
+                }
+                const waiting = if (n == s.next) null else blk: {
+                    const gather = try s.arena.create(api.Gather);
+                    gather.* = .{ .arena = s.arena };
+                    break :blk gather;
+                };
+                var built: Building = .{
+                    .arena = s.arena,
+                    .sink = if (waiting) |g| g.sink() else s.sink,
+                };
+                try built.start(item.?);
+                try s.items.append(s.arena, .{ .index = n, .id = id orelse "", .built = built, .waiting = waiting });
+            }
+        }
+
+        if (index != null or id != null) {
+            const target = for (s.items.items) |*candidate| {
+                if (if (index) |n| candidate.index == n else std.mem.eql(u8, candidate.id, id.?))
+                    break candidate;
+            } else return error.UnknownOutputItem;
+            if (target.index < s.next or target.closed) return error.EventForClosedOutputItem;
+            if (id) |got| {
+                if (target.id.len == 0) {
+                    for (s.items.items) |existing| {
+                        if (existing.index != target.index and std.mem.eql(u8, existing.id, got))
+                            return error.OutputItemIdMismatch;
+                    }
+                    target.id = got;
+                } else if (!std.mem.eql(u8, target.id, got)) return error.OutputItemIdMismatch;
+            }
+            if (done) {
+                const item_kind = str(item.?.object.get("type")) orelse return error.InvalidOutputItem;
+                if (target.built.kind != .none and !std.mem.eql(u8, item_kind, @tagName(target.built.kind)))
+                    return error.OutputItemTypeMismatch;
+                try target.built.settle(item.?);
+                try target.built.stop();
+                target.closed = true;
+            } else if (!added) try delta(&target.built, v);
+            try s.drain(false);
+            return false;
+        }
+
+        if (std.mem.startsWith(u8, kind, "response.output_") or
+            std.mem.startsWith(u8, kind, "response.function_call_arguments.") or
+            std.mem.startsWith(u8, kind, "response.reasoning_") or
+            std.mem.startsWith(u8, kind, "response.refusal.")) return error.MissingOutputItemIdentity;
+        const response = v.object.get("response") orelse .null;
+        const status = if (response == .object) str(response.object.get("status")) orelse "" else "";
+        if (std.mem.eql(u8, kind, "response.failed") or std.mem.eql(u8, kind, "error") or std.mem.eql(u8, status, "failed")) {
+            s.terminal = true;
+            try s.drain(true);
+            s.calls.clearRetainingCapacity();
+            try fail(s.arena, s.sink, v);
+            return true;
+        }
+        if (std.mem.eql(u8, kind, "response.completed") or std.mem.eql(u8, kind, "response.incomplete")) {
+            s.terminal = true;
+            s.incomplete = std.mem.eql(u8, kind, "response.incomplete") or std.mem.eql(u8, status, "incomplete");
+            if (s.incomplete) s.reason = incompleteOf(response);
+            return true;
+        }
+        return false;
+    }
+
+    /// Only the earliest output slot may own the live sink. Other items
+    /// accumulate records, not wire events, until that slot reaches them.
+    fn drain(s: *Stream, ending: bool) !void {
+        while (true) {
+            var target: ?*Item = null;
+            for (s.items.items) |*candidate| {
+                if (candidate.index < s.next) continue;
+                if (!ending and candidate.index != s.next) continue;
+                if (target == null or candidate.index < target.?.index) target = candidate;
+            }
+            const current = target orelse return;
+            if (current.waiting) |g| {
+                for (g.records.items) |record|
+                    try s.sink.record(record.sigil, record.value, record.content orelse "");
+                if (current.built.shown) {
+                    try s.sink.begin(g.pending, g.value);
+                    try s.sink.text(g.text.items);
+                }
+                current.waiting = null;
+                current.built.sink = s.sink;
+            }
+            if (!current.closed and !ending) return;
+            if (current.built.kind != .none) try current.built.stop();
+            try s.calls.appendSlice(s.arena, current.built.calls.items);
+            s.refused = s.refused or current.built.refused;
+            s.next = std.math.add(i64, current.index, 1) catch return error.InvalidOutputIndex;
+        }
+    }
+
+    fn finish(s: *Stream) !api.Reply {
+        for (s.items.items) |item| {
+            if (!item.closed and item.built.kind == .function_call) s.incomplete = true;
+        }
+        try s.drain(true);
+        if (s.calls.items.len > 0 and !s.terminal) s.incomplete = true;
+        if (s.incomplete and s.reason.len == 0) s.reason = "incomplete";
+        const reason = if (s.refused and s.reason.len == 0) "refusal" else s.reason;
+        try api.stopped(s.arena, s.sink, stops, reason);
+        if (s.incomplete) return error.IncompleteResponse;
+        return .{ .calls = s.calls.items };
+    }
+};
+
+/// A fragment applied directly to the item named by its event.
+fn delta(built: *Building, v: std.json.Value) !void {
+    const kind = str(v.object.get("type")) orelse return;
+    if (std.mem.eql(u8, kind, "response.output_text.delta")) {
         if (str(v.object.get("delta"))) |d| try built.say(.bot, d);
     } else if (std.mem.eql(u8, kind, "response.refusal.delta")) {
         if (str(v.object.get("delta"))) |d| try built.say(.bot, d);
@@ -449,22 +600,14 @@ fn event(built: *Building, v: std.json.Value) !bool {
         if (built.kind == .reasoning) try built.nextPart(built.part);
     } else if (std.mem.eql(u8, kind, "response.function_call_arguments.delta")) {
         if (str(v.object.get("delta"))) |d| try built.args.appendSlice(built.arena, d);
-    } else if (std.mem.eql(u8, kind, "response.completed")) {
-        return true;
-    } else if (std.mem.eql(u8, kind, "response.incomplete")) {
-        // Cut off rather than failed: what was said still happened, and the
-        // ledger keeps it — along with that it was cut off.
-        if (v.object.get("response")) |resp| built.reason = incompleteOf(resp);
-        return true;
-    } else if (std.mem.eql(u8, kind, "response.failed") or std.mem.eql(u8, kind, "error")) {
-        // A refusal, an overload or a bad request arrives here with a 200, so
-        // this is the only thing that would notice it. Saying nothing would
-        // record a turn in which the model simply said nothing.
-        if (built.kind != .none) try built.stop();
-        try fail(built.arena, built.sink, v);
-        return true;
+    } else if (std.mem.eql(u8, kind, "response.function_call_arguments.done")) {
+        if (built.kind == .function_call) {
+            if (str(v.object.get("arguments"))) |arguments| {
+                built.args = .empty;
+                try built.args.appendSlice(built.arena, arguments);
+            }
+        }
     }
-    return false;
 }
 
 /// One JSON object, from a provider that answered all at once.
@@ -474,8 +617,8 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     try body.appendSlice(arena, try r.allocRemaining(arena, .unlimited));
 
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body.items, .{}) catch
-        return error.MalformedResponse;
-    if (v != .object) return error.MalformedResponse;
+        return error.InvalidResponseJson;
+    if (v != .object) return error.InvalidResponseObject;
     if (v.object.get("error")) |e| if (e != .null) {
         try fail(arena, sink, v);
         return .{};
@@ -487,6 +630,7 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
 
     var built: Building = .{ .arena = arena, .sink = sink };
     if (str(v.object.get("status"))) |status| if (std.mem.eql(u8, status, "incomplete")) {
+        built.incomplete = true;
         built.reason = incompleteOf(v);
     };
     const output = v.object.get("output") orelse {
@@ -618,6 +762,7 @@ const Building = struct {
     encrypted: []const u8 = "",
     /// Of the response rather than any item, and only known at its end.
     reason: []const u8 = "",
+    incomplete: bool = false,
     /// The summary part being read, and how many before it became 💭 already.
     part: i64 = 0,
     parts: usize = 0,
@@ -654,9 +799,8 @@ const Building = struct {
         }
     }
 
-    /// What the finished item holds that the deltas did not carry. Reading it
-    /// is additive: nothing already streamed is taken back, and anything that
-    /// only ever arrives whole is picked up here.
+    /// What the finished item holds that the deltas did not carry. Visible
+    /// text is not repeated; completed function arguments replace deltas.
     fn settle(b: *Building, item: std.json.Value) !void {
         switch (b.kind) {
             .message => if (item.object.get("content")) |content| {
@@ -689,9 +833,12 @@ const Building = struct {
                 }
             },
             .function_call => {
-                if (b.args.items.len > 0) return; // already streamed
-                if (str(item.object.get("arguments"))) |a|
-                    try b.args.appendSlice(b.arena, a);
+                // The completed value is authoritative even when only some
+                // of its argument deltas arrived.
+                if (str(item.object.get("arguments"))) |arguments| {
+                    b.args = .empty;
+                    try b.args.appendSlice(b.arena, arguments);
+                }
             },
             .none => {},
         }
@@ -756,13 +903,13 @@ const Building = struct {
         b.shown = false;
     }
 
-    /// A stream that stopped without closing its item still gives up what it
-    /// had: a thought that was cut off is a thought that was cut off, and the
-    /// ledger says so rather than losing it.
+    /// Keep received output and its stop reason before reporting an
+    /// incomplete response to the caller.
     fn finish(b: *Building) !api.Reply {
         if (b.kind != .none) try b.stop();
         const reason = if (b.refused and b.reason.len == 0) "refusal" else b.reason;
         try api.stopped(b.arena, b.sink, stops, reason);
+        if (b.incomplete) return error.IncompleteResponse;
         return .{ .calls = b.calls.items };
     }
 };
@@ -1262,7 +1409,7 @@ test "an incomplete response says why last, in this api's own word" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
     try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
     try testing.expectEqualStrings("Moon", collect.got.records.items[0].content.?);
     try testing.expectEqualStrings("(cut off at max_output_tokens)", collect.got.records.items[1].value);
@@ -1322,10 +1469,9 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    // Cut off rather than failed: what was said still happened, so it is a
-    // reply and not an error — and it says it was cut off, even with no
-    // reason given.
-    _ = try parse(arena, &r, collect.sink());
+    // Received thoughts and their signature survive an incomplete response,
+    // but the parser fails so no tool round can start from it.
+    try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("working it through", collect.got.records.items[0].value);
     try testing.expect(collect.got.records.items[0].content == null);
@@ -1366,4 +1512,427 @@ test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
     // A file never handed over, for want of an upload, cannot be sent.
     records[2].content = "<a.jpeg";
     try testing.expectError(error.NoUpload, encode(arena, &records, .{ .model = "m" }));
+}
+test "completed function arguments replace partial deltas" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const head =
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"bash","arguments":""}}
+        \\data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{\"command\":"}
+        \\
+    ;
+    const endings = [_][]const u8{
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"bash","arguments":"{\"command\":\"pwd\"}"}}
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+        ,
+        \\data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc_1","arguments":"{\"command\":\"pwd\"}"}
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"bash"}}
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+        ,
+    };
+    for (endings) |ending| {
+        var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", ending }));
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 1), reply.calls.len);
+        try testing.expectEqualStrings("call_1", reply.calls[0].id);
+        try testing.expectEqualStrings("{\"command\":\"pwd\"}", reply.calls[0].arguments);
+    }
+}
+
+test "interleaved tool calls keep their names ids and arguments" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const body =
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_g","call_id":"call_g","name":"grep"}}
+        \\data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_b","call_id":"call_b","name":"bash"}}
+        \\data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_g","delta":"{\"glob\":"}
+        \\data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_b","delta":"{\"command\":"}
+        \\data: {"type":"response.function_call_arguments.delta","item_id":"fc_b","delta":"\"pwd\"}"}
+        \\data: {"type":"response.function_call_arguments.done","output_index":1,"item_id":"fc_b","arguments":"{\"command\":\"pwd\"}"}
+        \\data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_b"}}
+        \\data: {"type":"response.function_call_arguments.delta","item_id":"fc_g","delta":"\"*.svg\"}"}
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_g"}}
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 2), reply.calls.len);
+    try testing.expectEqualStrings("grep", reply.calls[0].name);
+    try testing.expectEqualStrings("call_g", reply.calls[0].id);
+    try testing.expectEqualStrings("{\"glob\":\"*.svg\"}", reply.calls[0].arguments);
+    try testing.expectEqualStrings("bash", reply.calls[1].name);
+    try testing.expectEqualStrings("call_b", reply.calls[1].id);
+    try testing.expectEqualStrings("{\"command\":\"pwd\"}", reply.calls[1].arguments);
+}
+
+test "interleaved messages stream separately in output order" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const body =
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m0"}}
+        \\data: {"type":"response.output_text.delta","output_index":0,"delta":"first "}
+        \\data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"m1"}}
+        \\data: {"type":"response.output_text.delta","output_index":1,"delta":"second"}
+        \\data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"m1"}}
+        \\data: {"type":"response.output_text.delta","output_index":0,"delta":"message"}
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m0"}}
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    _ = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
+    try testing.expectEqualStrings("first message", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings("second", collect.got.records.items[1].content.?);
+}
+
+test "item identity errors cannot mutate another item" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const head =
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m0"}}
+        \\data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"m1"}}
+        \\
+    ;
+    const bad = [_][]const u8{
+        \\data: {"type":"response.output_text.delta","output_index":0,"item_id":"m1","delta":"wrong"}
+        ,
+        \\data: {"type":"response.output_text.delta","output_index":9,"delta":"unknown"}
+        ,
+        \\data: {"type":"response.output_text.delta","item_id":"unknown","delta":"unknown"}
+        ,
+        \\data: {"type":"response.output_text.delta","delta":"unaddressed"}
+        ,
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m2"}}
+        ,
+        \\data: {"type":"response.output_item.added","output_index":2,"item":{"type":"message","id":"m1"}}
+        ,
+        \\data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"m1"}}
+        \\data: {"type":"response.output_text.delta","output_index":1,"delta":"late"}
+        ,
+        \\data: {"type":"response.output_item.added","output_index":2,"item":{"type":"message"}}
+        \\data: {"type":"response.output_text.delta","output_index":2,"item_id":"m1","delta":"wrong"}
+        ,
+        \\data: {"type":"response.output_item.added","item":{"type":"message","id":"m2"}}
+        ,
+        \\data: {"type":"response.output_item.added","output_index":-1,"item":{"type":"message","id":"m2"}}
+        ,
+        \\data: {"type":"response.output_item.added","output_index":2,"item":[]}
+        ,
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m0"}}
+        \\data: {"type":"response.output_text.delta","output_index":0,"delta":"late"}
+        ,
+        \\data: {"type":"response.output_text.delta","output_index":"0","item_id":"m0","delta":"wrong"}
+        ,
+        \\data: {"type":"response.output_text.delta","output_index":-1,"item_id":"m0","delta":"wrong"}
+        ,
+        \\data: {"type":"response.output_item.done","output_index":0,"item_id":"m0","item":{"type":"message","id":"m1"}}
+        ,
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"m0"}}
+        ,
+    };
+    const expected = [_]anyerror{
+        error.OutputItemIdMismatch,
+        error.UnknownOutputItem,
+        error.UnknownOutputItem,
+        error.MissingOutputItemIdentity,
+        error.DuplicateOutputItem,
+        error.DuplicateOutputItem,
+        error.EventForClosedOutputItem,
+        error.OutputItemIdMismatch,
+        error.MissingOutputIndex,
+        error.InvalidOutputIndex,
+        error.InvalidOutputItem,
+        error.EventForClosedOutputItem,
+        error.InvalidOutputIndex,
+        error.InvalidOutputIndex,
+        error.OutputItemIdMismatch,
+        error.OutputItemTypeMismatch,
+    };
+    for (bad, expected) |ending, err| {
+        var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", ending }));
+        var collect: Collect = .{ .arena = arena };
+        try testing.expectError(err, parse(arena, &r, collect.sink()));
+        try testing.expectEqual(@as(usize, 0), collect.seen.items.len);
+    }
+}
+
+test "interleaved items drain separately on EOF and response termination" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const head =
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"r0"}}
+        \\data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"thinking"}
+        \\data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"m1"}}
+        \\data: {"type":"response.output_text.delta","output_index":1,"delta":"answer"}
+        \\data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"m1"}}
+        \\
+    ;
+    const endings = [_][]const u8{
+        "",
+        "data: [DONE]\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n",
+        "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\"}}\n",
+        "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"oops\"}}}\n",
+    };
+    for (endings, 0..) |ending, i| {
+        var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", ending }));
+        var collect: Collect = .{ .arena = arena };
+        if (i == 3) {
+            try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
+        } else _ = try parse(arena, &r, collect.sink());
+        const records = collect.got.records.items;
+        // The interrupted reasoning item keeps its summary and opaque id.
+        try testing.expectEqualStrings("thinking", records[0].value);
+        try testing.expectEqualStrings(api.snip, records[1].value);
+        try testing.expectEqualStrings("answer", records[2].content.?);
+        try testing.expectEqual(@as(usize, if (i >= 3) 4 else 3), records.len);
+    }
+}
+
+test "earliest item streams while later output waits" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var collect: Collect = .{ .arena = arena };
+    var stream: Stream = .{ .arena = arena, .sink = collect.sink() };
+    const events_in = [_][]const u8{
+        \\{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m0"}}
+        ,
+        \\{"type":"response.output_text.delta","output_index":0,"delta":"first"}
+        ,
+        \\{"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"m1"}}
+        ,
+        \\{"type":"response.output_text.delta","output_index":1,"delta":"second"}
+        ,
+        \\{"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"m1"}}
+        ,
+    };
+    for (events_in, 0..) |raw, i| {
+        const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, raw, .{});
+        _ = try stream.accept(v);
+        if (i > 0) try testing.expectEqualStrings("bot:first", collect.seen.items);
+    }
+    const done = try std.json.parseFromSliceLeaky(std.json.Value, arena,
+        \\{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m0"}}
+    , .{});
+    _ = try stream.accept(done);
+    try testing.expectEqualStrings("bot:first\nbot:second", collect.seen.items);
+    try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
+}
+
+test "gateway tool calls precede a completed-only empty message" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const body =
+        \\data: {"type":"response.created","response":{"output":[]}}
+        \\data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"t1","call_id":"t1","name":"list","arguments":""}}
+        \\data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"t1","delta":"{\"path\":\"./scratch/\"}"}
+        \\data: {"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"t2","call_id":"t2","name":"grep","arguments":""}}
+        \\data: {"type":"response.function_call_arguments.delta","output_index":2,"item_id":"t2","delta":"{\"glob\":\"./scratch/**\"}"}
+        \\data: {"type":"response.output_item.added","output_index":3,"item":{"type":"function_call","id":"t3","call_id":"t3","name":"bash","arguments":""}}
+        \\data: {"type":"response.function_call_arguments.delta","output_index":3,"item_id":"t3","delta":"{\"command\":\"pwd\"}"}
+        \\data: {"type":"response.function_call_arguments.done","output_index":1,"item_id":"t1","arguments":"{\"path\":\"./scratch/\"}"}
+        \\data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"t1","arguments":"{\"path\":\"./scratch/\"}"}}
+        \\data: {"type":"response.function_call_arguments.done","output_index":2,"item_id":"t2","arguments":"{\"glob\":\"./scratch/**\"}"}
+        \\data: {"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","id":"t2","arguments":"{\"glob\":\"./scratch/**\"}"}}
+        \\data: {"type":"response.function_call_arguments.done","output_index":3,"item_id":"t3","arguments":"{\"command\":\"pwd\"}"}
+        \\data: {"type":"response.output_item.done","output_index":3,"item":{"type":"function_call","id":"t3","arguments":"{\"command\":\"pwd\"}"}}
+        \\data: {"type":"response.output_text.done","output_index":0,"item_id":"m0","text":""}
+        \\data: {"type":"response.content_part.done","output_index":0,"item_id":"m0","part":{"type":"output_text","text":""}}
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m0","content":[{"type":"output_text","text":""}]}}
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\data: [DONE]
+        \\
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 0), collect.got.records.items.len);
+    try testing.expectEqual(@as(usize, 3), reply.calls.len);
+    const names = [_][]const u8{ "list", "grep", "bash" };
+    const ids = [_][]const u8{ "t1", "t2", "t3" };
+    const args = [_][]const u8{ "{\"path\":\"./scratch/\"}", "{\"glob\":\"./scratch/**\"}", "{\"command\":\"pwd\"}" };
+    for (reply.calls, names, ids, args) |call, name, id, arguments| {
+        try testing.expectEqualStrings(name, call.name);
+        try testing.expectEqualStrings(id, call.id);
+        try testing.expectEqualStrings(arguments, call.arguments);
+    }
+}
+
+test "completed-only output items preserve their content and call identity" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const body =
+        \\data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc1","call_id":"c1","name":"bash","arguments":"{\"command\":\"pwd\"}"}}
+        \\data: {"type":"response.output_text.done","output_index":0,"item_id":"m0","text":"hello"}
+        \\data: {"type":"response.content_part.done","output_index":0,"item_id":"m0","part":{"type":"output_text","text":"hello"}}
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m0","content":[{"type":"output_text","text":"hello"}]}}
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
+    try testing.expectEqualStrings("hello", collect.got.records.items[0].content.?);
+    try testing.expectEqual(@as(usize, 1), reply.calls.len);
+    try testing.expectEqualStrings("bash", reply.calls[0].name);
+    try testing.expectEqualStrings("c1", reply.calls[0].id);
+    try testing.expectEqualStrings("{\"command\":\"pwd\"}", reply.calls[0].arguments);
+}
+
+test "completed event with incomplete status stops before returning tool calls" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const head =
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc1","call_id":"c1","name":"bash","arguments":""}}
+        \\data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc1","delta":"{}"}
+        \\data: {"type":"response.function_call_arguments.done","output_index":0,"item_id":"fc1","arguments":"{}"}
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc1","arguments":"{}"}}
+        \\
+    ;
+    const cases = [_]struct { ending: []const u8, diagnostic: []const u8 }{
+        .{
+            .ending = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"incomplete\",\"usage\":{\"output_tokens\":4096}}}\n",
+            .diagnostic = "(stopped at incomplete)",
+        },
+        .{
+            .ending = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n",
+            .diagnostic = "(cut off at max_output_tokens)",
+        },
+    };
+    for (cases) |case| {
+        var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", case.ending }));
+        var collect: Collect = .{ .arena = arena };
+        try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
+        try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
+        try testing.expectEqualStrings(case.diagnostic, collect.got.records.items[0].value);
+    }
+}
+
+test "a waiting message becomes live without splitting its record" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var collect: Collect = .{ .arena = arena };
+    var stream: Stream = .{ .arena = arena, .sink = collect.sink() };
+    const incoming = [_][]const u8{
+        \\{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m0"}}
+        ,
+        \\{"type":"response.output_text.delta","output_index":0,"delta":"first"}
+        ,
+        \\{"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"m1"}}
+        ,
+        \\{"type":"response.output_text.delta","output_index":1,"delta":"second "}
+        ,
+        \\{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m0"}}
+        ,
+        \\{"type":"response.output_text.delta","output_index":1,"delta":"message"}
+        ,
+        \\{"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"m1"}}
+        ,
+    };
+    for (incoming, 0..) |raw, at| {
+        const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, raw, .{});
+        _ = try stream.accept(v);
+        if (at == 3) try testing.expectEqualStrings("bot:first", collect.seen.items);
+        if (at == 4) try testing.expectEqualStrings("bot:first\nbot:second ", collect.seen.items);
+        if (at == 5) try testing.expectEqualStrings("bot:first\nbot:second message", collect.seen.items);
+    }
+    _ = try stream.finish();
+    try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
+    try testing.expectEqualStrings("second message", collect.got.records.items[1].content.?);
+}
+
+test "waiting reasoning preserves completed and open summary parts" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const body =
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m0"}}
+        \\data: {"type":"response.output_text.delta","output_index":0,"delta":"first"}
+        \\data: {"type":"response.output_item.added","output_index":1,"item":{"type":"reasoning","id":"r1"}}
+        \\data: {"type":"response.reasoning_summary_text.delta","output_index":1,"summary_index":0,"delta":"one"}
+        \\data: {"type":"response.reasoning_summary_part.done","output_index":1,"summary_index":0}
+        \\data: {"type":"response.reasoning_summary_text.delta","output_index":1,"summary_index":1,"delta":"two"}
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m0"}}
+        \\data: {"type":"response.output_item.done","output_index":1,"item":{"type":"reasoning","id":"r1","encrypted_content":"SIGNED"}}
+        \\data: {"type":"response.completed","response":{"status":"completed"}}
+        \\
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    _ = try parse(arena, &r, collect.sink());
+    const records = collect.got.records.items;
+    try testing.expectEqual(@as(usize, 4), records.len);
+    try testing.expectEqualStrings("first", records[0].content.?);
+    try testing.expectEqualStrings("one", records[1].value);
+    try testing.expectEqualStrings("two", records[2].value);
+    try testing.expectEqualStrings(":lock_with_ink_pen:`r1,SIGNED`", records[3].content.?);
+}
+
+test "invalid Responses event JSON is an error rather than a lost fragment" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var r: std.Io.Reader = .fixed("data: {broken}\n\n");
+    var collect: Collect = .{ .arena = arena };
+    try testing.expectError(error.InvalidResponseJson, parse(arena, &r, collect.sink()));
+}
+
+test "only closed calls from a finished Responses stream are returned" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const head =
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc1","call_id":"c1","name":"bash"}}
+        \\data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"command\":\"pwd\"}"}
+        \\
+    ;
+    const close = "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc1\"}}\n";
+    const complete = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n";
+    const cases = [_]struct { ending: []const u8, incomplete: bool, calls: usize }{
+        .{ .ending = "", .incomplete = true, .calls = 0 },
+        .{ .ending = "data: [DONE]\n", .incomplete = true, .calls = 0 },
+        .{ .ending = complete, .incomplete = true, .calls = 0 },
+        .{ .ending = close, .incomplete = true, .calls = 0 },
+        .{ .ending = close ++ "data: [DONE]\n", .incomplete = false, .calls = 1 },
+        .{ .ending = close ++ complete, .incomplete = false, .calls = 1 },
+        .{
+            .ending = close ++ "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"oops\"}}}\n",
+            .incomplete = false,
+            .calls = 0,
+        },
+        .{
+            .ending = close ++ "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"oops\"}}}\n",
+            .incomplete = false,
+            .calls = 0,
+        },
+    };
+    for (cases) |case| {
+        var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", case.ending }));
+        var collect: Collect = .{ .arena = arena };
+        if (case.incomplete) {
+            try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
+            try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[0].value);
+        } else {
+            const reply = try parse(arena, &r, collect.sink());
+            try testing.expectEqual(case.calls, reply.calls.len);
+        }
+    }
 }

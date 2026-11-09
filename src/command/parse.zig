@@ -49,6 +49,10 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\still saying it. Where an api has both a streamed and a whole shape,
         \\the one that actually arrived is the one that is read.
         \\
+        \\Parse errors name the failure, such as InvalidResponseJson or
+        \\OutputItemIdMismatch. For wire capture, use an external tee:
+        \\  ... | tee response.sse | m8 parse openai-responses
+        \\
     );
     try codec.list(w);
 }
@@ -70,8 +74,7 @@ fn run(ctx: Ctx) !u8 {
     var empty: std.Io.Reader = .fixed(&.{});
     const input = ctx.stdin orelse &empty;
 
-    // Written as it is read, so a streamed response reaches whatever is next
-    // in the pipe while the model is still saying it.
+    // Parsing reads upstream input incrementally and writes completed output live.
     var live: Live = .{ .out = ctx.out, .mode = ctx.mode };
     const reply = try c.parse(ctx.arena, input, live.sink());
     try live.finish();
@@ -269,4 +272,90 @@ test "parse provider usage metadata stays off ledger and stderr even with verbos
         try std.testing.expectEqualStrings("* :robot::\n  > Answer\n", invocation.out.written());
         try std.testing.expectEqualStrings("", invocation.err.written());
     }
+}
+
+test "malformed provider JSON propagates InvalidResponseJson without raw capture" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    for ([_][]const u8{ "openai-responses", "openai-completions", "anthropic-messages" }) |format| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed("{\"output\":broken JSON}\n");
+        try std.testing.expectError(
+            error.InvalidResponseJson,
+            command.run(invocation.ctx(&.{format}, &input)),
+        );
+        try std.testing.expectEqualStrings("", invocation.out.written());
+        try std.testing.expectEqualStrings("", invocation.err.written());
+    }
+}
+
+test "non-object responses propagate InvalidResponseObject" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    for ([_][]const u8{ "openai-responses", "anthropic-messages" }) |format| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed("[]\n");
+        try std.testing.expectError(
+            error.InvalidResponseObject,
+            command.run(invocation.ctx(&.{format}, &input)),
+        );
+        try std.testing.expectEqualStrings("", invocation.err.written());
+    }
+}
+
+test "openai-responses incomplete propagates after partial text and reason, before calls" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    const whole =
+        \\{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[
+        \\{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Partial"}]},
+        \\{"type":"function_call","id":"fc1","call_id":"c1","name":"say","arguments":"{\"text\":\"hi\"}"}]}
+    ;
+    const incomplete_stream =
+        \\event: response.output_item.added
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}
+        \\
+        \\event: response.output_text.delta
+        \\data: {"type":"response.output_text.delta","output_index":0,"delta":"Partial"}
+        \\
+        \\event: response.output_item.done
+        \\data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Partial"}]}}
+        \\
+        \\event: response.output_item.done
+        \\data: {"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","id":"fc1","call_id":"c1","name":"say","arguments":"{\"text\":\"hi\"}"}}
+        \\
+        \\event: response.incomplete
+        \\data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}
+        \\
+    ;
+    const completed_incomplete_stream = try std.mem.replaceOwned(u8, std.testing.allocator, incomplete_stream, "response.incomplete", "response.completed");
+    defer std.testing.allocator.free(completed_incomplete_stream);
+    const expected = "* :robot::\n  > Partial\n\n* :robot::(cut off at max_output_tokens)\n";
+
+    for ([_][]const u8{ whole, incomplete_stream, completed_incomplete_stream }) |body| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        var input: std.Io.Reader = .fixed(body);
+        try std.testing.expectError(
+            error.IncompleteResponse,
+            command.run(invocation.ctx(&.{"openai-responses"}, &input)),
+        );
+        try std.testing.expectEqualStrings(expected, invocation.out.written());
+        try std.testing.expectEqualStrings("", invocation.err.written());
+    }
+}
+
+test "openai-responses stream ID mismatch propagates OutputItemIdMismatch" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    var input: std.Io.Reader = .fixed(
+        \\data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m0"}}
+        \\data: {"type":"response.output_text.delta","output_index":0,"item_id":"wrong","delta":"bad"}
+        \\
+    );
+    try std.testing.expectError(
+        error.OutputItemIdMismatch,
+        command.run(invocation.ctx(&.{"openai-responses"}, &input)),
+    );
+    try std.testing.expectEqualStrings("", invocation.err.written());
 }

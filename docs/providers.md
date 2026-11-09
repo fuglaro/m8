@@ -293,6 +293,26 @@ Only `codex.json` supplies `"param_include": ["reasoning.encrypted_content"]`,
 so Groq and local oMLX do not receive that OpenAI-specific option.
 Neither field is inserted automatically by the Responses codec.
 
+## Streamed Completions
+
+* Tool-call fragments require a nonnegative integer `index`.
+  * Each call's ID stays bound to its index; conflicting or reused IDs are errors.
+* Whole-response tool calls use array order and need no streaming index.
+
+## Streamed Responses
+
+* Output items are emitted in `output_index` order.
+  * Interleaved tool calls keep their own names, call IDs and arguments.
+  * Later items wait while earlier ones stream or await completion.
+* Completed tool arguments take precedence over accumulated argument fragments.
+* A self-contained completed item is accepted without an earlier opening event.
+* Tool calls require completed items and a finished stream.
+* Explicitly incomplete Responses replies stop with `IncompleteResponse`.
+  * Received text, thoughts and the supplied stop reason are retained;
+    tool calls are not dispatched.
+  * The embedded status is honored even in a `response.completed` event.
+* If the stream ends early, received content is preserved separately per item.
+
 ## Finding the command
 
 The first word of `cmd` is looked for in order:

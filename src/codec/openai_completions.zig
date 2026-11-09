@@ -387,7 +387,7 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     try body.appendSlice(arena, rest);
 
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body.items, .{}) catch
-        return error.MalformedResponse;
+        return error.InvalidResponseJson;
 
     if (errorOf(v)) |e| {
         try api.failed(arena, sink, e);
@@ -413,7 +413,7 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
 
     var building: std.ArrayList(Building) = .empty;
     if (message.object.get("tool_calls")) |list| if (list == .array) {
-        for (list.array.items) |item| try gatherOne(arena, &building, item);
+        for (list.array.items) |item| try gatherOne(arena, &building, item, false);
     };
     return built.reply(try finish(arena, building.items), refusedOr(refused, finishOf(v) orelse ""));
 }
@@ -503,7 +503,7 @@ fn messageOf(v: std.json.Value) ?std.json.Value {
 /// name once, then the arguments a fragment at a time. Nothing is complete
 /// until the stream ends, so each piece is appended where it belongs.
 const Building = struct {
-    id: std.ArrayList(u8) = .empty,
+    id: ?[]const u8 = null,
     name: std.ArrayList(u8) = .empty,
     arguments: std.ArrayList(u8) = .empty,
 };
@@ -511,7 +511,7 @@ const Building = struct {
 fn finish(arena: Allocator, building: []const Building) ![]const api.Call {
     var out: std.ArrayList(api.Call) = .empty;
     for (building) |b| try out.append(arena, .{
-        .id = b.id.items,
+        .id = b.id orelse "",
         .name = b.name.items,
         .arguments = if (b.arguments.items.len == 0) "{}" else b.arguments.items,
     });
@@ -522,21 +522,31 @@ fn gatherCalls(arena: Allocator, calls: *std.ArrayList(Building), v: std.json.Va
     const delta = deltaOf(v) orelse return;
     const list = delta.object.get("tool_calls") orelse return;
     if (list != .array) return;
-    for (list.array.items) |item| try gatherOne(arena, calls, item);
+    for (list.array.items) |item| try gatherOne(arena, calls, item, true);
 }
 
-fn gatherOne(arena: Allocator, calls: *std.ArrayList(Building), item: std.json.Value) !void {
+fn gatherOne(arena: Allocator, calls: *std.ArrayList(Building), item: std.json.Value, streamed: bool) !void {
     if (item != .object) return;
-    const index: usize = if (item.object.get("index")) |i|
-        (if (i == .integer) @intCast(i.integer) else calls.items.len)
-    else
-        calls.items.len;
+    const index: usize = if (!streamed) calls.items.len else blk: {
+        const value = item.object.get("index") orelse return error.MissingToolCallIndex;
+        if (value != .integer or value.integer < 0) return error.InvalidToolCallIndex;
+        break :blk std.math.cast(usize, value.integer) orelse return error.InvalidToolCallIndex;
+    };
     while (calls.items.len <= index) try calls.append(arena, .{});
     const into = &calls.items[index];
 
-    if (item.object.get("id")) |x| {
-        if (x == .string) try into.id.appendSlice(arena, x.string);
-    }
+    if (item.object.get("id")) |x| if (x == .string) {
+        if (into.id) |bound| {
+            if (!std.mem.eql(u8, bound, x.string)) return error.ToolCallIdMismatch;
+        } else {
+            for (calls.items, 0..) |call, other_index| {
+                if (other_index == index) continue;
+                if (call.id) |bound| if (std.mem.eql(u8, bound, x.string))
+                    return error.DuplicateToolCallId;
+            }
+            into.id = x.string;
+        }
+    };
     const f = item.object.get("function") orelse return;
     if (f != .object) return;
     if (f.object.get("name")) |x| {
@@ -785,6 +795,64 @@ test "a call is gathered whichever shape it came in" {
             \\{"text":"hi"}
         , reply.calls[0].arguments);
     }
+}
+
+fn toolStream(body: []const u8) !void {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var r = readerOver(body);
+    var collect: Collect = .{ .arena = arena };
+    _ = try parse(arena, &r, collect.sink());
+}
+
+test "streamed tool calls require stable index and id identity" {
+    const interleaved =
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"two","arguments":"B"}},{"index":0,"id":"a","function":{"name":"one","arguments":"A"}}]}}]}
+        \\
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"arguments":"1"}},{"index":1,"id":"b","function":{"arguments":"2"}}]}}]}
+        \\
+        \\data: [DONE]
+        \\
+    ;
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    var r = readerOver(interleaved);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 2), reply.calls.len);
+    try testing.expectEqualStrings("a", reply.calls[0].id);
+    try testing.expectEqualStrings("one", reply.calls[0].name);
+    try testing.expectEqualStrings("A1", reply.calls[0].arguments);
+    try testing.expectEqualStrings("b", reply.calls[1].id);
+    try testing.expectEqualStrings("two", reply.calls[1].name);
+    try testing.expectEqualStrings("B2", reply.calls[1].arguments);
+
+    try testing.expectError(error.MissingToolCallIndex, toolStream(
+        \\data: {"choices":[{"delta":{"tool_calls":[{"id":"x","function":{"name":"f"}}]}}]}
+        \\
+        \\data: [DONE]
+    ));
+    for ([_][]const u8{ "-1", "\"0\"", "1.5" }) |index| {
+        const body = try std.fmt.allocPrint(testing.allocator, "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":{s},\"id\":\"x\"}}]}}}}]}}\n\ndata: [DONE]\n", .{index});
+        defer testing.allocator.free(body);
+        try testing.expectError(error.InvalidToolCallIndex, toolStream(body));
+    }
+    try testing.expectError(error.ToolCallIdMismatch, toolStream(
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"x"}]}}]}
+        \\
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"y"}]}}]}
+        \\
+        \\data: [DONE]
+    ));
+    try testing.expectError(error.DuplicateToolCallId, toolStream(
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"x"}]}}]}
+        \\
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"x"}]}}]}
+        \\
+        \\data: [DONE]
+    ));
 }
 
 test "an error is what the api said, and the reply says so" {

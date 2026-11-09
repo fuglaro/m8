@@ -589,8 +589,8 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     try body.appendSlice(arena, try r.allocRemaining(arena, .unlimited));
 
     const v = std.json.parseFromSliceLeaky(std.json.Value, arena, body.items, .{}) catch
-        return error.MalformedResponse;
-    if (v != .object) return error.MalformedResponse;
+        return error.InvalidResponseJson;
+    if (v != .object) return error.InvalidResponseObject;
     if (v.object.get("type")) |t| if (t == .string and std.mem.eql(u8, t.string, "error")) {
         try api.failed(arena, sink, v.object.get("error"));
         return .{};

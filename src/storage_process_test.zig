@@ -201,3 +201,64 @@ test "launcher discovers only the registered nearest project" {
     const still_missing = try s.runAt(inner, &.{ "say", "--no-send", ":outer/echo" });
     try std.testing.expect(!still_missing.ok);
 }
+
+test "incomplete Responses turn persists partial output without dispatching calls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var s = try Setup.init(a);
+    defer {
+        s.env.deinit();
+        removeTree(s.root) catch {};
+    }
+    const marker = try path(a, &.{ s.root, "tool-dispatched" });
+    const response = try path(a, &.{ s.root, "incomplete.sse" });
+    const tool_call = try std.fmt.allocPrint(a, "touch {s}", .{marker});
+    const tool_args = try std.json.Stringify.valueAlloc(a, .{ .cmd = tool_call }, .{});
+    const tool_args_json = try std.json.Stringify.valueAlloc(a, tool_args, .{});
+    const response_body = try std.fmt.allocPrint(a, "event: response.output_item.added\ndata: {{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\"}}}}\n\n" ++
+        "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"partial assistant text\"}}\n\n" ++
+        "event: response.output_item.done\ndata: {{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"partial assistant text\"}}]}}}}\n\n" ++
+        "event: response.output_item.added\ndata: {{\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"shell\",\"arguments\":\"\"}}}}\n\n" ++
+        "event: response.function_call_arguments.delta\ndata: {{\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":{s}}}\n\n" ++
+        "event: response.output_item.done\ndata: {{\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"shell\",\"arguments\":{s}}}}}\n\n" ++
+        "event: response.incomplete\ndata: {{\"type\":\"response.incomplete\",\"response\":{{\"status\":\"incomplete\",\"incomplete_details\":{{\"reason\":\"max_output_tokens\"}}}}}}\n\n", .{ tool_args_json, tool_args_json });
+    try put(response, response_body);
+    const seen = try path(a, &.{ s.root, "provider-seen" });
+    const provider_json = try std.json.Stringify.valueAlloc(a, .{
+        .cmd = [_][]const u8{ "sh", "-c", "cat >/dev/null; if test -e \"$M8_PROVIDER_seen\"; then printf '%s\\n' '{\"status\":\"completed\",\"output\":[]}'; else : > \"$M8_PROVIDER_seen\"; cat \"$M8_PROVIDER_response\"; fi" },
+        .encode = [_][]const u8{ "m8", "encode", "openai-responses" },
+        .parse = [_][]const u8{ "m8", "parse", "openai-responses" },
+        .response = response,
+        .seen = seen,
+    }, .{});
+    try put(try path(a, &.{ s.root, "project/core/providers/toy.json" }), provider_json);
+    const agent = try std.fmt.allocPrint(a, "* :brain::/toy/test\n\n" ++
+        "* :toolbox::shell\n" ++
+        "  > `touch` `{s}`\n" ++
+        "  > * `cmd` **string**\n\n" ++
+        "* :toolbox::shell\n", .{marker});
+    try put(try path(a, &.{ s.root, "project/mobs/demo/incomplete.md" }), agent);
+    const result = try s.run(&.{ "say", "--answer", "--unwrap", ":demo/incomplete", "please" });
+    try std.testing.expect(!result.ok);
+    try std.testing.expect(std.mem.indexOf(u8, result.err, "IncompleteResponse") != null);
+    try std.testing.expect(!exists(marker));
+    const saved = try s.run(&.{ "cat", ":demo/incomplete" });
+    try std.testing.expect(saved.ok);
+    try std.testing.expect(std.mem.indexOf(u8, saved.out, "partial assistant text") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved.out, "max_output_tokens") != null);
+
+    // The same offered call does run when the response actually completes.
+    // This proves the marker check is not passing because of a broken tool.
+    const terminal = std.mem.indexOf(u8, response_body, "event: response.incomplete").?;
+    const completed = try std.mem.concat(a, u8, &.{
+        response_body[0..terminal],
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+    });
+    try put(response, completed);
+    try std.Io.Dir.cwd().deleteFile(io, seen);
+    const finished = try s.run(&.{ "say", "--answer", "--unwrap", ":demo/incomplete//finished", "please" });
+    if (!finished.ok) std.debug.print("completed control:\n{s}\n{s}\n", .{ finished.out, finished.err });
+    try std.testing.expect(finished.ok);
+    try std.testing.expect(exists(marker));
+}
