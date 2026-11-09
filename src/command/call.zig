@@ -81,7 +81,7 @@ fn run(ctx: Ctx) !u8 {
     // nothing.
     var inner = ctx;
     if (ctx.env.get("M8_CALL_ID")) |id| inner.call_id = id;
-    return spawn(inner, expanded, options.how, cwd);
+    return spawn(inner, expanded, options.how, cwd, if (ctx.verbosity > 0) ctx.err else null);
 }
 
 /// Run an already-built command line.
@@ -91,8 +91,14 @@ fn run(ctx: Ctx) !u8 {
 /// gate. Refusing, asking and confining are wrappers around this, not
 /// conditions inside it.
 pub fn execute(ctx: Ctx, argv: []const []const u8, how: Answer) !u8 {
+    return executeWithDiagnostics(ctx, argv, how, ctx.err);
+}
+
+/// Keep protocol diagnostics on `ctx.err`, but stream verbose child stderr to
+/// a separate display. The capture must not receive successful status chatter.
+pub fn executeWithDiagnostics(ctx: Ctx, argv: []const []const u8, how: Answer, diagnostics: *std.Io.Writer) !u8 {
     if (argv.len == 0) return Error.NothingToRun;
-    return spawn(ctx, argv, how, null);
+    return spawn(ctx, argv, how, null, if (ctx.verbosity > 0) diagnostics else null);
 }
 
 /// What becomes of what the command said.
@@ -124,7 +130,7 @@ fn executable(arena: std.mem.Allocator, self: []const u8, expanded: []const []co
     return copy;
 }
 
-fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer, cwd: ?[]const u8) !u8 {
+fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer, cwd: ?[]const u8, diagnostics: ?*std.Io.Writer) !u8 {
     // What was inherited, and then what this call is saying. The call's own
     // values are put last, so an inherited variable cannot shadow them. What
     // a shield does to an environment it does in its own process, further out
@@ -177,6 +183,10 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer, cwd: ?[]const u8) !u8 
         const complained = pipes.reader(1).buffered();
         if (complained.len > 0) {
             complaint.keep(complained);
+            if (diagnostics) |err| {
+                try err.writeAll(complained);
+                try err.flush();
+            }
             pipes.reader(1).toss(complained.len);
         }
     } else |e| switch (e) {
@@ -190,17 +200,20 @@ fn spawn(ctx: Ctx, argv: []const []const u8, how: Answer, cwd: ?[]const u8) !u8 
     const code = status(try child.wait(ctx.io));
     const wrote = try said.finish();
     const why = complaint.written(ctx.arena) catch "";
+    // A separate capture still needs the protocol message. When display and
+    // capture are the same writer, it has already arrived byte for byte.
+    const replay = diagnostics == null or diagnostics.? != ctx.err;
 
     // A question for the person is handed up as it was asked, so whatever
     // stands outside this sees what the tool itself would have shown it.
     if (code == api.ask_exit and !wrote and std.mem.startsWith(u8, why, api.ask_lead)) {
-        try ctx.err.print("{s}\n", .{why});
+        if (replay) try ctx.err.print("{s}\n", .{why});
         return code;
     }
     if (how == .document) {
         // Nothing said and a failure is a wrapper that stopped the tool, and
         // why it did is all there is to tell the model.
-        if (!wrote and code != 0 and why.len > 0) try ctx.err.print("{s}\n", .{why});
+        if (replay and !wrote and code != 0 and why.len > 0) try ctx.err.print("{s}\n", .{why});
         return code;
     }
 
@@ -611,4 +624,180 @@ test "mob-space combines with answer options and leaves program arguments alone"
     try testing.expect(unwrapped.mob_space);
     try testing.expectEqual(Answer.unwrapped, unwrapped.how);
     try testing.expectEqualStrings("pwd", unwrapped.args[0]);
+}
+
+test "execute hides successful stderr unless verbose" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    var io: std.Io.Threaded = .init(testing.allocator, .{});
+    defer io.deinit();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var err: std.Io.Writer.Allocating = .init(arena);
+    const argv = &[_][]const u8{ "/bin/sh", "-c", "printf 'body'; printf 'chatter\\n' >&2" };
+
+    var ctx: Ctx = .{
+        .arena = arena,
+        .io = io.io(),
+        .mode = .md,
+        .env = &env,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &err.writer,
+        .tty = null,
+    };
+    try testing.expectEqual(@as(u8, 0), try execute(ctx, argv, .framed));
+    try testing.expectEqualStrings("", err.written());
+    try testing.expect(std.mem.indexOf(u8, out.written(), "body") != null);
+
+    out.clearRetainingCapacity();
+    err.clearRetainingCapacity();
+    ctx.verbosity = 1;
+    try testing.expectEqual(@as(u8, 0), try execute(ctx, argv, .framed));
+    try testing.expectEqualStrings("chatter\n", err.written());
+}
+
+test "diagnostics stream separately while failures remain in protocol capture" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    var io: std.Io.Threaded = .init(testing.allocator, .{});
+    defer io.deinit();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var protocol_err: std.Io.Writer.Allocating = .init(arena);
+    var display: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = io.io(),
+        .mode = .md,
+        .env = &env,
+        .verbosity = 1,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &protocol_err.writer,
+        .tty = null,
+    };
+    const argv = &[_][]const u8{ "/bin/sh", "-c", "printf 'bad reason\\n' >&2; exit 7" };
+    try testing.expectEqual(@as(u8, 7), try executeWithDiagnostics(ctx, argv, .framed, &display.writer));
+    try testing.expectEqualStrings("bad reason\n", display.written());
+    try testing.expectEqualStrings("", protocol_err.written());
+    try testing.expect(std.mem.indexOf(u8, out.written(), "Failed with exit code 7: bad reason") != null);
+}
+
+test "QUESTION diagnostics are retained once when display and capture are shared" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    var io: std.Io.Threaded = .init(testing.allocator, .{});
+    defer io.deinit();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var err: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = io.io(),
+        .mode = .md,
+        .env = &env,
+        .verbosity = 1,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &err.writer,
+        .tty = null,
+    };
+    const argv = &[_][]const u8{ "/bin/sh", "-c", "printf 'QUESTION:tool:continue?\\n' >&2; exit 75" };
+    try testing.expectEqual(@as(u8, 75), try execute(ctx, argv, .framed));
+    try testing.expectEqualStrings("QUESTION:tool:continue?\n", err.written());
+    try testing.expectEqualStrings("", out.written());
+}
+
+test "document diagnostics keep successful stderr out of protocol capture" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    var io: std.Io.Threaded = .init(testing.allocator, .{});
+    defer io.deinit();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var protocol_err: std.Io.Writer.Allocating = .init(arena);
+    var display: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = io.io(),
+        .mode = .md,
+        .env = &env,
+        .verbosity = 1,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &protocol_err.writer,
+        .tty = null,
+    };
+    const argv = &[_][]const u8{ "/bin/sh", "-c", "printf 'status chatter\\n' >&2" };
+    try testing.expectEqual(@as(u8, 0), try executeWithDiagnostics(ctx, argv, .document, &display.writer));
+    try testing.expectEqualStrings("status chatter\n", display.written());
+    try testing.expectEqualStrings("", protocol_err.written());
+    try testing.expectEqualStrings("", out.written());
+}
+
+test "document failure copies its reason to separate protocol capture" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    var io: std.Io.Threaded = .init(testing.allocator, .{});
+    defer io.deinit();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var protocol_err: std.Io.Writer.Allocating = .init(arena);
+    var display: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = io.io(),
+        .mode = .md,
+        .env = &env,
+        .verbosity = 1,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &protocol_err.writer,
+        .tty = null,
+    };
+    const argv = &[_][]const u8{ "/bin/sh", "-c", "printf 'document failed\\n' >&2; exit 9" };
+    try testing.expectEqual(@as(u8, 9), try executeWithDiagnostics(ctx, argv, .document, &display.writer));
+    try testing.expectEqualStrings("document failed\n", display.written());
+    try testing.expectEqualStrings("document failed\n", protocol_err.written());
+    try testing.expectEqualStrings("", out.written());
+}
+
+test "document QUESTION is shown separately and retained for protocol capture" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env: std.process.Environ.Map = .init(arena);
+    var io: std.Io.Threaded = .init(testing.allocator, .{});
+    defer io.deinit();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var protocol_err: std.Io.Writer.Allocating = .init(arena);
+    var display: std.Io.Writer.Allocating = .init(arena);
+    const ctx: Ctx = .{
+        .arena = arena,
+        .io = io.io(),
+        .mode = .md,
+        .env = &env,
+        .verbosity = 1,
+        .args = &.{},
+        .in = "",
+        .out = &out.writer,
+        .err = &protocol_err.writer,
+        .tty = null,
+    };
+    const argv = &[_][]const u8{ "/bin/sh", "-c", "printf 'QUESTION:tool:continue?\\n' >&2; exit 75" };
+    try testing.expectEqual(@as(u8, 75), try executeWithDiagnostics(ctx, argv, .document, &display.writer));
+    try testing.expectEqualStrings("QUESTION:tool:continue?\n", display.written());
+    try testing.expectEqualStrings("QUESTION:tool:continue?\n", protocol_err.written());
+    try testing.expectEqualStrings("", out.written());
 }

@@ -619,7 +619,7 @@ fn answer(
     // A tool command answers in m8. It may use `m8 call` to turn an ordinary
     // program into that answer, or implement the protocol itself; the choice
     // belongs to its definition rather than to the harness running it.
-    const status = call.execute(.{
+    const status = call.executeWithDiagnostics(.{
         .arena = arena,
         .io = io,
         .mode = ctx.mode,
@@ -633,7 +633,7 @@ fn answer(
         .out = if (live) |l| &l.writer else &captured.writer,
         .err = &err_sink.writer,
         .tty = api.openTty(io, &tty_storage),
-    }, wrapped, .document) catch |e| {
+    }, wrapped, .document, ctx.err) catch |e| {
         if (live) |l| {
             l.finish() catch {};
             l.displayed = 0;
