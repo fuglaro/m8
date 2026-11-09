@@ -40,7 +40,7 @@ write a program for is a provider.
     "parse",
     "openai-responses"
   ],
-  "url": "http://127.0.0.1:8000/v1/responses",
+  "url": ["echo", "http://127.0.0.1:8000/v1/responses"],
   "models_url": "http://127.0.0.1:8000/v1/models",
   "models": [
     "bash",
@@ -69,7 +69,7 @@ write a program for is a provider.
     "parse",
     "anthropic-messages"
   ],
-  "url": "https://api.anthropic.com/v1/messages",
+  "url": ["echo", "https://api.anthropic.com/v1/messages"],
   "header_anthropic-version": ["echo", "2023-06-01"],
   "header_x-api-key": ["security", "find-generic-password", "-s", "anthropic-api-key", "-w"]
 }
@@ -118,9 +118,18 @@ and means whatever the command makes of it.
 * An unnameable key, or a null, is left out.
 * `M8_PROVIDER_NAME` identifies the selected provider entry.
 
-`header_` is nothing special to m8. It is `m8
-url-provider`'s one convention rather than the language's, and it is
-the entry beside the url that knows it: a key named
+`url` and `header_` are nothing special to m8. They are conventions of
+`m8 url-provider`, rather than the config language.
+
+`url` is a non-empty argv array whose stdout supplies the whole endpoint,
+with surrounding whitespace trimmed. Constants use
+`["echo", "https://example.com/v1/messages"]`; to read an environment
+variable use `["printenv", "MY_API_URL"]`. Literal URL strings are no longer
+accepted. A failed command, empty output, or output containing an embedded
+newline is an error before the request is read. `--get URL` and
+`--upload URL FILE` still take literal URLs directly.
+
+The entry beside the url knows its headers: a key named
 `header_x-api-key` arrives as `M8_PROVIDER_header_x-api-key`,
 what it says is run, and its output is that header's value.
 
@@ -224,7 +233,7 @@ A provider may name another provider as its `parent`:
 ```json
 {
   "parent": "openai-responses",
-  "url": "http://127.0.0.1:8000/v1/responses",
+  "url": ["echo", "http://127.0.0.1:8000/v1/responses"],
   "stats": {
     "cmd": ["my-stats"]
   }

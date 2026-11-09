@@ -53,7 +53,9 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\environment:
         \\
-        \\  M8_PROVIDER_url          the endpoint to post to
+        \\  M8_PROVIDER_url          a JSON argv array; its stdout is the endpoint
+        \\                           e.g. ["echo","https://example.com/v1/messages"].
+        \\                           Empty or failing commands are an error.
         \\  M8_PROVIDER_header_NAME  a JSON argv array; its stdout is sent as
         \\                           header NAME: ["sh","-c",...] opts into a shell.
         \\                           Empty or failing commands leave it off.
@@ -70,9 +72,10 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
 
 /// Post the request and hand the answer back as it arrives.
 ///
-/// `M8_PROVIDER_url` is the whole endpoint. There is no path m8 appends to
-/// it: which api lives where is a fact about a provider, not about a format,
-/// and keeping a table of those is not something m8 does.
+/// `M8_PROVIDER_url` is a JSON argv command whose stdout is the whole endpoint.
+/// There is no path m8 appends to it: which api lives where is a fact about a
+/// provider, not about a format, and keeping a table of those is not something
+/// m8 does. Constants use `echo`; environment values can use `printenv`.
 ///
 /// Every `M8_PROVIDER_header_*` is decoded as a JSON argv array and its
 /// output is that header's value. An explicit `sh -c` array opts into shell
@@ -123,8 +126,12 @@ fn run(ctx: Ctx) !u8 {
         return 1;
     }
 
-    const endpoint = ctx.env.get(provider.env_prefix ++ "url") orelse {
+    const endpoint_command = ctx.env.get(provider.env_prefix ++ "url") orelse {
         try ctx.err.writeAll("m8 url-provider: no M8_PROVIDER_url\n");
+        return 1;
+    };
+    const endpoint = (try ranCommand(ctx, endpoint_command, "url")) orelse {
+        try ctx.err.writeAll("m8 url-provider: url command failed or produced no valid endpoint\n");
         return 1;
     };
 
@@ -557,25 +564,30 @@ fn headers(ctx: Ctx, into: *std.ArrayList(u8)) !void {
 /// still holding one after trimming is header injection rather than a header,
 /// so it is dropped.
 fn ran(ctx: Ctx, cmd: []const u8) !?[]const u8 {
+    return ranCommand(ctx, cmd, "header");
+}
+
+/// URL and header commands share argv parsing, environment and output rules.
+fn ranCommand(ctx: Ctx, cmd: []const u8, comptime kind: []const u8) !?[]const u8 {
     if (cmd.len == 0) return null;
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, ctx.arena, cmd, .{}) catch {
-        try ctx.err.writeAll("m8 url-provider: invalid header command JSON (expected an argv array)\n");
+        try ctx.err.writeAll("m8 url-provider: invalid " ++ kind ++ " command JSON (expected an argv array)\n");
         return null;
     };
     if (parsed != .array or parsed.array.items.len == 0) {
-        try ctx.err.writeAll("m8 url-provider: invalid header command JSON (expected a non-empty argv array)\n");
+        try ctx.err.writeAll("m8 url-provider: invalid " ++ kind ++ " command JSON (expected a non-empty argv array)\n");
         return null;
     }
     const argv = try ctx.arena.alloc([]const u8, parsed.array.items.len);
     for (parsed.array.items, 0..) |item, i| {
         if (item != .string) {
-            try ctx.err.print("m8 url-provider: invalid header command JSON (argv item {d} is not a string)\n", .{i});
+            try ctx.err.print("m8 url-provider: invalid " ++ kind ++ " command JSON (argv item {d} is not a string)\n", .{i});
             return null;
         }
         argv[i] = item.string;
     }
     if (argv[0].len == 0) {
-        try ctx.err.writeAll("m8 url-provider: invalid header command JSON (argv[0] is empty)\n");
+        try ctx.err.writeAll("m8 url-provider: invalid " ++ kind ++ " command JSON (argv[0] is empty)\n");
         return null;
     }
     const resolved = try provider.resolve(ctx.arena, ctx.io, ctx.self, &.{}, argv);
@@ -841,5 +853,37 @@ test "date hints reject other layouts, timezones and invalid minute or second fi
         "08:02:00 GMT",
     }) |value| {
         try std.testing.expectEqual(@as(?u64, null), retryAfterSeconds(value, 0));
+    }
+}
+test "url commands resolve constants and environment values" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try invocation.env.put("M8_URL_TEST_ENDPOINT", "https://example.com/from-env");
+    const ctx = invocation.ctx(&.{}, null);
+    try std.testing.expectEqualStrings("https://example.com/constant", (try ranCommand(ctx, "[\"echo\",\"https://example.com/constant\"]", "url")).?);
+    try std.testing.expectEqualStrings("https://example.com/from-env", (try ranCommand(ctx, "[\"printenv\",\"M8_URL_TEST_ENDPOINT\"]", "url")).?);
+}
+
+test "invalid url commands fail before consuming the request" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    for ([_][]const u8{
+        "https://example.com/literal",
+        "\"https://example.com/json-string\"",
+        "[]",
+        "[1]",
+        "[\"\"]",
+        "[\"printf\",\"\"]",
+        "[\"printf\",\"one\\ntwo\"]",
+        "[\"sh\",\"-c\",\"exit 9\"]",
+    }) |cmd| {
+        var invocation = try Invocation.init();
+        defer invocation.deinit();
+        try invocation.env.put("M8_PROVIDER_url", cmd);
+        var input: std.Io.Reader = .fixed("unconsumed");
+        try std.testing.expectEqual(@as(u8, 1), try command.run(invocation.ctx(&.{}, &input)));
+        try std.testing.expectEqualStrings("unconsumed", input.buffered());
+        try std.testing.expectEqualStrings("", invocation.out.written());
+        try std.testing.expect(std.mem.indexOf(u8, invocation.err.written(), "url command failed or produced no valid endpoint") != null);
     }
 }

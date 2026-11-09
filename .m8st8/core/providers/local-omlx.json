@@ -1,6 +1,6 @@
 {
   "parent": "openai-responses",
-  "url": "http://127.0.0.1:8000/v1/responses",
+  "url": ["echo", "http://127.0.0.1:8000/v1/responses"],
   "models_url": "http://127.0.0.1:8000/v1/models",
   "header_Authorization": ["sh", "-c", "echo Bearer $(sed -n 's/.*\"api_key\" *: *\"\\([^\"]*\\)\".*/\\1/p' ~/.omlx/settings.json)"]
 }
