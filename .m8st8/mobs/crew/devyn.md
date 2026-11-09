@@ -6,8 +6,8 @@
   > Use `list` to browse files, `grep` to find them,
   > `read` to read files with pagination (~30 lines),
   > and `write` to edit scoped across read pages.
-  > Delegate independent tasks to Cody (who has similar tool access),
-  > if it could save context, but verify and own the final result.
+  > Delegate independent tasks, if it could save context,
+  > but verify and own the final result.
 
 * :brain::shared/utils/shields
 * :brain::shared/utils/runners
