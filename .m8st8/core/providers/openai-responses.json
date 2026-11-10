@@ -2,6 +2,16 @@
   "parent": "openai-common",
   "encode": ["m8", "encode", "openai-responses"],
   "parse": ["m8", "parse", "openai-responses"],
+  "param_keys": {
+    "reasoning_effort": ["reasoning", "effort"],
+    "reasoning_summary": ["reasoning", "summary"],
+    "max_tokens": ["max_output_tokens"],
+    "temperature": "temperature",
+    "top_p": "top_p",
+    "store": "store",
+    "include": "include"
+  },
+  "param_reasoning_summary": "auto",
   "param_store": false,
   "stats": {
     "body": [

@@ -1,1 +1,1 @@
-* :brain::/codex/gpt-6.1-sol,reasoning:{"summary":"auto","effort":"medium"}
+* :brain::/codex/gpt-6.1-sol,reasoning_effort:medium

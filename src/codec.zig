@@ -150,7 +150,53 @@ pub const Call = struct {
     arguments: []const u8,
 };
 
-/// What a response held that was not said: the calls it made.
+/// Assemble model parameters into their request object. Paths may share
+/// object prefixes; disjoint objects merge, while incompatible collisions fail.
+pub fn parameterObject(arena: Allocator, params: []const modelform.Param) !std.json.Value {
+    var root: std.json.ObjectMap = .empty;
+    for (params) |p| {
+        const path = if (p.path.len == 0) &.{p.key} else p.path;
+        if (path.len == 0) return error.EmptyParameterPath;
+        try insertParameter(arena, &root, path, modelform.json(arena, p.value));
+    }
+    return .{ .object = root };
+}
+
+fn insertParameter(arena: Allocator, object: *std.json.ObjectMap, path: []const []const u8, value: std.json.Value) anyerror!void {
+    if (path[0].len == 0) return error.EmptyParameterPath;
+    if (path.len == 1) {
+        if (object.get(path[0])) |old| {
+            if (old == .object and value == .object) {
+                try object.put(arena, path[0], .{ .object = try mergeParameterObjects(arena, old.object, value.object) });
+                return;
+            }
+            return error.ParameterCollision;
+        }
+        try object.put(arena, path[0], value);
+        return;
+    }
+    var nested: std.json.ObjectMap = .empty;
+    if (object.get(path[0])) |old| {
+        if (old != .object) return error.ParameterCollision;
+        nested = old.object;
+    }
+    try insertParameter(arena, &nested, path[1..], value);
+    try object.put(arena, path[0], .{ .object = nested });
+}
+
+fn mergeParameterObjects(arena: Allocator, left: std.json.ObjectMap, right: std.json.ObjectMap) anyerror!std.json.ObjectMap {
+    var merged = left;
+    var it = right.iterator();
+    while (it.next()) |entry| {
+        if (merged.get(entry.key_ptr.*)) |old| {
+            if (old == .object and entry.value_ptr.* == .object) {
+                try merged.put(arena, entry.key_ptr.*, .{ .object = try mergeParameterObjects(arena, old.object, entry.value_ptr.object) });
+            } else return error.ParameterCollision;
+        } else try merged.put(arena, entry.key_ptr.*, entry.value_ptr.*);
+    }
+    return merged;
+}
+
 ///
 /// Everything said went to the sink, in the order the model produced it. A
 /// call is carried here instead because a tool is run from arguments that are
@@ -496,6 +542,26 @@ test "m8 encodes to itself" {
     var diag: doc.Diagnostic = .{};
     const records = try doc.parse(arena, src, &diag);
     try testing.expectEqualStrings(src, try c.encode(arena, records, .{}));
+}
+
+test "parameter paths merge disjoint fields and reject collisions" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const params = [_]modelform.Param{
+        .{ .key = "reasoning", .path = &.{ "reasoning", "effort" }, .value = "high" },
+        .{ .key = "reasoning", .path = &.{ "reasoning", "summary" }, .value = "auto" },
+    };
+    const object = try parameterObject(arena, &params);
+    const reasoning = object.object.get("reasoning").?.object;
+    try testing.expectEqualStrings("high", reasoning.get("effort").?.string);
+    try testing.expectEqualStrings("auto", reasoning.get("summary").?.string);
+
+    const conflicting = [_]modelform.Param{
+        .{ .key = "reasoning", .path = &.{ "reasoning", "effort" }, .value = "high" },
+        .{ .key = "reasoning", .path = &.{ "reasoning", "effort" }, .value = "low" },
+    };
+    try testing.expectError(error.ParameterCollision, parameterObject(arena, &conflicting));
 }
 
 /// A reader with a buffer smaller than what is going through it, which is the

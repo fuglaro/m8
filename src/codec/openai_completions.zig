@@ -48,9 +48,11 @@ pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) 
         try s.write(true);
     }
     // The ledger's own, in this api's words, passed through untranslated.
-    for (target.params) |p| {
-        try s.objectField(p.key);
-        try s.write(modelform.json(arena, p.value));
+    const params = try api.parameterObject(arena, target.params);
+    var param_it = params.object.iterator();
+    while (param_it.next()) |p| {
+        try s.objectField(p.key_ptr.*);
+        try s.write(p.value_ptr.*);
     }
 
     try s.objectField("messages");

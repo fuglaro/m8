@@ -247,11 +247,14 @@ agent, and carries whatever the api should be asked for:
 
 > * :brain::/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192,temperature:0.7
 
-Parameters are the api's own words, passed through as
-written. m8 translates none of them and knows none of them
-by name, so one it has never heard of works, and one that
-came back off a wire goes out again unchanged. `,` separates
-them, and a value may be JSON — quote it if it holds a comma.
+Parameters are opaque names and JSON values. Without a matching
+provider translation table, they pass through unchanged, so
+one the api has never heard of still works. A provider may
+explicitly route a parameter to a different field or nested
+path, and may translate selected string values; see
+[Request parameter defaults and translation](providers.md#request-parameter-defaults-and-translation).
+`,` separates parameters, and a value may be JSON — quote it
+if it holds a comma.
 
 A model is not a name. Nothing declares its own name in m8,
 a file is what it is called, and a model has no file. So it

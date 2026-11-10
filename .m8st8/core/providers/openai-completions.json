@@ -2,6 +2,13 @@
   "parent": "openai-common",
   "encode": ["m8", "encode", "openai-completions"],
   "parse": ["m8", "parse", "openai-completions"],
+  "param_keys": {
+    "reasoning_effort": "reasoning_effort",
+    "max_tokens": "max_tokens",
+    "temperature": "temperature",
+    "top_p": "top_p",
+    "stream_options": "stream_options"
+  },
   "param_stream_options": {"include_usage": true},
   "stats": {
     "body": [

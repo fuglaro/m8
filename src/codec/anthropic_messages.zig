@@ -71,10 +71,12 @@ pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) 
 
     // The ledger's own, in this api's words, passed through untranslated.
     var asked_for_tokens = false;
-    for (target.params) |p| {
-        if (std.mem.eql(u8, p.key, "max_tokens")) asked_for_tokens = true;
-        try s.objectField(p.key);
-        try s.write(modelform.json(arena, p.value));
+    const params = try api.parameterObject(arena, target.params);
+    var param_it = params.object.iterator();
+    while (param_it.next()) |p| {
+        if (std.mem.eql(u8, p.key_ptr.*, "max_tokens")) asked_for_tokens = true;
+        try s.objectField(p.key_ptr.*);
+        try s.write(p.value_ptr.*);
     }
     if (!asked_for_tokens) {
         try s.objectField("max_tokens");

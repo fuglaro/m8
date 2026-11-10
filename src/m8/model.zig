@@ -9,9 +9,9 @@
 //!     /Ternary-Bonsai-1.7B-mlx-2bit,max_tokens:8192   no provider
 //!     /local/tiny                                     no parameters
 //!
-//! Parameters are the api's own, passed through as written. m8 has no
-//! vocabulary here and translates nothing: what is written is what goes on
-//! the wire, which is also what lets it survive coming back off one.
+//! Parameters are opaque names and JSON values. By default they pass through;
+//! a selected provider may route names/paths and translate selected string
+//! values before a request is encoded.
 //!
 //! A model is not a name. Nothing declares its own name in m8 — a file is
 //! what it is called — and a model has no file, so it has no name, keeps no
@@ -26,6 +26,8 @@ pub const mark = '/';
 
 pub const Param = struct {
     key: []const u8,
+    /// Optional request path. Empty means the key is a top-level field.
+    path: []const []const u8 = &.{},
     /// As written. What it means is the api's business.
     value: []const u8,
 };

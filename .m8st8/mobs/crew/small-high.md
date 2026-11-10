@@ -1,1 +1,1 @@
-* :brain::/codex/gpt-6-luna,reasoning:{"summary":"auto","effort":"high"}
+* :brain::/codex/gpt-6-luna,reasoning_effort:high

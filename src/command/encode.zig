@@ -73,39 +73,114 @@ fn run(ctx: Ctx) !u8 {
     return 0;
 }
 
-/// Provider defaults are request parameters, not codec policy. Explicit model
-/// parameters win; null removes a field from either source.
+/// Provider defaults and model parameters are translated only when the
+/// selected provider declares a `param_keys` table. Without one, legacy
+/// pass-through behavior is retained.
 fn target(ctx: Ctx, records: []const doc.Record) !codec.Target {
     const def = try agent.project(ctx.arena, records);
-    var params: std.ArrayList(model.Param) = .empty;
-    if (def.provider.len > 0 and std.mem.eql(u8, ctx.env.get("M8_PROVIDER_NAME") orelse "", def.provider)) {
+    var source: std.ArrayList(model.Param) = .empty;
+    const matching_provider = def.provider.len > 0 and
+        std.mem.eql(u8, ctx.env.get("M8_PROVIDER_NAME") orelse "", def.provider);
+    if (matching_provider) {
         var it = ctx.env.iterator();
         while (it.next()) |entry| {
             const key = entry.key_ptr.*;
+            if (std.mem.eql(u8, key, "M8_PROVIDER_param_values") or
+                std.mem.eql(u8, key, "M8_PROVIDER_param_keys")) continue;
             const prefix = "M8_PROVIDER_param_";
             if (!std.mem.startsWith(u8, key, prefix)) continue;
             const field = key[prefix.len..];
             if (field.len == 0) continue;
             for (def.params) |p| {
                 if (std.mem.eql(u8, p.key, field)) break;
-            } else {
-                if (model.json(ctx.arena, entry.value_ptr.*) != .null)
-                    try params.append(ctx.arena, .{ .key = field, .value = entry.value_ptr.* });
+            } else if (model.json(ctx.arena, entry.value_ptr.*) != .null) {
+                try source.append(ctx.arena, .{ .key = field, .value = entry.value_ptr.* });
             }
         }
     }
     for (def.params) |p| {
-        if (model.json(ctx.arena, p.value) != .null) try params.append(ctx.arena, p);
+        if (model.json(ctx.arena, p.value) == .null) {
+            // A model-level null explicitly removes a provider default.
+            for (source.items, 0..) |old, i| if (std.mem.eql(u8, old.key, p.key)) {
+                _ = source.orderedRemove(i);
+                break;
+            };
+        } else {
+            var replaced = false;
+            for (source.items) |*old| if (std.mem.eql(u8, old.key, p.key)) {
+                old.value = p.value;
+                replaced = true;
+                break;
+            };
+            if (!replaced) try source.append(ctx.arena, p);
+        }
+    }
+
+    const mapping_text = if (matching_provider) ctx.env.get("M8_PROVIDER_param_keys") else null;
+    const values_text = if (matching_provider) ctx.env.get("M8_PROVIDER_param_values") else null;
+    const mapping = if (mapping_text) |text|
+        (try std.json.parseFromSliceLeaky(std.json.Value, ctx.arena, text, .{}))
+    else
+        null;
+    const values = if (values_text) |text|
+        (try std.json.parseFromSliceLeaky(std.json.Value, ctx.arena, text, .{}))
+    else
+        null;
+    if (mapping) |m| if (m != .object) return error.BadProviderParams;
+    if (values) |v| if (v != .object) return error.BadProviderParamValues;
+
+    var params: std.ArrayList(model.Param) = .empty;
+    for (source.items) |p| {
+        try appendTranslated(ctx.arena, &params, p, mapping, values);
     }
     return .{
         .mode = ctx.mode,
         .model = def.model,
         .params = params.items,
         .tools = try agent.offer(ctx.arena, def),
-        // A hint rather than a contract: a provider that cannot stream
-        // answers whole, and `parse` reads either.
         .stream = true,
     };
+}
+
+fn appendTranslated(
+    arena: std.mem.Allocator,
+    params: *std.ArrayList(model.Param),
+    source: model.Param,
+    mapping: ?std.json.Value,
+    values: ?std.json.Value,
+) !void {
+    var key = source.key;
+    var path: []const []const u8 = &.{};
+    if (mapping) |table| {
+        const destination = table.object.get(source.key) orelse return error.UnmappedModelParam;
+        switch (destination) {
+            .null => return error.BadProviderParamPath,
+            .string => |name| key = name,
+            .array => |segments| {
+                if (segments.items.len == 0) return error.EmptyProviderParamPath;
+                var path_list: std.ArrayList([]const u8) = .empty;
+                for (segments.items) |segment| {
+                    if (segment != .string or segment.string.len == 0) return error.BadProviderParamPath;
+                    try path_list.append(arena, segment.string);
+                }
+                path = path_list.items;
+                key = path[0];
+            },
+            else => return error.BadProviderParamPath,
+        }
+    }
+
+    var value = model.json(arena, source.value);
+    if (values) |table| {
+        if (table.object.get(source.key)) |translations| {
+            if (translations != .object) return error.BadProviderParamValues;
+            if (value == .string) {
+                if (translations.object.get(value.string)) |translated| value = translated;
+            }
+        }
+    }
+    const serialized = try std.json.Stringify.valueAlloc(arena, value, .{});
+    try params.append(arena, .{ .key = key, .path = path, .value = serialized });
 }
 
 test "provider param env defaults preserve names and explicit values override" {
@@ -166,6 +241,25 @@ test "provider config defaults reach request fields verbatim" {
     try std.testing.expect(request.object.get("include") == null);
 }
 
+test "provider parameter paths and enum values translate into nested request fields" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try invocation.env.put("M8_PROVIDER_NAME", "test-provider");
+    try invocation.env.put("M8_PROVIDER_param_keys", "{\"reasoning_effort\":[\"reasoning\",\"effort\"],\"trace\":\"trace\"}");
+    try invocation.env.put("M8_PROVIDER_param_values", "{\"reasoning_effort\":{\"high\":44000}}");
+    const ctx = invocation.ctx(&.{}, null);
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(ctx.arena, "* :brain::/test-provider/model,reasoning_effort:high,trace:{\"enabled\":true}\\n", &diag);
+    const params = (try target(ctx, records)).params;
+    try std.testing.expectEqual(@as(usize, 2), params.len);
+    try std.testing.expectEqualStrings("reasoning", params[0].key);
+    try std.testing.expectEqual(@as(usize, 2), params[0].path.len);
+    try std.testing.expectEqualStrings("effort", params[0].path[1]);
+    try std.testing.expectEqualStrings("44000", params[0].value);
+    try std.testing.expectEqualStrings("trace", params[1].key);
+    try std.testing.expectEqual(@as(usize, 0), params[1].path.len);
+}
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(

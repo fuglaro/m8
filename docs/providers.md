@@ -267,31 +267,50 @@ The model-list command accepts `id` or `slug` and runs only when `models_url`
 is set, so the base itself emits no models.
 Copy the full parent chain along with a provider that inherits it.
 
-## Request parameter defaults
+## Request parameter defaults and translation
 
-A provider's `param_` entries supply defaults to `m8 encode`:
+A provider's `param_` entries still supply request defaults to `m8 encode`:
 
 ```json
 {
-  "parent": "openai-responses",
-  "param_include": ["reasoning.encrypted_content"]
+  "parent": "my-gateway",
+  "param_keys": {
+    "reasoning_effort": ["reasoning", "effort"]
+  },
+  "param_values": {
+    "reasoning_effort": {"gateway_alias": "medium"}
+  }
 }
 ```
 
 * `param_top_p` arrives as `M8_PROVIDER_param_top_p` and supplies `top_p`.
   * The field name after `param_` is preserved exactly, including case.
 * Defaults apply when `M8_PROVIDER_NAME` matches the model's provider.
-* Explicit parameters on the model's 🧠 override provider defaults.
-* A parameter set to `null` is omitted from the request, not sent as JSON null.
-  * `"param_store": null` disables an inherited provider default.
-* Values are interpreted as JSON when valid, otherwise as text, like 🧠 values.
-* Without a matching provider environment, encoding uses only 🧠 parameters.
-  * Standalone `m8 encode` does not load provider defaults from config.
+* Explicit model parameters override provider defaults; a model-level `null`
+  removes that parameter.
+* A provider's optional `param_keys` object is a routing table for model parameters.
+  * Every supplied parameter must be listed when the table is present; an
+    unlisted one is an error.
+  * A string destination renames/passes the value through as a top-level field.
+    Use the same name to explicitly allow raw passthrough.
+  * An array of strings is an object path, e.g. `reasoning.effort`.
+  * `null` is not a destination; use a self-mapping string for passthrough.
+* Optional `param_values` maps a source parameter's string enum values to JSON
+  values. A matching value is replaced; an unmatched value is passed through
+  unchanged. Values may be scalars, arrays, or objects. In the example,
+  `gateway_alias` is an illustrative, provider-defined literal—not a standard
+  value or convention.
+* Parameters targeting the same nested object merge recursively when fields do
+  not overlap. Conflicting values or paths that cross a scalar are errors.
+* Without a matching provider environment, encoding uses only model parameters
+  and applies no provider mappings/defaults. Standalone `m8 encode` does not
+  load provider configuration.
 
-The shared `openai-responses.json` supplies `"param_store": false`.
-Only `codex.json` supplies `"param_include": ["reasoning.encrypted_content"]`,
-so Groq and local oMLX do not receive that OpenAI-specific option.
-Neither field is inserted automatically by the Responses codec.
+Mappings are applied after provider defaults and model-level overrides are
+combined, before the selected codec writes the request. That lets a provider
+translate a model parameter without changing the codec or the model's stored
+parameter spelling.
+
 
 ## Streamed Completions
 
