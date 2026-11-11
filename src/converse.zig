@@ -666,7 +666,7 @@ fn answer(
     var diag: doc.Diagnostic = .{};
     const records = doc.parse(arena, captured.written(), &diag) catch {
         if (live) |l| l.displayed = 0;
-        return failure(arena, c.id, "the tool did not answer in m8", .{});
+        return malformedToolAnswer(arena, captured.written(), c.id, err_sink.written());
     };
     const interrupted_now = interrupted.load(.monotonic);
     return toolAnswer(arena, records, c.id, status, complaint, interrupted_now);
@@ -1575,4 +1575,33 @@ test "live tool separators match show in both document modes" {
             try std.testing.expectEqual(records.len, live.displayed);
         }
     }
+}
+/// Preserve an invalid tool response verbatim as a receipt, and attach the
+/// complete stderr diagnostic to the failure so the malformed wire is debuggable.
+fn malformedToolAnswer(
+    arena: Allocator,
+    raw: []const u8,
+    id: []const u8,
+    stderr: []const u8,
+) ![]const doc.Record {
+    const records = try arena.alloc(doc.Record, 2);
+    records[0] = .{ .sigil = .result, .value = id, .content = raw };
+    const separator: []const u8 = if (stderr.len == 0 or stderr[stderr.len - 1] == '\n') "" else "\n";
+    records[1] = .{
+        .sigil = .failed,
+        .value = id,
+        .content = try std.fmt.allocPrint(arena, "{s}{s}(malformed response)", .{ stderr, separator }),
+    };
+    return records;
+}
+
+test "malformed tool output is kept literally with stderr on the failure" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const answer_records = try malformedToolAnswer(a.allocator(), "raw\nbytes\n", "c1", "first diagnostic\nsecond diagnostic");
+    try std.testing.expectEqual(@as(usize, 2), answer_records.len);
+    try std.testing.expectEqual(sigil.Sigil.result, answer_records[0].sigil);
+    try std.testing.expectEqualStrings("raw\nbytes\n", answer_records[0].content.?);
+    try std.testing.expectEqual(sigil.Sigil.failed, answer_records[1].sigil);
+    try std.testing.expectEqualStrings("first diagnostic\nsecond diagnostic\n(malformed response)", answer_records[1].content.?);
 }
