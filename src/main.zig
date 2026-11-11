@@ -37,7 +37,7 @@ fn overview(w: *std.Io.Writer) !void {
     try w.writeAll(
         \\m8 - the composable agentic shell harness
         \\
-        \\  m8 :MOB/AGENT[:|-|--] [-r] [-v] [-- PROMPT]
+        \\  m8 :MOB/AGENT[:|-|=] [-r] [-v] [-- PROMPT]
         \\  m8 COMMAND [ARGS]
         \\
         \\:MOB/AGENT is shorthand for `m8 say -i`: prompt text and stdin
@@ -47,9 +47,9 @@ fn overview(w: *std.Io.Writer) !void {
         \\:demo/mathy talks to that agent's own chat and moves it on.
         \\An address is always explicit: bare m8 shows this page, not a chat.
         \\A subchat forks from its parent; `:` asks without advancing it,
-        \\`-` resets to its parent, and `--` resets to its authored agent
-        \\when no prompt is supplied. The prompt separator is a separate `--`
-        \\after the address.
+        \\`-` starts from its authored agent, and `=` starts from its parent.
+        \\With no prompt, either resets the chat. The prompt separator is a
+        \\separate `--` after the address.
         \\
         \\An address alone at a terminal opens the configured `tui`; by default
         \\it is riff, sending each message with `m8 say -r -v -i :MOB/AGENT`.

@@ -1,7 +1,7 @@
 # Commands
 
 ```bash
-m8 [:MOB/AGENT[:|-|--] [-r] [-v] [-- PROMPT]]
+m8 [:MOB/AGENT[:|-|=] [-r] [-v] [-- PROMPT]]
 m8 COMMAND [ARGS]
 ```
 
@@ -63,10 +63,10 @@ m8 :demo/mathy/+/tduyxbutjb -- "Tell me more."
   :demo/mathy//aside/+/tduyxbutjb      a turn in the subchat
   ```
 * `:brain:` and 🧠 also mark an address, so a printed reference can be pasted back.
-* A trailing `:` asks without advancing the chat. `-` resets it to its parent;
-  `--` resets it to its authored agent, regardless of its parent's head.
-  In launcher shorthand only, a separate `--` after the address introduces
-  prompt words. Explicit `say` takes one quoted prompt argument directly.
+* A trailing `:` asks without advancing the chat. `-` starts from the authored
+  agent; `=` starts from the chat's parent. In launcher shorthand only, a
+  separate `--` after the address introduces prompt words. Explicit `say` takes
+  one quoted prompt argument directly.
 * Compose the addressed run from filters when needed:
   `m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy`.
 * Every agent belongs to one mob: `mobs/demo/mathy.md`. Agent definitions may
@@ -162,10 +162,9 @@ m8 watch :crew/cody//delegated
 * `send` runs a ledger and writes the turn without keeping it.
 * `tag :MOB/AGENT` keeps a turn and points the chat at it.
   * `--no-advance` keeps the turn and moves nothing.
-* Promptless `say CHAT-` takes the chat's pointer away, so it reads as its
-  parent again; `say --parent CHAT` is the equivalent spelling.
-  * `say CHAT--` starts it from the authored agent, whatever its chats have got
-    to; `say --new CHAT` is the equivalent spelling.
+* Promptless `say CHAT-` resets a chat to its authored agent; `say CHAT=` resets it
+  to its parent. `say --new CHAT` and `say --parent CHAT` are the equivalent
+  spellings.
 * `cat` reads a document and writes block markdown by default.
   * `cat REF` reads the document the chat resolves to, or a named turn, without
     expanding its lineage or included documents. A chat without a kept turn

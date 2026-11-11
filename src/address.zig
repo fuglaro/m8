@@ -13,10 +13,10 @@ pub const Suffix = enum {
     none,
     /// `:` — ask, and move no pointer.
     oneshot,
-    /// `-` — start from the chat's parent.
+    /// `-` — start from the authored agent.
     reset,
-    /// `--` — start from the authored agent.
-    reset_new,
+    /// `=` — start from the chat's parent.
+    reset_parent,
 };
 
 pub const Address = struct {
@@ -71,10 +71,9 @@ pub fn resolve(
     if (std.mem.endsWith(u8, rest, ":")) {
         suffix = .oneshot;
         rest = rest[0 .. rest.len - 1];
-    } else if (std.mem.endsWith(u8, rest, "--")) {
-        // Check the two-character suffix first: it is also a trailing `-`.
-        suffix = .reset_new;
-        rest = rest[0 .. rest.len - 2];
+    } else if (std.mem.endsWith(u8, rest, "=")) {
+        suffix = .reset_parent;
+        rest = rest[0 .. rest.len - 1];
     } else if (std.mem.endsWith(u8, rest, "-")) {
         suffix = .reset;
         rest = rest[0 .. rest.len - 1];
@@ -362,7 +361,7 @@ test "explicit mob addresses and suffixes; no global chat or hidden agents" {
     try testing.expectError(error.UnknownAgent, resolve(arena, f.io, dirs, ":mob/missing", &d));
     try testing.expectEqual(Suffix.oneshot, (try resolve(arena, f.io, dirs, ":mob/agent:", &d)).suffix);
     try testing.expectEqual(Suffix.reset, (try resolve(arena, f.io, dirs, ":mob/agent//c1-", &d)).suffix);
-    try testing.expectEqual(Suffix.reset_new, (try resolve(arena, f.io, dirs, ":mob/agent//c1--", &d)).suffix);
+    try testing.expectEqual(Suffix.reset_parent, (try resolve(arena, f.io, dirs, ":mob/agent//c1=", &d)).suffix);
     try testing.expectEqual(Kind.turn, (try resolve(arena, f.io, dirs, ":mob/agent/+/abc", &d)).kind);
     const stateless = try resolve(arena, f.io, dirs, ":/local/tiny", &d);
     try testing.expectEqual(Kind.model, stateless.kind);

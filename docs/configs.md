@@ -217,8 +217,9 @@ with `mobs/*/.chats/` and `mobs/*/.mob-space/` in `.m8st8/.gitignore`.
   history directory; logical names remain `MOB/AGENT/+/ID`.
 * A chat with no pointer inherits its parent's head. The parent of an agent's
   own chat is its authored agent.
-* Promptless `say CHAT-` removes a chat's pointer; `say CHAT--` starts it from
-  the authored agent. `say --parent CHAT` and `say --new CHAT` are equivalent.
+* Promptless `say CHAT-` resets a chat to its authored agent; `say CHAT=` resets it
+  to its parent. `say --new CHAT` and `say --parent CHAT` are the equivalent
+  spellings.
 * A side question advances nothing. Forks share parent turns without copying
   transcripts. Snips remain alongside the turns that refer to them.
 * `say` keeps progress incrementally; only the explicitly addressed

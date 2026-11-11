@@ -83,8 +83,8 @@ const Options = struct {
         switch (a.suffix) {
             .none => {},
             .oneshot => self.stay = true,
-            .reset, .reset_new => {
-                const start: address.Start = if (a.suffix == .reset) .parent else .new;
+            .reset, .reset_parent => {
+                const start: address.Start = if (a.suffix == .reset) .new else .parent;
                 if (self.start != .head and self.start != start) return error.StartConflict;
                 self.start = start;
             },
@@ -231,13 +231,13 @@ fn readTerminal(reader: ?*std.Io.Reader, arena: std.mem.Allocator) ![]const u8 {
 
 fn help(_: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
-        \\  m8 say [OPTS] :MOB/AGENT[:|-|--] ["PROMPT"]
+        \\  m8 say [OPTS] :MOB/AGENT[:|-|=] ["PROMPT"]
         \\
         \\Say something to a chat and keep the run. Only that chat advances.
         \\A subchat is a fork: :mob/agent//aside starts where its parent is.
-        \\A trailing : asks without advancing; - starts from the parent;
-        \\-- starts from the authored agent instead. With no submission,
-        \\- or -- resets the chat without running it.
+        \\A trailing : asks without advancing; - starts from the authored agent;
+        \\= starts from the parent. With no submission, - or = resets the chat
+        \\without running it.
         \\
         \\PROMPT is one argument, even when it begins with a dash. It is a 🙋
         \\submission, or the ❗ answer when the conversation awaits one.
@@ -294,7 +294,7 @@ test "chat option rejects suffixes but own-chat suffixes work" {
     const t = std.testing;
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
-    for ([_]address.Suffix{ .none, .oneshot, .reset, .reset_new }) |suffix| {
+    for ([_]address.Suffix{ .none, .oneshot, .reset, .reset_parent }) |suffix| {
         var o: Options = .{ .word = ":mob/agent" };
         const a: address.Address = .{ .kind = .chat, .name = "mob/agent", .suffix = suffix };
         _ = try o.target(a, arena.allocator());
@@ -307,7 +307,7 @@ test "chat option rejects suffixes but own-chat suffixes work" {
     }
     var o: Options = .{ .word = "", .chat = "aside" };
     try t.expectError(error.ChatAddressConflict, o.target(.{ .kind = .chat, .name = "mob/agent//other" }, arena.allocator()));
-    var bad: Options = .{ .word = "", .start = .new };
+    var bad: Options = .{ .word = "", .start = .parent };
     try t.expectError(error.StartConflict, bad.target(.{ .kind = .chat, .name = "mob/agent", .suffix = .reset }, arena.allocator()));
 }
 

@@ -118,15 +118,15 @@ test "launcher persists storage, resets sessions, and inherits roots in delegate
     try s.expect(&.{ "say", "--answer", "--unwrap", ":demo/echo//job", "next" }, "next");
     const job = try path(a, &.{ root, "project/mobs/demo/.chats/echo/_/job/+.md" });
     try std.testing.expect(exists(job));
-    try s.expect(&.{ "say", ":demo/echo//job-" }, "");
+    try s.expect(&.{ "say", ":demo/echo//job=" }, "");
     try std.testing.expect(!exists(job));
     try s.expect(&.{ "say", "--new", ":demo/echo//job" }, "");
     try std.testing.expect(exists(job));
     try std.testing.expect(std.mem.indexOf(u8, try std.Io.Dir.cwd().readFileAlloc(io, job, a, .limited(1 << 20)), "demo/echo") != null);
-    try s.expect(&.{":demo/echo//job-"}, "");
+    try s.expect(&.{":demo/echo//job="}, "");
     try std.testing.expect(!exists(job));
     try s.expect(&.{ "say", "--answer", "--unwrap", ":demo/echo//job", "again" }, "again");
-    try s.expect(&.{":demo/echo//job--"}, "");
+    try s.expect(&.{":demo/echo//job-"}, "");
     try std.testing.expectEqualStrings("* :brain::demo/echo\n", try std.Io.Dir.cwd().readFileAlloc(io, job, a, .limited(1 << 20)));
     try s.expect(&.{ "say", "--answer", "--unwrap", ":useronly/echo", "relocated" }, "relocated");
     try std.testing.expect(exists(try path(a, &.{ s.data_root, "user/mobs/useronly/.chats/echo/+.md" })));
