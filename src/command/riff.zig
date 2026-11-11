@@ -100,7 +100,11 @@ var winch = false;
 var quit = false;
 
 fn onSignal(sig: posix.SIG) callconv(.c) void {
-    if (sig == .WINCH) winch = true else quit = true;
+    if (sig == .WINCH) {
+        @atomicStore(bool, &winch, true, .seq_cst);
+    } else {
+        @atomicStore(bool, &quit, true, .seq_cst);
+    }
 }
 
 fn run(ctx: Ctx) !u8 {
@@ -170,8 +174,8 @@ fn run(ctx: Ctx) !u8 {
     try posix.tcsetattr(0, .FLUSH, raw);
     defer posix.tcsetattr(0, .FLUSH, cooked) catch {};
 
-    try r.open();
     defer r.close();
+    try r.open();
     try r.loop();
     return 0;
 }
@@ -279,6 +283,7 @@ const Riff = struct {
     started: ?std.Io.Timestamp = null,
     status_given: bool = false,
     streams: [2]?posix.fd_t = .{ null, null },
+    opened: bool = false,
 
     /// The rows riff owns: the status lines and the editor.
     fn live(r: *const Riff) usize {
@@ -312,6 +317,7 @@ const Riff = struct {
     /// on screen is still there above them.
     fn open(r: *Riff) !void {
         r.measure(null);
+        r.opened = true;
         const l = r.live();
         try r.out.splatByteAll('\n', l);
         if (l > 0) try r.out.print("\x1b[{d}A", .{l});
@@ -322,6 +328,7 @@ const Riff = struct {
     }
 
     fn close(r: *Riff) void {
+        if (!r.opened) return;
         if (r.child) |c| posix.kill(-c.id.?, .HUP) catch {};
         r.wipe() catch {};
         r.out.writeAll("\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?25h") catch {};
@@ -331,11 +338,10 @@ const Riff = struct {
     fn loop(r: *Riff) !void {
         var chunk: [4096]u8 = undefined;
         var held: usize = 0;
-        while (!quit) {
-            if (winch) {
+        while (!@atomicLoad(bool, &quit, .seq_cst)) {
+            if (@atomicRmw(bool, &winch, .Xchg, false, .seq_cst)) {
                 // Reflow has moved everything, so ask where the command's
                 // cursor landed and rebuild around the answer.
-                winch = false;
                 try r.ask(.size);
             }
             if (r.resizing) |since| if (r.asking == .no and since.untilNow(r.ctx.io, .awake).toMilliseconds() >= settle) {
@@ -367,7 +373,9 @@ const Riff = struct {
                 .{ .fd = r.streams[1] orelse -1, .events = posix.POLL.IN, .revents = 0 },
             };
             const n = posix.system.poll(&fds, fds.len, if (r.asking != .no) 100 else if (r.resizing != null) settle / 2 else if (r.started != null) 1000 else -1);
-            if (posix.errno(n) != .SUCCESS) continue;
+            const poll_error = posix.errno(n);
+            if (poll_error == .INTR) continue;
+            if (poll_error != .SUCCESS) return error.PollFailed;
             // A terminal that never answers is assumed to be at the bottom.
             if (n == 0 and r.asking != .no) try r.answered(r.first, null);
 
@@ -921,10 +929,13 @@ const Riff = struct {
                         200, 201 => r.pasting = p1 == 200,
                         else => {},
                     },
-                    'R' => if (r.asking == .place) {
-                        try r.answered(.{ p1, p2 }, null);
-                    } else if (r.asking != .no) {
-                        if (r.first) |at| try r.answered(at, .{ p1, p2 }) else r.first = .{ p1, p2 };
+                    'R' => {
+                        const position: ?[2]usize = if (p1 > 0 and p2 > 0) .{ p1, p2 } else null;
+                        if (r.asking == .place) {
+                            try r.answered(position, null);
+                        } else if (r.asking != .no) {
+                            if (r.first) |at| try r.answered(at, position) else r.first = position;
+                        }
                     },
                     else => {},
                 }
