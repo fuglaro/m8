@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
+    const version = buildVersion(b);
     const target = b.standardTargetOptions(.{});
     const requested_optimize = b.standardOptimizeOption(.{});
     // Two namings of a small build with less in it. Each only chooses what
@@ -57,7 +58,7 @@ pub fn build(b: *std.Build) void {
 
     // The launcher: every command but the ones named apart, reached by
     // calling it.
-    const exe = command(b, target, optimize, small, "m8", "src/main.zig", "", every, no_curl_dep, formats, split, layout);
+    const exe = command(b, target, optimize, small, "m8", "src/main.zig", "", every, no_curl_dep, formats, split, layout, version);
     b.getInstallStep().dependOn(install(b, target, exe, small));
 
     const run = b.addRunArtifact(exe);
@@ -69,7 +70,7 @@ pub fn build(b: *std.Build) void {
     var apart = std.mem.tokenizeAny(u8, split, ", ");
     while (apart.next()) |name| {
         if (!among(every, name)) std.process.fatal("-Dsplit: no command named '{s}'", .{name});
-        const leaf = command(b, target, optimize, small, b.fmt("m8-{s}", .{name}), "src/leaf.zig", name, every, no_curl_dep, formats, split, layout);
+        const leaf = command(b, target, optimize, small, b.fmt("m8-{s}", .{name}), "src/leaf.zig", name, every, no_curl_dep, formats, split, layout, version);
         b.getInstallStep().dependOn(install(b, target, leaf, small));
     }
 
@@ -82,8 +83,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     // The tests are of the sources, so they are handed every command.
-    tests.root_module.addOptions("build_options", options(b, "", every, no_curl_dep, formats, "", layout));
-    const test_launcher = command(b, target, optimize, small, "m8-test-launcher", "src/main.zig", "", every, no_curl_dep, formats, "", layout);
+    tests.root_module.addOptions("build_options", options(b, "", every, no_curl_dep, formats, "", layout, version));
+    const test_launcher = command(b, target, optimize, small, "m8-test-launcher", "src/main.zig", "", every, no_curl_dep, formats, "", layout, version);
     const test_options = b.addOptions();
     test_options.addOptionPath("launcher", test_launcher.getEmittedBin());
     tests.root_module.addOptions("test_options", test_options);
@@ -118,6 +119,7 @@ fn command(
     formats: Formats,
     split: []const u8,
     layout: Layout,
+    version: []const u8,
 ) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = name,
@@ -129,7 +131,7 @@ fn command(
             .strip = if (small) true else null,
         }),
     });
-    exe.root_module.addOptions("build_options", options(b, which, every, no_curl_dep, formats, split, layout));
+    exe.root_module.addOptions("build_options", options(b, which, every, no_curl_dep, formats, split, layout, version));
     return exe;
 }
 
@@ -165,9 +167,11 @@ fn options(
     formats: Formats,
     split: []const u8,
     layout: Layout,
+    version: []const u8,
 ) *std.Build.Step.Options {
     const o = b.addOptions();
     o.addOption([]const u8, "command", which);
+    o.addOption([]const u8, "version", version);
     o.addOption([]const u8, "split", split);
     o.addOption([]const u8, "commands", every);
     o.addOption(bool, "no_curl_dep", no_curl_dep);
@@ -257,6 +261,43 @@ const Layout = struct {
     user_data_subpath: []const u8,
     xdg: bool,
 };
+
+/// A build's date and source identity, embedded in every executable.
+fn buildVersion(b: *std.Build) []const u8 {
+    const date_raw = b.run(&.{ "date", "+%m.%d" });
+    const date = std.mem.trim(u8, date_raw, "\r\n");
+
+    var exit_code: u8 = undefined;
+    const revision_raw = b.runAllowFail(&.{ "git", "rev-parse", "--short", "HEAD" }, &exit_code, .ignore) catch
+        return b.fmt("{s}.unknown", .{date});
+    const revision = std.mem.trim(u8, revision_raw, "\r\n");
+    const revision_number = std.fmt.parseInt(u64, revision, 16) catch
+        return b.fmt("{s}.{s}", .{ date, revision });
+    const short_revision = base62(b, revision_number);
+
+    const diff = b.runAllowFail(&.{ "git", "diff", "HEAD", "--binary" }, &exit_code, .ignore) catch
+        return b.fmt("{s}.{s}", .{ date, short_revision });
+    if (diff.len == 0) return b.fmt("{s}.{s}", .{ date, short_revision });
+    const hash = std.hash.Wyhash.hash(0, diff);
+    return b.fmt("{s}.{s}.{s}", .{ date, short_revision, base62(b, hash) });
+}
+
+fn base62(b: *std.Build, value: u64) []const u8 {
+    const alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    var buf: [11]u8 = undefined;
+    var n = value;
+    var start = buf.len;
+    while (n != 0) {
+        start -= 1;
+        buf[start] = alphabet[@intCast(n % alphabet.len)];
+        n /= alphabet.len;
+    }
+    if (start == buf.len) {
+        start -= 1;
+        buf[start] = alphabet[0];
+    }
+    return b.dupe(buf[start..]);
+}
 
 /// Home subpaths cannot escape HOME; the project name is one component.
 fn validateSubpath(option: []const u8, path: []const u8, single: bool) void {

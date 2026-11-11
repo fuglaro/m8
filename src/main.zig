@@ -115,6 +115,12 @@ pub fn main(init: std.process.Init) !u8 {
     const out = &stdout.interface;
     const err = &stderr.interface;
 
+    if (args.len == 1 and std.mem.eql(u8, args[0], "--version")) {
+        try out.print("m8 {s}\n", .{@import("build_options").version});
+        try out.flush();
+        return 0;
+    }
+
     // The launcher owns its overview. Only the first word is reserved; a
     // prompt's `--help` is prose after its required `--` separator.
     if (command.api.wantsHelp(@ptrCast(args))) {
