@@ -67,9 +67,13 @@ fn run(ctx: Ctx) !u8 {
         .{ .names = breaks.items },
     );
 
+    var records: std.ArrayList(doc.Record) = .empty;
+    try records.appendSlice(arena, try ledger.inheritedAgent(arena, ctx.io, dirs));
+    try records.appendSlice(arena, expanded.records);
+
     const env = try api.childEnvironment(arena, ctx, &.{});
-    const records = try link.handOver(arena, ctx.io, dirs, env, expanded.records);
-    try ctx.out.writeAll(try c.encode(arena, records, try target(ctx, expanded.records)));
+    const handed = try link.handOver(arena, ctx.io, dirs, env, records.items);
+    try ctx.out.writeAll(try c.encode(arena, handed, try target(ctx, records.items)));
     return 0;
 }
 

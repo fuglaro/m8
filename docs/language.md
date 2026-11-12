@@ -450,6 +450,17 @@ with a variable and values configures that tool, and a bare blockless
 header offers it. A definition header may not combine content and
 variable configuration.
 
+Tool definitions compose by name across included agents. The occurrence that
+sets a command owns the whole parameter schema: parameters cannot be supplied
+by another occurrence. A repeated command/schema owner is accepted only when
+its command and schema are identical, as can happen through multiple import
+chains; a conflicting owner is an error. Tool descriptions accumulate in
+encounter order, with one newline between adjacent description blocks and no
+blank line. A description-only occurrence may therefore add context without
+redefining the executable or its interface. A tool with no command owner is
+not offered to the model, even if a blockless header names it. Shields on a
+tool remain additive.
+
 * Value only: 🧠 📚 🔏 🟢 💭
 * Content only: 🙋 🧭
 * Both: 🤖 🧰 📲 🧾 📜 🔗 🚫 🛡️ 🏃 ❓ ❗

@@ -90,6 +90,27 @@ Previously, highlights were read from the `highlights` key in
 `core/config.json`. That JSON key is no longer read; migrate its value to
 `core/highlights.txt`.
 
+## Inherited agent definitions
+
+Each existing `core/agents.md` contributes m8 records to the front of every
+agent definition, in this order: system config, user config, then the nearest
+registered project `.m8st8`. Missing files are skipped. The files use the
+ordinary agent language and their agent inclusions are expanded normally; they
+are not a separate policy format. Later agent records follow these records in
+the ledger, so normal composition rules still apply. In particular, additive
+shields remain additive; a prompt is guidance to a model, not a technical
+restriction.
+
+For example, a system `core/agents.md` can define and activate a shield that
+will be present for every agent:
+
+```markdown
+* :shield::restricted
+  > ...
+
+* :shield::restricted
+```
+
 ## Mobs
 
 A mob keeps related agents and their conversations together. Definitions and

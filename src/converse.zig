@@ -146,6 +146,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     const scratch = (try config.mobTmp(arena, io, dirs, owner)) orelse "";
 
     var records: std.ArrayList(doc.Record) = .empty;
+    try records.appendSlice(arena, try ledger.inheritedAgent(arena, io, full_dirs));
     try records.appendSlice(arena, expanded.records);
 
     const def = try agent.project(arena, records.items);
@@ -165,7 +166,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     const environ = try api.childEnvironment(arena, ctx, provider_env.items);
     try provider.addEnvironment(arena, p, environ);
 
-    // Only what a blockless 🧰 named, and the last definition of a name wins.
+    // Only what a blockless 🧰 named reaches the model.
     const offered = try agent.offer(arena, def);
 
     // Shields come from the ledger alone, and stack rather than replace: a

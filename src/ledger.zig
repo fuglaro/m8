@@ -157,6 +157,37 @@ const Frame = struct {
     part: Part = .body,
 };
 
+/// Expand the inherited agent definition files in administrator, user, then
+/// nearest-project order. These are ordinary m8 documents, not a separate
+/// policy language. Missing files contribute nothing.
+pub fn inheritedAgent(arena: Allocator, io: std.Io, dirs: config.Dirs) ExpandError![]const doc.Record {
+    var roots: std.ArrayList([]const u8) = .empty;
+    // The selected roots are nearest-project, user, system. Reorder explicitly
+    // here: inherited definitions are deliberately prefixed system-first.
+    try roots.append(arena, dirs.system_root);
+    if (dirs.user_root) |user| try roots.append(arena, user);
+    for (dirs.roots) |root| {
+        if (std.mem.eql(u8, root, dirs.system_root)) continue;
+        if (dirs.user_root) |user| if (std.mem.eql(u8, root, user)) continue;
+        try roots.append(arena, root);
+        break;
+    }
+
+    var out: std.ArrayList(doc.Record) = .empty;
+    for (roots.items) |root| {
+        const path = try std.fs.path.join(arena, &.{ root, "core", "agents.md" });
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(config.max_file)) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => continue,
+            else => return err,
+        };
+        var diag: doc.Diagnostic = .{};
+        const parsed = try doc.parse(arena, bytes, &diag);
+        const expanded = try expandRecords(arena, io, dirs, parsed, doc.detect(bytes) orelse .md);
+        try out.appendSlice(arena, expanded.records);
+    }
+    return out.items;
+}
+
 /// Expand `name` into its records.
 pub fn expand(
     arena: Allocator,

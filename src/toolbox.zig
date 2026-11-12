@@ -40,6 +40,10 @@ pub const Error = error{
     MissingSchema,
     BadSchemaDelimiter,
     TrailingPropertyText,
+    DuplicateCommand,
+    DuplicateProperty,
+    PropertyWithoutCommand,
+    ConflictingDefinition,
 };
 
 pub const Property = struct {
@@ -210,6 +214,7 @@ pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const 
 
         // A fenced block, and an argv are the two ways to say how it runs.
         if (markdown.opensFence(line)) {
+            if (command != .none) return Error.DuplicateCommand;
             command = .{ .block = try markdown.readFence(arena, line, &lines) };
             continue;
         }
@@ -225,7 +230,10 @@ pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const 
         }
 
         if (std.mem.startsWith(u8, trimmed, "*")) {
-            try props.append(arena, try property(arena, trimmed[1..]));
+            const parsed = try property(arena, trimmed[1..]);
+            for (props.items) |old| if (std.mem.eql(u8, old.name, parsed.name))
+                return Error.DuplicateProperty;
+            try props.append(arena, parsed);
             continue;
         }
 
@@ -236,6 +244,7 @@ pub fn parse(arena: Allocator, mode: Mode, header: []const u8, content: []const 
         }
 
         if (try shield.inlineArgv(arena, trimmed)) |argv| {
+            if (command != .none) return Error.DuplicateCommand;
             command = .{ .argv = argv };
             continue;
         }

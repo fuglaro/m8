@@ -58,7 +58,10 @@ pub fn load(
     name: []const u8,
 ) LoadError!Definition {
     const l = try ledger.expand(arena, io, dirs, name);
-    var def = try project(arena, l.records);
+    var records: std.ArrayList(doc.Record) = .empty;
+    try records.appendSlice(arena, try ledger.inheritedAgent(arena, io, dirs));
+    try records.appendSlice(arena, l.records);
+    var def = try project(arena, records.items);
     if (def.model.len == 0) return Error.NoModel;
     def.name = name;
     def.origin = l.origin;
@@ -77,9 +80,8 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
 
     for (records) |r| switch (r.sigil) {
         // Every 🧠 that named an agent was replaced by what it named, so
-        // whatever is left is in the model form. The last one wins, the same
-        // as a tool's last definition: an agent names its own model after one
-        // it includes, and a model piped in after a chat carries it on.
+        // whatever is left is in the model form. The last model wins, as an
+        // agent names its own model after one it includes.
         .agent => {
             if (try model.parse(arena, r.value)) |m| {
                 def.provider = m.provider;
@@ -96,7 +98,13 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
             const parsed = try toolbox.parse(arena, .md, r.value, r.content orelse "");
             if (r.content != null) {
                 if (parsed.env_var.len > 0) return toolbox.Error.VariableOnDefinition;
-                try tools.append(arena, parsed);
+                var merged = false;
+                for (tools.items) |*old| if (std.mem.eql(u8, old.name, parsed.name)) {
+                    try mergeTool(arena, old, parsed);
+                    merged = true;
+                    break;
+                };
+                if (!merged) try tools.append(arena, parsed);
             } else if (parsed.env_var.len > 0) {
                 try tool_vars.append(arena, .{ .name = parsed.name, .value = .{
                     .key = parsed.env_var,
@@ -126,14 +134,77 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
     return def;
 }
 
-/// The tools this agent may use: named by a blockless 🧰, with the last
-/// definition of a name winning, so an including agent can replace what it
-/// pulled in.
+/// Merge one definition occurrence. Executable/schema ownership is unique;
+/// repeated imports are harmless only when they repeat the same owner. The
+/// tool description and shields are intentionally additive.
+fn mergeTool(arena: Allocator, old: *toolbox.Tool, next: toolbox.Tool) !void {
+    if (next.command == .none and next.properties.len > 0)
+        return toolbox.Error.PropertyWithoutCommand;
+    if (next.command != .none) {
+        if (old.command == .none) {
+            old.command = next.command;
+            old.properties = next.properties;
+        } else if (!sameCommand(old.command, next.command) or
+            !try sameProperties(arena, old.properties, next.properties))
+        {
+            return toolbox.Error.ConflictingDefinition;
+        }
+    }
+    if (next.description.len > 0) {
+        old.description = if (old.description.len == 0)
+            next.description
+        else if (std.mem.endsWith(u8, old.description, "\n"))
+            try std.mem.concat(arena, u8, &.{ old.description, next.description })
+        else
+            try std.mem.concat(arena, u8, &.{ old.description, "\n", next.description });
+    }
+    if (next.shields.len > 0) {
+        var shields: std.ArrayList(shield.Activation) = .empty;
+        try shields.appendSlice(arena, old.shields);
+        try shields.appendSlice(arena, next.shields);
+        old.shields = shields.items;
+    }
+}
+
+fn sameCommand(a: toolbox.Command, b: toolbox.Command) bool {
+    return switch (a) {
+        .none => b == .none,
+        .argv => |aa| switch (b) {
+            .argv => |bb| aa.len == bb.len and for (aa, bb) |x, y| {
+                if (!std.mem.eql(u8, x, y)) break false;
+            } else true,
+            else => false,
+        },
+        .block => |aa| switch (b) {
+            .block => |bb| std.mem.eql(u8, aa.runner, bb.runner) and std.mem.eql(u8, aa.code, bb.code),
+            else => false,
+        },
+    };
+}
+
+fn sameProperties(arena: Allocator, a: []const toolbox.Property, b: []const toolbox.Property) !bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!std.mem.eql(u8, x.name, y.name) or !std.mem.eql(u8, x.type, y.type) or
+            !std.mem.eql(u8, x.description, y.description) or x.required != y.required or x.extras.len != y.extras.len)
+            return false;
+        for (x.extras, y.extras) |xe, ye| {
+            if (!std.mem.eql(u8, xe.key, ye.key)) return false;
+            const xv = try std.json.Stringify.valueAlloc(arena, xe.value, .{});
+            const yv = try std.json.Stringify.valueAlloc(arena, ye.value, .{});
+            if (!std.mem.eql(u8, xv, yv)) return false;
+        }
+    }
+    return true;
+}
+
+/// The tools this agent may use: named by a blockless 🧰. Definitions have
+/// one command/schema owner; descriptions and shields compose across includes.
 pub fn offer(arena: Allocator, def: Definition) ![]const toolbox.Tool {
     var out: std.ArrayList(toolbox.Tool) = .empty;
     for (def.allowed) |name| {
         var found: ?toolbox.Tool = null;
-        for (def.tools) |t| if (std.mem.eql(u8, t.name, name)) {
+        for (def.tools) |t| if (t.command != .none and std.mem.eql(u8, t.name, name)) {
             found = t;
         };
         if (found) |t| try out.append(arena, t);
@@ -167,6 +238,15 @@ const Fixture = struct {
         const path = try std.fs.path.join(gpa, &.{ f.dir, try config.nameFile(gpa, logical) });
         if (std.fs.path.dirname(path)) |d| try std.Io.Dir.cwd().createDirPath(f.io, d);
         try std.Io.Dir.cwd().writeFile(f.io, .{ .sub_path = path, .data = body });
+    }
+
+    fn coreAgent(f: Fixture, gpa: Allocator, root: []const u8, body: []const u8) !void {
+        const dir = try std.fs.path.join(gpa, &.{ root, "core" });
+        try std.Io.Dir.cwd().createDirPath(f.io, dir);
+        try std.Io.Dir.cwd().writeFile(f.io, .{
+            .sub_path = try std.fs.path.join(gpa, &.{ dir, "agents.md" }),
+            .data = body,
+        });
     }
 
     fn deinit(f: Fixture, gpa: Allocator) void {
@@ -277,7 +357,7 @@ test "shields accumulate over the lineage, so including cannot widen" {
     try testing.expectEqualStrings("airgap", d.active[1].name);
 }
 
-test "a later definition of a tool name is the one offered" {
+test "a conflicting tool command definition is an error" {
     var threaded: std.Io.Threaded = .init(testing.allocator, .{});
     defer threaded.deinit();
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -302,10 +382,89 @@ test "a later definition of a tool name is the one offered" {
     );
 
     const dirs = [_][]const u8{f.dir};
-    const d = try load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer");
-    const offered = try offer(arena, d);
-    try testing.expectEqual(@as(usize, 1), offered.len);
-    try testing.expectEqualStrings("outer", offered[0].command.argv[1]);
+    try testing.expectError(toolbox.Error.ConflictingDefinition, load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer"));
+}
+
+test "identical imported tool owners are idempotent while descriptions accumulate" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-agent-tool-compose");
+    defer f.deinit(arena);
+    try f.agent(arena, "test/base.md",
+        \\* :brain::/local/tiny
+        \\
+        \\* :toolbox::say
+        \\  > `echo` `base`
+        \\  > > Base description.
+    );
+    try f.agent(arena, "test/outer.md",
+        \\* :brain::test/base
+        \\
+        \\* :brain::test/base
+        \\
+        \\* :toolbox::say
+        \\  > > Additional description.
+    );
+
+    const dirs = [_][]const u8{f.dir};
+    const def = try load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/outer");
+    try testing.expectEqual(@as(usize, 1), def.tools.len);
+    try testing.expectEqualStrings("Base description.\nBase description.\nAdditional description.", def.tools[0].description);
+    try testing.expectEqualStrings("base", def.tools[0].command.argv[1]);
+}
+
+test "an offered tool without a command owner is not offered to the model" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-agent-description-only");
+    defer f.deinit(arena);
+    try f.agent(arena, "test/agent.md",
+        \\* :brain::/local/tiny
+        \\
+        \\* :toolbox::not_ready
+        \\  > > Its command is supplied by another include.
+        \\
+        \\* :toolbox::not_ready
+    );
+
+    const dirs = [_][]const u8{f.dir};
+    const def = try load(arena, f.io, config.Dirs{ .roots = &dirs }, "test/agent");
+    try testing.expectEqual(@as(usize, 1), def.tools.len);
+    try testing.expectEqual(@as(usize, 0), (try offer(arena, def)).len);
+}
+
+test "inherited core agent files prefix system, user and nearest project records" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-agent-inherited");
+    defer f.deinit(arena);
+    const user = try std.fs.path.join(arena, &.{ f.dir, "user-root" });
+    const system = try std.fs.path.join(arena, &.{ f.dir, "system-root" });
+    try f.agent(arena, "test/agent.md", "* :brain::/local/tiny\n* :shield::agent\n");
+    try f.coreAgent(arena, system, "* :shield::system\n");
+    try f.coreAgent(arena, user, "* :shield::user\n");
+    try f.coreAgent(arena, f.dir, "* :shield::project\n");
+
+    const roots = [_][]const u8{ f.dir, user, system };
+    const dirs: config.Dirs = .{ .roots = &roots, .user_root = user, .system_root = system };
+    const def = try load(arena, f.io, dirs, "test/agent");
+    try testing.expectEqual(@as(usize, 4), def.active.len);
+    try testing.expectEqualStrings("system", def.active[0].name);
+    try testing.expectEqualStrings("user", def.active[1].name);
+    try testing.expectEqualStrings("project", def.active[2].name);
+    try testing.expectEqualStrings("agent", def.active[3].name);
 }
 
 test "an unknown agent and a missing model are told apart" {
