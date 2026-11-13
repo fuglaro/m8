@@ -7,9 +7,11 @@
 //! writes the status line, the editor, and terminal modes.
 //!
 //! The cursor is the command's, and rests wherever its output has got to.
-//! That is the one position a terminal keeps true through a resize, so it is
-//! the one riff rebuilds around. The editor's cursor is drawn rather than
-//! real, and the live rows are painted from a saved cursor and back.
+//! Riff rebuilds around that position after a resize. On Kitty, which would
+//! otherwise reflow the live rows into history, the command's cursor is saved
+//! while the real cursor rests in the panel, marked as a redrawable prompt.
+//! Kitty excludes that panel from reflow and tracks the saved cursor too.
+//! The editor's cursor is drawn rather than real.
 //!
 //! Every send is a run: the command is started, handed the message on stdin,
 //! and streamed until it ends. It runs in a session of its own, so opening
@@ -284,6 +286,19 @@ const Riff = struct {
     status_given: bool = false,
     streams: [2]?posix.fd_t = .{ null, null },
     opened: bool = false,
+    /// XTVERSION is requested once, without delaying startup. Only a direct
+    /// Kitty reply enables panel protection; TERM and inherited Kitty env
+    /// variables are not sufficient, especially inside a multiplexer.
+    identifying: ?std.Io.Timestamp = null,
+    version_reply: VersionReply = .{},
+    kitty: bool = false,
+    /// While blocked in poll, Kitty's real cursor is in the panel and its
+    /// saved cursor belongs to the command. Restore it before anything that
+    /// can use the terminal or its save slot, including queries and cleanup.
+    parked: bool = false,
+    /// Once marked, let Kitty carry the panel through unannounced resizes.
+    /// Re-mark only after riff has erased or rebuilt its live rows.
+    panel_marked: bool = false,
 
     /// The rows riff owns: the status lines and the editor.
     fn live(r: *const Riff) usize {
@@ -324,12 +339,50 @@ const Riff = struct {
         // Setting a region sends the cursor home, so it is put back.
         // And the terminal is asked to say when it gains and loses focus.
         try r.out.print("\x1b7\x1b[1;{d}r\x1b8\x1b[?25l\x1b[?1004h\x1b[?2004h", .{r.h - l});
+        const term = r.ctx.env.get("TERM") orelse "";
+        if (r.ctx.env.get("TMUX") == null and r.ctx.env.get("STY") == null and
+            !std.mem.startsWith(u8, term, "tmux") and !std.mem.startsWith(u8, term, "screen"))
+        {
+            r.identifying = .now(r.ctx.io, .awake);
+            try r.out.writeAll("\x1b[>0q");
+        }
         try r.render();
+    }
+
+    /// Kitty's prompt redraw path copies these rows aside before reflow and
+    /// restores them clipped, rather than wrapping them into scrollback.
+    /// A secondary prompt avoids completing the enclosing shell command.
+    fn park(r: *Riff) !void {
+        if (!r.kitty or r.parked or !r.scan.ground() or r.live() == 0 or r.w < 2) return;
+        try r.out.writeAll("\x1b7");
+        // Never replace a moving mark using stale coordinates. During a
+        // size query, keep the old mark until the measured rebuild clears it.
+        if (!r.panel_marked and r.asking == .no and !@atomicLoad(bool, &winch, .seq_cst)) {
+            try r.out.print("\x1b[{d};1H\x1b]133;A;k=s\x1b\\", .{r.h - r.live() + 1});
+            r.panel_marked = true;
+        }
+        // Clamp to the actual bottom row, even before SIGWINCH. Column two
+        // also avoids Kitty's temporary '<' for a blank line at column one.
+        try r.out.writeAll("\x1b[9999;2H");
+        r.parked = true;
+        try r.out.flush();
+    }
+
+    fn unpark(r: *Riff) !void {
+        if (!r.parked) return;
+        // Do not retype a pending-wrap character at stale coordinates while
+        // a resize is being measured. The answer will reset the column count.
+        if (r.asking == .size or @atomicLoad(bool, &winch, .seq_cst))
+            try r.out.writeAll("\x1b8")
+        else
+            try r.scan.restore(r.out);
+        r.parked = false;
     }
 
     fn close(r: *Riff) void {
         if (!r.opened) return;
         if (r.child) |c| posix.kill(-c.id.?, .HUP) catch {};
+        r.unpark() catch {};
         r.wipe() catch {};
         r.out.writeAll("\x1b[0m\x1b[?2004l\x1b[?1004l\x1b[?25h") catch {};
         r.out.flush() catch {};
@@ -339,6 +392,13 @@ const Riff = struct {
         var chunk: [4096]u8 = undefined;
         var held: usize = 0;
         while (!@atomicLoad(bool, &quit, .seq_cst)) {
+            try r.unpark();
+            if (r.identifying) |since| if (since.untilNow(r.ctx.io, .awake).toMilliseconds() >= 300) {
+                r.identifying = null;
+                // A lone Escape held only for the identification reply is
+                // otherwise a no-op, not a prefix for the next typed key.
+                if (held == 1 and chunk[0] == 0x1b) held = 0;
+            };
             if (@atomicRmw(bool, &winch, .Xchg, false, .seq_cst)) {
                 // Reflow has moved everything, so ask where the command's
                 // cursor landed and rebuild around the answer.
@@ -372,10 +432,15 @@ const Riff = struct {
                 .{ .fd = if (r.asking != .no) -1 else r.streams[0] orelse -1, .events = posix.POLL.IN, .revents = 0 },
                 .{ .fd = r.streams[1] orelse -1, .events = posix.POLL.IN, .revents = 0 },
             };
-            const n = posix.system.poll(&fds, fds.len, if (r.asking != .no) 100 else if (r.resizing != null) settle / 2 else if (r.started != null) 1000 else -1);
+            var timeout: i32 = if (r.asking != .no) 100 else if (r.resizing != null) settle / 2 else if (r.started != null) 1000 else -1;
+            if (r.identifying != null and (timeout < 0 or timeout > 100)) timeout = 100;
+            try r.park();
+            const n = posix.system.poll(&fds, fds.len, timeout);
             const poll_error = posix.errno(n);
             if (poll_error == .INTR) continue;
             if (poll_error != .SUCCESS) return error.PollFailed;
+            try r.unpark();
+            if (@atomicLoad(bool, &winch, .seq_cst)) continue;
             // A terminal that never answers is assumed to be at the bottom.
             if (n == 0 and r.asking != .no) try r.answered(r.first, null);
 
@@ -804,6 +869,7 @@ const Riff = struct {
     /// from the top-left corner a terminal may take that for clearing the
     /// screen, and keep what was on it in scrollback, stale live rows and all.
     fn wipe(r: *Riff) !void {
+        r.panel_marked = false;
         try r.out.writeAll("\x1b7\x1b[r\x1b8\x1b[K");
         for (0..r.h + 32) |_| try r.out.writeAll("\x1b[B\x1b[2K");
         try r.out.writeAll("\x1b8");
@@ -811,6 +877,7 @@ const Riff = struct {
 
     /// Draw every live row afresh next time.
     fn forget(r: *Riff) void {
+        r.panel_marked = false;
         for (r.drawn.items) |*d| d.clearRetainingCapacity();
         r.scan.strayed = false;
     }
@@ -886,78 +953,96 @@ const Riff = struct {
     /// bytes end part way through is left for when the rest has come.
     fn keys(r: *Riff, bytes: []const u8) !usize {
         var i: usize = 0;
-        while (i < bytes.len) : (i += 1) switch (bytes[i]) {
-            0x1b => {
-                const start = i;
-                // Left only when it is plainly the start of one. A lone
-                // escape is a key, except in a paste where nothing is.
-                const left = if (bytes.len - start > keep or (!r.pasting and bytes.len - start < 2)) bytes.len else start;
-                i += 1;
-                if (i >= bytes.len) return left;
-                // Alt-Enter, which is a new line whatever Enter is.
-                if (bytes[i] == '\r' or bytes[i] == '\n') {
-                    try r.insert("\n");
-                    continue;
+        while (i < bytes.len) : (i += 1) {
+            // Terminal identity replies are DCS strings, not keystrokes.
+            // Consume them even after the probe timed out, including long
+            // or fragmented replies, so they cannot enter the editor.
+            if (r.version_reply.state != .no) {
+                if (r.version_reply.feed(bytes[i])) |is_kitty| {
+                    if (r.identifying != null and !r.pasting) {
+                        r.kitty = is_kitty;
+                        r.identifying = null;
+                    }
                 }
-                if (bytes[i] != '[' and bytes[i] != 'O') continue;
-                const csi = bytes[i] == '[';
-                const from = i + 1;
-                while (i + 1 < bytes.len and (bytes[i + 1] < 0x40 or bytes[i + 1] > 0x7e)) i += 1;
-                i += 1;
-                if (i >= bytes.len) return left;
-                var params = std.mem.splitScalar(u8, bytes[from..i], ';');
-                const p1 = std.fmt.parseInt(usize, params.first(), 10) catch 1;
-                const p2 = std.fmt.parseInt(usize, params.next() orelse "", 10) catch 1;
-                switch (bytes[i]) {
-                    'A' => try r.vertical(true),
-                    'B' => try r.vertical(false),
-                    'C' => r.at = r.after(),
-                    'D' => r.at = r.before(),
-                    'H' => r.at = r.lineStart(),
-                    'F' => r.at = r.lineEnd(),
-                    'I' => if (csi) {
-                        r.focused = true;
-                    },
-                    'O' => if (csi) {
-                        r.focused = false;
-                    },
-                    '~' => switch (p1) {
-                        1, 7 => r.at = r.lineStart(),
-                        4, 8 => r.at = r.lineEnd(),
-                        3 => r.cut(r.at, r.after()),
-                        5, 6 => for (0..r.e) |_| try r.vertical(p1 == 5),
-                        200, 201 => r.pasting = p1 == 200,
+                continue;
+            }
+            switch (bytes[i]) {
+                0x1b => {
+                    const start = i;
+                    // Escape is normally a no-op. During the short identity
+                    // probe it may be the first byte of a split DCS response.
+                    const left = if (bytes.len - start > keep or (!r.pasting and r.identifying == null and bytes.len - start < 2)) bytes.len else start;
+                    i += 1;
+                    if (i >= bytes.len) return left;
+                    if (bytes[i] == 'P') {
+                        r.version_reply = .{ .state = .body };
+                        continue;
+                    }
+                    // Alt-Enter, which is a new line whatever Enter is.
+                    if (bytes[i] == '\r' or bytes[i] == '\n') {
+                        try r.insert("\n");
+                        continue;
+                    }
+                    if (bytes[i] != '[' and bytes[i] != 'O') continue;
+                    const csi = bytes[i] == '[';
+                    const from = i + 1;
+                    while (i + 1 < bytes.len and (bytes[i + 1] < 0x40 or bytes[i + 1] > 0x7e)) i += 1;
+                    i += 1;
+                    if (i >= bytes.len) return left;
+                    var params = std.mem.splitScalar(u8, bytes[from..i], ';');
+                    const p1 = std.fmt.parseInt(usize, params.first(), 10) catch 1;
+                    const p2 = std.fmt.parseInt(usize, params.next() orelse "", 10) catch 1;
+                    switch (bytes[i]) {
+                        'A' => try r.vertical(true),
+                        'B' => try r.vertical(false),
+                        'C' => r.at = r.after(),
+                        'D' => r.at = r.before(),
+                        'H' => r.at = r.lineStart(),
+                        'F' => r.at = r.lineEnd(),
+                        'I' => if (csi) {
+                            r.focused = true;
+                        },
+                        'O' => if (csi) {
+                            r.focused = false;
+                        },
+                        '~' => switch (p1) {
+                            1, 7 => r.at = r.lineStart(),
+                            4, 8 => r.at = r.lineEnd(),
+                            3 => r.cut(r.at, r.after()),
+                            5, 6 => for (0..r.e) |_| try r.vertical(p1 == 5),
+                            200, 201 => r.pasting = p1 == 200,
+                            else => {},
+                        },
+                        'R' => {
+                            const position: ?[2]usize = if (p1 > 0 and p2 > 0) .{ p1, p2 } else null;
+                            if (r.asking == .place) {
+                                try r.answered(position, null);
+                            } else if (r.asking != .no) {
+                                if (r.first) |at| try r.answered(at, position) else r.first = position;
+                            }
+                        },
                         else => {},
-                    },
-                    'R' => {
-                        const position: ?[2]usize = if (p1 > 0 and p2 > 0) .{ p1, p2 } else null;
-                        if (r.asking == .place) {
-                            try r.answered(position, null);
-                        } else if (r.asking != .no) {
-                            if (r.first) |at| try r.answered(at, position) else r.first = position;
-                        }
-                    },
-                    else => {},
-                }
-            },
-            // Enter sends. In a paste it is a line's end, and so is the pair
-            // some text ends its lines with.
-            '\r' => if (r.pasting) try r.insert("\n") else try r.send(),
-            '\n' => if (!r.pasting or i == 0 or bytes[i - 1] != '\r') try r.insert("\n"),
-            0x7f, 0x08 => if (!r.pasting) r.cut(r.before(), r.at),
-            0x03 => if (r.pasting) {} else if (r.child) |c| {
-                posix.kill(-c.id.?, .INT) catch {};
-                // A continuous run is interrupted and carries on, so there
-                // is no ending to wait for.
-                r.stopping = !r.continuous;
-            } else {
-                quit = true;
-            },
-            0x04 => if (r.pasting) {} else if (r.buf.items.len > 0) try r.send() else if (r.child == null) {
-                quit = true;
-            } else if (r.continuous) r.hang(),
-            else => |b| if (b >= 0x20 or b == '\t') try r.insert(&.{b}),
-        };
+                    }
+                },
+                // Enter sends. In a paste it is a line's end, and so is the pair
+                // some text ends its lines with.
+                '\r' => if (r.pasting) try r.insert("\n") else try r.send(),
+                '\n' => if (!r.pasting or i == 0 or bytes[i - 1] != '\r') try r.insert("\n"),
+                0x7f, 0x08 => if (!r.pasting) r.cut(r.before(), r.at),
+                0x03 => if (r.pasting) {} else if (r.child) |c| {
+                    posix.kill(-c.id.?, .INT) catch {};
+                    // A continuous run is interrupted and carries on, so there
+                    // is no ending to wait for.
+                    r.stopping = !r.continuous;
+                } else {
+                    quit = true;
+                },
+                0x04 => if (r.pasting) {} else if (r.buf.items.len > 0) try r.send() else if (r.child == null) {
+                    quit = true;
+                } else if (r.continuous) r.hang(),
+                else => |b| if (b >= 0x20 or b == '\t') try r.insert(&.{b}),
+            }
+        }
         return bytes.len;
     }
 
@@ -1013,6 +1098,47 @@ const Riff = struct {
         try r.queue.append(r.ctx.arena, try r.ctx.arena.dupe(u8, r.buf.items));
         r.sent = true;
         r.cut(0, r.buf.items.len);
+    }
+};
+
+/// A bounded, streaming XTVERSION reply. DCS bodies are consumed through ST
+/// even when too long or unrecognized, never exposed as editor input.
+const VersionReply = struct {
+    state: enum { no, body, escape } = .no,
+    buf: [128]u8 = undefined,
+    len: usize = 0,
+    overflow: bool = false,
+
+    fn append(v: *VersionReply, b: u8) void {
+        if (v.len < v.buf.len) {
+            v.buf[v.len] = b;
+            v.len += 1;
+        } else v.overflow = true;
+    }
+
+    fn finish(v: *VersionReply) ?bool {
+        v.state = .no;
+        const body = v.buf[0..v.len];
+        if (v.overflow) return false;
+        if (!std.mem.startsWith(u8, body, ">|")) return null;
+        const prefix = ">|kitty(";
+        return std.mem.startsWith(u8, body, prefix) and
+            body.len > prefix.len + 1 and std.mem.endsWith(u8, body, ")");
+    }
+
+    fn feed(v: *VersionReply, b: u8) ?bool {
+        if (b == 0x18 or b == 0x1a) {
+            v.state = .no;
+            return null;
+        }
+        if (b == 0x9c) return v.finish();
+        if (v.state == .escape) {
+            if (b == '\\') return v.finish();
+            v.append(0x1b);
+        }
+        v.state = if (b == 0x1b) .escape else .body;
+        if (b != 0x1b) v.append(b);
+        return null;
     }
 };
 
@@ -1486,4 +1612,140 @@ test "redraws preserve wrapping safeguards without synchronized output" {
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[?7h\x1b8") != null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;1H") == null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[K") == null);
+}
+
+test "Kitty identity replies split at any byte are consumed, not edited" {
+    const reply = "\x1bP>|kitty(0.50.0)\x1b\\";
+    for (0..reply.len + 1) |split| {
+        var a: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer a.deinit();
+        var ctx: Ctx = undefined;
+        ctx.arena = a.allocator();
+        var r: Riff = .{
+            .ctx = ctx,
+            .out = undefined,
+            .cmd = &.{},
+            .identifying = .now(testing.io, .awake),
+        };
+        const consumed = try r.keys(reply[0..split]);
+        // The main loop retains any unconsumed prefix, including a lone ESC.
+        _ = try r.keys(reply[consumed..]);
+        try testing.expect(r.kitty);
+        try testing.expect(r.identifying == null);
+        try testing.expectEqual(@as(usize, 0), r.buf.items.len);
+        _ = try r.keys("typed");
+        try testing.expectEqualStrings("typed", r.buf.items);
+    }
+}
+
+test "other terminal identities, late replies and pasted replies do not enable Kitty" {
+    for ([_][]const u8{ ">|ghostty 1.2.0", ">|WezTerm 20240203", ">|kitty()", "1+r544e=787465726d" }) |body| {
+        var a: std.heap.ArenaAllocator = .init(testing.allocator);
+        defer a.deinit();
+        var ctx: Ctx = undefined;
+        ctx.arena = a.allocator();
+        var r: Riff = .{ .ctx = ctx, .out = undefined, .cmd = &.{}, .identifying = .now(testing.io, .awake) };
+        _ = try r.keys("\x1bP");
+        _ = try r.keys(body);
+        _ = try r.keys("\x1b\\hello");
+        try testing.expect(!r.kitty);
+        try testing.expectEqualStrings("hello", r.buf.items);
+    }
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    var ctx: Ctx = undefined;
+    ctx.arena = a.allocator();
+    var r: Riff = .{ .ctx = ctx, .out = undefined, .cmd = &.{} };
+    _ = try r.keys("\x1bP>|kitty(0.50.0)\x1b\\late");
+    try testing.expect(!r.kitty);
+    try testing.expectEqualStrings("late", r.buf.items);
+    r.identifying = .now(testing.io, .awake);
+    _ = try r.keys("\x1b[200~\x1bP>|kitty(0.50.0)\x1b\\\x1b[201~");
+    try testing.expect(!r.kitty);
+    try testing.expectEqualStrings("late", r.buf.items);
+    // A malformed long DCS must still be swallowed through its terminator.
+    _ = try r.keys("\x1bP>|kitty(");
+    _ = try r.keys(&([_]u8{'x'} ** 256));
+    _ = try r.keys(")\x1b\\done");
+    try testing.expect(!r.kitty);
+    try testing.expectEqualStrings("latedone", r.buf.items);
+}
+
+test "only Kitty parks in a secondary prompt and restores before reusing the save slot" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var r: Riff = .{ .ctx = undefined, .out = &out.writer, .cmd = &.{}, .h = 24, .w = 80, .e = 1 };
+    try r.park();
+    try testing.expectEqual(@as(usize, 0), out.written().len);
+    r.kitty = true;
+    try r.park();
+    try testing.expect(r.parked);
+    try testing.expectEqualStrings("\x1b7\x1b[23;1H\x1b]133;A;k=s\x1b\\\x1b[9999;2H", out.written());
+    const parked_len = out.written().len;
+    try r.park();
+    try testing.expectEqual(parked_len, out.written().len);
+    try r.unpark();
+    try testing.expect(!r.parked);
+    try testing.expectEqualStrings("\x1b8", out.written()[parked_len..]);
+    const restored_len = out.written().len;
+    try r.unpark();
+    try testing.expectEqual(restored_len, out.written().len);
+    // Erasing/rebuilding can now use the save slot without saving the UI cursor.
+    try r.wipe();
+    try testing.expect(std.mem.startsWith(u8, out.written()[restored_len..], "\x1b7\x1b[r\x1b8"));
+    try testing.expect(!r.panel_marked);
+    try r.park();
+    try testing.expect(r.panel_marked);
+    try r.unpark();
+    // Kitty may have moved the marked panel before announcing a resize.
+    // Further wakeups must not re-mark it at riff's previous coordinates.
+    const again = out.written().len;
+    try r.park();
+    try testing.expectEqualStrings("\x1b7\x1b[9999;2H", out.written()[again..]);
+    try r.unpark();
+}
+
+test "Kitty parking respects partial output sequences and unknown resize coordinates" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var r: Riff = .{ .ctx = undefined, .out = &out.writer, .cmd = &.{}, .h = 24, .w = 80, .e = 1, .kitty = true };
+    r.scan.state = .csi;
+    try r.park();
+    try testing.expect(!r.parked);
+    r.scan.state = .text;
+    r.scan.owed = 1;
+    try r.park();
+    try testing.expect(!r.parked);
+    r.scan.owed = 0;
+    r.asking = .size;
+    r.scan.x = 80;
+    r.scan.last_n = 1;
+    r.scan.last[0] = 'X';
+    r.scan.last_cells = 1;
+    try r.park();
+    // Do not add a prompt mark using the previous geometry during a query.
+    try testing.expectEqualStrings("\x1b7\x1b[9999;2H", out.written());
+    const start = out.written().len;
+    try r.unpark();
+    // In particular, don't retype X at the old right edge during resize.
+    try testing.expectEqualStrings("\x1b8", out.written()[start..]);
+}
+
+test "Kitty unparking repairs pending wrap, and cleanup restores the command cursor" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var r: Riff = .{ .ctx = undefined, .out = &out.writer, .cmd = &.{}, .h = 24, .w = 4, .e = 1, .kitty = true };
+    r.scan.w = 4;
+    try r.scan.feed(r.out, "abcd");
+    try r.park();
+    var start = out.written().len;
+    try r.unpark();
+    try testing.expectEqualStrings("\x1b8\x1b[4Gd", out.written()[start..]);
+    r.scan.x = 0;
+    try r.park();
+    r.opened = true;
+    start = out.written().len;
+    r.close();
+    try testing.expect(!r.parked);
+    try testing.expect(std.mem.startsWith(u8, out.written()[start..], "\x1b8\x1b7\x1b[r\x1b8"));
 }
