@@ -682,11 +682,11 @@ const Riff = struct {
             if (k < b) {
                 // Grey in reverse is a grey bar with the terminal's own
                 // background for its text. The top row has notched bezels;
-                // rows beneath it have solid blocks at both ends. All rows
+                // rows beneath it have inverted-space borders. All rows
                 // keep the same width.
                 const up = b - 1 - k;
                 const bezel = inner >= 8;
-                try w.writeAll(if (!bezel) grey ++ "\x1b[7m" else if (k == 0) grey ++ "▂▟\x1b[7m" else grey ++ "██\x1b[7m");
+                try w.writeAll(if (!bezel) grey ++ "\x1b[7m" else if (k == 0) grey ++ "▂▟\x1b[7m" else grey ++ "\x1b[7m  ");
                 const room = if (bezel) inner - 4 else inner;
                 // Stats keep the top right; the clock uses the bottom right
                 // while it need not compete with a single explicit status.
@@ -713,7 +713,7 @@ const Riff = struct {
                         };
                     _ = try put(w, panel, aside);
                 }
-                try w.writeAll(if (!bezel) grey ++ "\x1b[27m" else if (k == 0) grey ++ "\x1b[27m▙▂" else grey ++ "\x1b[27m██");
+                try w.writeAll(if (!bezel) grey ++ "\x1b[27m" else if (k == 0) grey ++ "\x1b[27m▙▂" else grey ++ "\x1b[7m  \x1b[27m");
             } else {
                 // The edge runs the height of the editor, written or not.
                 try w.writeAll(grey ++ "▏\x1b[0m");
