@@ -12,11 +12,11 @@ cast() {
     m8 encode < "$source" | m8 cast "$@" > "$output"
 }
 
-cast coop/zork+.md coop/zork.svg \
+cast coop/zork+.md coop/zork.svg --skip-snips \
     --size 90x30 --speed '30l,🤖80w'
 cast coop/zork-player+.md coop/zork-player.svg --skip-snips \
     --size 90x30 --speed '100w,📲800b,📜0b,🟢2000b,🙋200c'
-cast haiku/devyn+.md haiku/devyn.svg \
+cast haiku/devyn+.md haiku/devyn.svg --skip-snips \
     --size 90x22 --no-riff :crew/devyn --static
-cast haiku/devyn+.md haiku/devyn-riff.svg  --skip-snips \
+cast haiku/devyn+.md haiku/devyn-riff.svg --skip-snips \
     --size 90x25 --static
