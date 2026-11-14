@@ -188,6 +188,29 @@ pub fn inheritedAgent(arena: Allocator, io: std.Io, dirs: config.Dirs) ExpandErr
     return out.items;
 }
 
+/// Prefix inherited definitions once. Only an exact opening sequence counts;
+/// repetitions elsewhere and partial or outdated prefixes remain untouched.
+pub fn withInheritedAgent(
+    arena: Allocator,
+    io: std.Io,
+    dirs: config.Dirs,
+    records: []const doc.Record,
+) ExpandError![]const doc.Record {
+    return prefixOnce(arena, try inheritedAgent(arena, io, dirs), records);
+}
+
+fn prefixOnce(arena: Allocator, prefix: []const doc.Record, records: []const doc.Record) Allocator.Error![]const doc.Record {
+    if (records.len >= prefix.len) {
+        for (prefix, records[0..prefix.len]) |a, b| {
+            if (a.sigil != b.sigil or !std.mem.eql(u8, a.value, b.value)) break;
+            if (a.content) |content| {
+                if (!std.mem.eql(u8, content, b.content orelse break)) break;
+            } else if (b.content != null) break;
+        } else return records;
+    }
+    return std.mem.concat(arena, doc.Record, &.{ prefix, records });
+}
+
 /// Expand `name` into its records.
 pub fn expand(
     arena: Allocator,
@@ -1385,4 +1408,47 @@ test "indirect same-name layer return is a cycle and empty nearest mob owns stat
     try testing.expectError(Error.IncludeLoops, expand(arena, f.io, dirs, "team/agent"));
     try std.Io.Dir.cwd().createDirPath(f.io, try std.fs.path.join(arena, &.{ near, "mobs/team" }));
     try testing.expect((try config.read(arena, f.io, dirs, try config.nameFile(arena, "team/agent/+"))) == null);
+}
+
+test "inherited prefix is added once and only an exact opening match counts" {
+    const t = std.testing;
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    const prefix = [_]doc.Record{
+        .{ .sigil = .shield, .value = "system" },
+        .{ .sigil = .shield, .value = "project", .content = "policy" },
+    };
+    const body = [_]doc.Record{.{ .sigil = .agent, .value = "/local/tiny" }};
+    const once = try prefixOnce(gpa, &prefix, &body);
+    try t.expectEqual(@as(usize, 3), once.len);
+    try t.expectEqualDeep(prefix[0], once[0]);
+    try t.expectEqualDeep(prefix[1], once[1]);
+    try t.expectEqualDeep(body[0], once[2]);
+    const twice = try prefixOnce(gpa, &prefix, once);
+    try t.expect(twice.ptr == once.ptr);
+    try t.expectEqual(once.len, twice.len);
+    try t.expect((try prefixOnce(gpa, &.{}, &body)).ptr == body[0..].ptr);
+
+    // Too short, partially matching, and a match away from the beginning
+    // all get the entire prefix rather than being partially deduplicated.
+    const partial = try prefixOnce(gpa, &prefix, prefix[0..1]);
+    try t.expectEqual(@as(usize, 3), partial.len);
+    const later = try std.mem.concat(gpa, doc.Record, &.{ &body, &prefix });
+    try t.expectEqual(@as(usize, 5), (try prefixOnce(gpa, &prefix, later)).len);
+
+    // Every record field matters, including null versus empty content.
+    const variants = [_]doc.Record{
+        .{ .sigil = .agent, .value = "project", .content = "policy" },
+        .{ .sigil = .shield, .value = "changed", .content = "policy" },
+        .{ .sigil = .shield, .value = "project", .content = "changed" },
+        .{ .sigil = .shield, .value = "project" },
+        .{ .sigil = .shield, .value = "project", .content = "" },
+    };
+    for (variants) |variant| {
+        const changed = [_]doc.Record{ prefix[0], variant };
+        try t.expectEqual(@as(usize, 4), (try prefixOnce(gpa, &prefix, &changed)).len);
+    }
+    const empty_content = [_]doc.Record{.{ .sigil = .shield, .value = "system", .content = "" }};
+    try t.expectEqual(@as(usize, 2), (try prefixOnce(gpa, prefix[0..1], &empty_content)).len);
 }

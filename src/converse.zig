@@ -146,8 +146,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
     const scratch = (try config.mobTmp(arena, io, dirs, owner)) orelse "";
 
     var records: std.ArrayList(doc.Record) = .empty;
-    try records.appendSlice(arena, try ledger.inheritedAgent(arena, io, full_dirs));
-    try records.appendSlice(arena, expanded.records);
+    try records.appendSlice(arena, try ledger.withInheritedAgent(arena, io, full_dirs, expanded.records));
 
     const def = try agent.project(arena, records.items);
     if (def.model.len == 0) return agent.Error.NoModel;

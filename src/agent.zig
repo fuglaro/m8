@@ -58,10 +58,8 @@ pub fn load(
     name: []const u8,
 ) LoadError!Definition {
     const l = try ledger.expand(arena, io, dirs, name);
-    var records: std.ArrayList(doc.Record) = .empty;
-    try records.appendSlice(arena, try ledger.inheritedAgent(arena, io, dirs));
-    try records.appendSlice(arena, l.records);
-    var def = try project(arena, records.items);
+    const records = try ledger.withInheritedAgent(arena, io, dirs, l.records);
+    var def = try project(arena, records);
     if (def.model.len == 0) return Error.NoModel;
     def.name = name;
     def.origin = l.origin;
