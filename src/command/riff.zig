@@ -34,48 +34,63 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 riff [-c] [-t] [-s N] CMD [ARGS]
+        \\  m8 riff [-c] [-t] [-s N] COMMAND [ARGS]
         \\
-        \\Each message sent starts CMD, hands it the message on stdin, and lets
-        \\its stdout scroll past as ordinary terminal scrollback. The last line
-        \\it wrote to stderr is the status line.
-        \\While CMD runs, elapsed minutes:seconds sits at the bottom right if
-        \\no status text has been given or more than one status line is visible.
-        \\The stats panel takes priority when there is only one line.
+        \\Starts an interactive session with an editor panel at the bottom
+        \\underneath a status bar, with normal terminal scrollback above.
         \\
-        \\A stderr line that leads with `::stats::` carries a panel, which
-        \\stays at the right of the top status line until the next one. The
-        \\panel runs to a `::` or the end of the line. Anything after the
-        \\closing `::` is ignored:
+        \\COMMAND:
         \\
-        \\  ::stats::✥19▇16K::16000 in, 14000 cached
+        \\  Each editor message sent runs the COMMAND with the message as
+        \\  stdin, writing stdout to the terminal scrollback, and
+        \\  scrolling stderr through the status bar. COMMAND runs in a
+        \\  detatched session without its own terminal, in riff's
+        \\  environment but with the terminal width given vie COLUMNS.
         \\
-        \\The editor is one row, grows with the message to at most half the
-        \\terminal, and is one row again once the message is sent.
-        \\If CMD fails without stdout, its input returns to the editor before
-        \\anything typed while it ran. Stderr does not prevent this recovery.
+        \\EDITOR:
         \\
-        \\  Enter    send, and a message sent mid-run waits its turn
-        \\  Ctrl-j   a new line, and so is Alt-Enter
-        \\  Ctrl-d   send; with nothing to send and nothing running, leave
-        \\  Ctrl-c   interrupt the run; with nothing running, leave
+        \\  The editor panel starts off as one row and grows with the
+        \\  message to at most half the terminal, and shrinks back to one
+        \\  row on send. If the COMMAND fails without stdout and nothing
+        \\  new is written to the editor, the failed input returns to the
+        \\  editor.
         \\
-        \\`-c` is continuous: the first message starts CMD and every message
-        \\is a line on its stdin. Ctrl-d with nothing to send then closes
-        \\its stdin. CMD has to work a line at a time on a pipe:
+        \\     Enter: send (but a message sent mid-run waits its turn)
+        \\    Ctrl-d: send (or close, if message is empty)
+        \\    Ctrl-j: add a line break (alternatively Alt-Enter)
+        \\    Ctrl-c: interrupt an acive run (once again to close)
         \\
-        \\  m8 riff -c python3 -i -u -q
+        \\STATUS_BAR:
         \\
-        \\`-t` is `-c` with every message ended by a NUL byte rather than a
-        \\new line, for a CMD that takes messages of more than one line.
+        \\  Along with the scrolling stderr, the status bar will also
+        \\  show editor hints.
+        \\  There are also right aligned panels:
         \\
-        \\`-s N` is N status lines, the last N that CMD wrote to stderr:
+        \\     Stats: a stderr line that leads with `::stats::` carries a
+        \\            panel, which stays at the right of the top status
+        \\            line until the next one. The stats panel is pulled
+        \\            from between the `::stats::` and a closing `::` (or
+        \\            line end):  ::stats::✥19▇9K::9000 in, 8000 cached
+        \\     Clock: while COMMAND runs, elapsed minutes:seconds sits at
+        \\            the bottom right status line with a multi-line
+        \\            status bar or when no stats text has been given.
         \\
-        \\  m8 riff -c -s 2 python3 -i -u -q
+        \\OPTIONS:
         \\
-        \\CMD is given no terminal: it runs in a detached session of its own,
-        \\which is riff run again with `--detached CMD`. Its environment is riff's as it
-        \\arrived, apart from COLUMNS tracking the terminal width.
+        \\  -c        continuous mode: the first message starts COMMAND
+        \\            and every message is a line added to its stdin.
+        \\            Ctrl-d with nothing to send then closes its stdin.
+        \\            COMMAND has to work a line at a time on a pipe:
+        \\
+        \\              m8 riff -c python3 -i -u -q
+        \\
+        \\  -t        continuous mode but with every message ended by
+        \\            a NUL byte rather than a new line, for a COMMAND
+        \\            that takes messages of more than one line.
+        \\
+        \\  -s N      give the status bar N status lines:
+        \\
+        \\              m8 riff -c -s 2 python3 -i -u -q
         \\
     );
 }
@@ -1558,4 +1573,3 @@ test "redraws preserve wrapping safeguards without synchronized output" {
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;1H") == null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[K") == null);
 }
-
