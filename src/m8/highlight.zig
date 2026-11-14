@@ -582,7 +582,8 @@ pub const Highlighter = struct {
         var emphasis = h.emphasis;
         var struck = h.struck;
         if (c == '~') {
-            if (n <= 2) struck = toggle(struck, opens, closes);
+            // Single tildes commonly occur literally; only `~~` triggers strike.
+            if (n == 2) struck = toggle(struck, opens, closes);
         } else {
             if (n != 2) emphasis = toggle(emphasis, opens, closes);
             if (n >= 2) strong = toggle(strong, opens, closes);
@@ -879,6 +880,8 @@ test "emphasis opens with no word before and no space after, and ends with its l
     try expectShown("{3}*a*{}", "*a*", themed(.{}));
     try expectShown("{1;3;38;5;231}***a***{}", "***a***", themed(.{}));
     try expectShown("{9}~~a~~{}", "~~a~~", themed(.{}));
+    try expectShown("~a~", "~a~", themed(.{}));
+    try expectShown("x ~~~a~~~", "x ~~~a~~~", themed(.{}));
     // A word before, or a space after, and it is only text.
     try expectShown("snake_case_name a * b", "snake_case_name a * b", themed(.{}));
     // Never closed, so the line's end closes it.
