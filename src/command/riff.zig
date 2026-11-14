@@ -87,13 +87,23 @@ const detached = "--detached";
 /// the live rows are drawn again.
 const settle = 100;
 
+/// The right gap's share of the terminal width falls linearly from a third
+/// at 160 columns to zero at six columns.
+fn rightGap(w: usize) usize {
+    const wide: usize = 160;
+    const zero: usize = 6;
+    if (w >= wide) return w / 3;
+    if (w <= zero) return 0;
+    return (w * (w - zero)) / (3 * (wide - zero));
+}
+
 /// How long after a resize, in milliseconds, output is held for the terminal
 /// to confirm its size before each chunk is written.
 const wary = 1000;
 
 /// The status bar and the editor's edge: a mid grey from the 256 colours,
 /// which reads on a dark background and on a light one.
-const gutter = 4;
+const gutter = 3;
 const grey = "\x1b[38;5;245m";
 
 var winch = false;
@@ -598,7 +608,7 @@ const Riff = struct {
     /// cursor is on. `rows` holds the byte offset each row starts at.
     fn layout(r: *Riff) !struct { row: usize, col: usize } {
         const text = r.buf.items;
-        const max = r.w -| ((2 * r.margin() -| 1) + 2);
+        const max = r.w -| ((2 * r.margin() -| 1) + 2) -| rightGap(r.w);
         r.rows.clearRetainingCapacity();
         try r.rows.append(r.ctx.arena, 0);
         var col: usize = 0;
@@ -627,7 +637,7 @@ const Riff = struct {
     /// The cells kept clear at each side of the live rows, where there is
     /// width to spare.
     fn margin(r: *const Riff) usize {
-        return if (r.w >= 6 * gutter) gutter else 0;
+        return if (r.w >= 6 * gutter) gutter else r.w / 6;
     }
 
     /// The text of one visual row, without the newline that ended it.
@@ -676,7 +686,7 @@ const Riff = struct {
             var clock_at: ?struct { byte: usize, col: usize, len: usize } = null;
             const w = &line.writer;
             // The editor's edge is the last cell of the left margin.
-            const inner = r.w - (2 * r.margin() -| 1);
+            const inner = r.w - (2 * r.margin() -| 1) -| rightGap(r.w);
             try w.splatByteAll(' ', r.margin() -| 1);
             const b = r.bars();
             if (k < b) {
@@ -690,8 +700,9 @@ const Riff = struct {
                 const room = if (bezel) inner - 4 else inner;
                 // Stats keep the top right; the clock uses the bottom right
                 // while it need not compete with a single explicit status.
+                var panel_buf: [64]u8 = undefined;
                 const panel = if (k == 0 and r.panel_len > 0)
-                    r.panel[0..r.panel_len]
+                    statusText(r.panel[0..r.panel_len], &panel_buf)
                 else if (up == 0 and (b > 1 or !r.status_given)) clock else "";
                 const aside = if (panel.len > 0 and span(panel) + 8 <= room) span(panel) else 0;
                 var said = r.above(up);
@@ -702,6 +713,8 @@ const Riff = struct {
                         .{ r.stopped.?, if (r.buf.items.len == 0) empty_hint else written_hint },
                     ) catch said;
                 }
+                var said_buf: [512]u8 = undefined;
+                said = statusText(said, &said_buf);
                 const used = try put(w, said, room - aside);
                 try w.splatByteAll(' ', room - aside -| used);
                 if (aside > 0) {
@@ -1156,6 +1169,47 @@ fn glyph(text: []const u8, i: usize) Glyph {
     return .{ .cp = cp, .len = len };
 }
 
+/// Strip terminal escapes and shorten whitespace for status text.
+fn statusText(text: []const u8, buf: []u8) []const u8 {
+    var n: usize = 0;
+    var space = false;
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == 0x1b) {
+            i += 1;
+            if (i < text.len and text[i] == '[') {
+                i += 1;
+                while (i < text.len and (text[i] < 0x40 or text[i] > 0x7e)) : (i += 1) {}
+                if (i < text.len) i += 1;
+            } else if (i < text.len and std.mem.indexOfScalar(u8, "]P^_X", text[i]) != null) {
+                i += 1;
+                while (i < text.len) : (i += 1) {
+                    if (text[i] == 0x07) {
+                        i += 1;
+                        break;
+                    }
+                    if (text[i] == 0x1b and i + 1 < text.len and text[i + 1] == '\\') {
+                        i += 2;
+                        break;
+                    }
+                }
+            } else if (i < text.len) i += 1;
+            continue;
+        }
+        if (std.ascii.isWhitespace(text[i])) {
+            if (!space) buf[n] = ' ';
+            if (!space) n += 1;
+            space = true;
+        } else {
+            buf[n] = text[i];
+            n += 1;
+            space = false;
+        }
+        i += 1;
+    }
+    return buf[0..n];
+}
+
 /// How many cells text takes, by the same count as `put`.
 fn span(text: []const u8) usize {
     var discard: std.Io.Writer.Discarding = .init(&.{});
@@ -1203,6 +1257,21 @@ fn scanned(comptime chunks: []const []const u8) ![]const u8 {
     for (chunks) |c| try s.feed(&out.writer, c);
     try testing.expect(s.ground());
     return out.toOwnedSlice();
+}
+
+test "right gap proportion tapers linearly to zero" {
+    try testing.expectEqual(@as(usize, 0), rightGap(6));
+    try testing.expectEqual(@as(usize, 0), rightGap(5));
+    try testing.expectEqual(@as(usize, 0), rightGap(18));
+    try testing.expectEqual(@as(usize, 20), rightGap(100));
+    try testing.expectEqual(@as(usize, 52), rightGap(159));
+    try testing.expectEqual(@as(usize, 53), rightGap(160));
+    try testing.expectEqual(@as(usize, 80), rightGap(240));
+}
+
+test "status text drops terminal escapes and compacts whitespace" {
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("one two three", statusText("one   \t two\x1b[31m   three\x1b[0m", &buf));
 }
 
 test "what a command says passes, and what would take the terminal does not" {
@@ -1282,7 +1351,7 @@ test "a stopped child changes the waiting line as the editor changes" {
     var out: std.Io.Writer.Allocating = .init(arena);
     var ctx: Ctx = undefined;
     ctx.arena = arena;
-    var r: Riff = .{ .ctx = ctx, .out = &out.writer, .cmd = &.{}, .h = 3, .w = 100 };
+    var r: Riff = .{ .ctx = ctx, .out = &out.writer, .cmd = &.{}, .h = 3, .w = 160 };
     defer r.line.deinit();
 
     r.stopped = 7;
@@ -1334,15 +1403,17 @@ test "a message wraps into rows, and the cursor is found on one" {
     var r: Riff = .{ .ctx = ctx, .out = undefined, .cmd = &.{}, .w = 6 };
     try r.insert("abcdef\n日本語");
     const cur = try r.layout();
-    try testing.expectEqual(@as(usize, 4), r.rows.items.len);
-    try testing.expectEqualStrings("abcd", r.row(0));
-    try testing.expectEqualStrings("ef", r.row(1));
-    try testing.expectEqualStrings("日本", r.row(2));
-    try testing.expectEqual(@as(usize, 3), cur.row);
+    try testing.expectEqual(@as(usize, 5), r.rows.items.len);
+    try testing.expectEqualStrings("abc", r.row(0));
+    try testing.expectEqualStrings("def", r.row(1));
+    try testing.expectEqualStrings("日", r.row(2));
+    try testing.expectEqualStrings("本", r.row(3));
+    try testing.expectEqualStrings("語", r.row(4));
+    try testing.expectEqual(@as(usize, 4), cur.row);
     try testing.expectEqual(@as(usize, 2), cur.col);
 
     try r.vertical(true);
-    try testing.expectEqualStrings("日", r.buf.items[r.rows.items[2]..r.at]);
+    try testing.expectEqualStrings("日本", r.buf.items[r.rows.items[2]..r.at]);
 }
 
 test "Enter sends, and a paste keeps its lines" {
@@ -1435,7 +1506,7 @@ test "clock ticks write only the clock, with full rows for status and width chan
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(57));
     try r.render();
     const tick = out.written()[start..];
-    try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;91H" ++ grey ++ "\x1b[7m0:57\x1b[27m") != null);
+    try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;72H" ++ grey ++ "\x1b[7m0:57\x1b[27m") != null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;1H") == null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[K") == null);
     // No change means no terminal output at all.
@@ -1487,3 +1558,4 @@ test "redraws preserve wrapping safeguards without synchronized output" {
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;1H") == null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[K") == null);
 }
+

@@ -166,6 +166,17 @@ const font_size = 15;
 /// Where a row's baseline sits within it.
 const baseline = 14;
 const pad = 10;
+const gutter = 3;
+
+/// The right gap's share of the terminal width falls linearly from a third
+/// at 160 columns to zero at six columns, matching riff's live rows.
+fn rightGap(cols: usize) usize {
+    const wide: usize = 160;
+    const zero: usize = 6;
+    if (cols >= wide) return cols / 3;
+    if (cols <= zero) return 0;
+    return (cols * (cols - zero)) / (3 * (wide - zero));
+}
 
 const fg = "#d0d0d0";
 const bg = "#1c1c1c";
@@ -444,7 +455,7 @@ const Cast = struct {
 
     /// The left margin riff keeps, the editor's edge sitting in its last cell.
     fn margin(c: *const Cast) usize {
-        return if (c.cols >= 24) 4 else 0;
+        return if (c.cols >= 6 * gutter) gutter else c.cols / 6;
     }
 
     /// Rows above the status bar and editor, which a plain terminal has none
@@ -615,7 +626,7 @@ const Cast = struct {
     /// A message as riff's editor holds it: a row for each of its lines, and
     /// for each time one is too wide.
     fn messageRows(c: *Cast, message: []const u8) ![]const Shown {
-        const width = c.cols -| ((2 * c.margin() -| 1) + 2);
+        const width = c.cols -| ((2 * c.margin() -| 1) + 2) -| rightGap(c.cols);
         var rows: std.ArrayList(Shown) = .empty;
         var lines = std.mem.splitScalar(u8, message, '\n');
         while (lines.next()) |l| {
@@ -936,7 +947,7 @@ const Cast = struct {
     /// Riff's status bar, its top at `sy`.
     fn bar(c: *Cast, o: *std.Io.Writer, sy: usize) !void {
         const m = c.margin();
-        const inner = c.cols - (2 * m -| 1);
+        const inner = c.cols - (2 * m -| 1) -| rightGap(c.cols);
         const x0 = pad + (m -| 1) * cw;
         const in_grey = " fill=\"" ++ grey ++ "\"";
         if (inner >= 8) {
@@ -951,7 +962,9 @@ const Cast = struct {
     /// What the status bar says, on its baseline at `y`.
     fn statusText(c: *Cast, o: *std.Io.Writer, s: []const u8, y: usize) !void {
         const m = c.margin();
-        try o.print("<text x=\"{d}\" y=\"{d}\" fill=\"{s}\">{s}</text>", .{ pad + (m + 1) * cw, y, bg, s[0..@min(s.len, c.cols -| 2 * m + 1 -| 4)] });
+        const inner = c.cols - (2 * m -| 1) -| rightGap(c.cols);
+        const width = inner -| 4;
+        try o.print("<text x=\"{d}\" y=\"{d}\" fill=\"{s}\">{s}</text>", .{ pad + (m + 1) * cw, y, bg, s[0..@min(s.len, width)] });
     }
 };
 
@@ -1229,6 +1242,13 @@ fn xterm(n: u8) [3]u8 {
 // ---------------------------------------------------------------- tests
 
 const testing = std.testing;
+
+test "right gap proportion tapers linearly to zero" {
+    try testing.expectEqual(@as(usize, 0), rightGap(6));
+    try testing.expectEqual(@as(usize, 0), rightGap(5));
+    try testing.expectEqual(@as(usize, 20), rightGap(100));
+    try testing.expectEqual(@as(usize, 53), rightGap(160));
+}
 
 test "a speed is a default and then sigils, by emoji or by name" {
     const s = try parseSpeeds("40l,🤖60w,thought_balloon0b");
