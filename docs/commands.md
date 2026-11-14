@@ -267,6 +267,16 @@ turn is reported before you write a message.
 riff knows nothing about m8. `m8 riff sh -c 'cat; date'` is as
 much a riff as a chat is.
 
+### Kitty resizing
+
+Kitty defers screen updates during window resizing by default. With riff,
+this can leave the status bar wrapped or fragments in scrollback when the
+resize finishes. To keep Kitty updating during the drag, add to `kitty.conf`:
+
+```conf
+resize_debounce_time 0 0
+```
+
 ## Casting
 
 `cast` replays a ledger as riff would have shown it, as an
