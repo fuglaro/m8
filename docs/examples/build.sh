@@ -18,5 +18,5 @@ cast coop/zork-player+.md coop/zork-player.svg --skip-snips \
     --size 90x30 --speed '100w,📲800b,📜0b,🟢2000b,🙋200c'
 cast haiku/devyn+.md haiku/devyn.svg \
     --size 90x22 --no-riff :crew/devyn --static
-cast haiku/devyn+.md haiku/devyn-riff.svg \
+cast haiku/devyn+.md haiku/devyn-riff.svg  --skip-snips \
     --size 90x25 --static
