@@ -1,4 +1,4 @@
-* :brain::crew/big-medium
+* :brain::crew/small-high
 
 * :compass::
   > You are a helpful coding assistant working alongside the user,
