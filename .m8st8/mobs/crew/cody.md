@@ -9,7 +9,6 @@
 
 * :brain::shared/utils/shields
 * :brain::shared/utils/runners
-* :brain::shared/toolbox/explore-files
-* :brain::shared/toolbox/edit-files
+* :brain::shared/toolbox/files
 * :brain::shared/toolbox/bash
 * :brain::shared/toolbox/webfetch

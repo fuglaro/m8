@@ -10,8 +10,6 @@
 
 * :brain::shared/utils/shields
 * :brain::shared/utils/runners
-* :brain::shared/toolbox/explore-files
-* :toolbox::read byte_cap 5000
-* :brain::shared/toolbox/edit-files
+* :brain::shared/toolbox/files
 * :brain::shared/toolbox/bash
 * :brain::shared/toolbox/webfetch
