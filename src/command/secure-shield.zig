@@ -56,30 +56,34 @@ fn run(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     _ = ctx;
     try out.writeAll(
-        \\  m8 secure-shield "NAMES" CMD [ARGS]
+        \\  m8 secure-shield "RESTRICTIONS" CMD [ARGS ...]
         \\
-        \\NAMES is one argument containing space-separated restrictions.
-        \\They are combined into one sandbox profile before CMD runs:
+        \\Run CMD in the macOS sandbox with the named restrictions combined
+        \\into one profile. RESTRICTIONS must be one argument containing one
+        \\or more space-separated names. Unknown names are rejected.
+        \\
+        \\EXAMPLE:
         \\
         \\  m8 secure-shield "private airgap" bash -c 'ls'
         \\
-        \\In a document, define the wrapper and activate it with names:
+        \\DOCUMENT ACTIVATION:
         \\
         \\  ▐ 🛡️:secure
         \\  │ `m8` `secure-shield`
         \\  ▐ 🛡️:secure private airgap
         \\
+        \\RESTRICTIONS:
+        \\
+        \\
     );
     // Read from the same table validation uses, so help cannot drift from
     // what secure accepts.
-    try out.writeAll("\nrestrictions:\n\n");
     for (sandbox.all) |r|
         try out.print("  {s: <22} {s}\n", .{ r.name, r.summary });
     try out.writeAll(
         \\
-        \\A restriction it does not recognise is refused rather than ignored.
-        \\Not understanding what was asked for is never a reason to apply less
-        \\than was asked for.
+        \\Requires macOS `sandbox-exec`. Unknown restrictions are refused,
+        \\never silently ignored.
         \\
     );
 }

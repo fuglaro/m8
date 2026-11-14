@@ -29,16 +29,21 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 models [PROVIDER ...]
         \\
-        \\Runs the `models` command of each provider in core/providers/NAME.json,
-        \\or of the ones named, and writes a 🧠 for every line it prints.
-        \\What a command says on stderr is passed on.
+        \\List models reported by configured providers. With no PROVIDER,
+        \\run every provider's configured `models` command; otherwise run only
+        \\the named providers. Providers without that command produce no entries.
         \\
-        \\The command is handed the entry as M8_PROVIDER_*, and $M8 names
-        \\this m8:
+        \\Each non-empty output line is written as a 🧠 model reference:
+        \\`/PROVIDER/MODEL`. Provider stderr is passed through, and a failed
+        \\provider makes the command fail.
         \\
-        \\  "models": ["m8", "toy-provider", "--models"]
-        \\  "models": ["printf", "gpt-5.5\\ngpt-6-sol\\n"]
-        \\  "models": ["sh", "-c", "\"$M8\" url-provider --get URL | ..."]
+        \\EXAMPLES:
+        \\
+        \\  m8 models
+        \\  m8 models openai local
+        \\
+        \\Commands receive their provider configuration as `M8_PROVIDER_*`.
+        \\Configure the command in `core/providers/NAME.json`.
         \\
     );
 }

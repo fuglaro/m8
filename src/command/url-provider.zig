@@ -40,28 +40,39 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  m8 url-provider --get URL
         \\  m8 url-provider --upload URL FILE [NAME=VALUE]...
         \\
-        \\Posts stdin to $M8_PROVIDER_url as JSON and writes the response to
-        \\stdout as it arrives. `--get URL` sends a GET to URL instead, with
-        \\the same headers, and reads no stdin. `--upload` posts FILE to URL
-        \\as a form, its field `file`, with each NAME=VALUE as a field beside
-        \\it.
+        \\Posts stdin as JSON and streams the response body to stdout. The
+        \\endpoint comes from the command in M8_PROVIDER_url.
         \\
-        \\A response is passed on whatever its status. A 429 with a valid
-        \\Retry-After is the exception: wait as directed and replay once,
-        \\discarding the first response. There is no fallback backoff.
-        \\Only a url that cannot be reached is a failure.
+        \\OPTIONS:
         \\
-        \\environment:
+        \\  --get URL        Send a GET request; read no stdin.
+        \\  --upload URL FILE [NAME=VALUE]...
+        \\                   Send a multipart form: FILE is the `file` field,
+        \\                   and each NAME=VALUE adds a field. Read no stdin.
         \\
-        \\  M8_PROVIDER_url          a JSON argv array; its stdout is the endpoint
-        \\                           e.g. ["echo","https://example.com/v1/messages"].
-        \\                           Empty or failing commands are an error.
-        \\  M8_PROVIDER_header_NAME  a JSON argv array; its stdout is sent as
-        \\                           header NAME: ["sh","-c",...] opts into a shell.
-        \\                           Empty or failing commands leave it off.
-        \\  M8_PROVIDER_stats        JSON: {"headers":[...],"body":[...],"cmd":[...]}
-        \\                           Select response values for a formatter at EOF.
-        \\                           Its stdout goes to stderr; the body still streams.
+        \\All three modes use the configured headers.
+        \\
+        \\HTTP STATUS:
+        \\
+        \\HTTP status alone is not a failure: the response body is passed on.
+        \\A 429 with a valid Retry-After is written to stderr, then retried
+        \\once after the requested wait; the second response goes to stdout.
+        \\
+        \\ENVIRONMENT:
+        \\
+        \\  M8_PROVIDER_url          JSON argv array; stdout is the endpoint,
+        \\                            e.g. ["echo","https://example.com/v1/messages"]
+        \\  M8_PROVIDER_header_NAME  JSON argv array; stdout is header NAME's
+        \\                            value. Use ["sh","-c",...] for a shell.
+        \\                            Empty or failing commands omit the header.
+        \\  M8_PROVIDER_stats        JSON with headers, body and cmd fields;
+        \\                            select response values and pipe them to
+        \\                            cmd at EOF. Formatter output goes to stderr.
+        \\
+        \\EXAMPLES:
+        \\
+        \\  m8 url-provider --get https://example.com/models
+        \\  m8 url-provider --upload https://example.com/files notes.txt purpose=batch
         \\
     );
     try w.writeAll(if (comptime no_curl_dep)

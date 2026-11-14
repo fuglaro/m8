@@ -25,15 +25,17 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 top :MOB/AGENT
         \\
-        \\Writes a 📚 naming SKILL, and nothing else. A 📚 expands to the
-        \\file's top — what sits between its two 🔝 — so that is what joins
-        \\a ledger it is written into.
+        \\Write a 📚 reference to the agent's skill top. The reference expands
+        \\to the content between the file's two 🔝 markers when included in a
+        \\ledger. The agent must name a file; chats and models have no top.
+        \\
+        \\EXAMPLES:
         \\
         \\  m8 top :demo/tight-docs | m8 :demo/mathy -- "tidy the README"
         \\  { m8 top :demo/tight-docs; m8 say --no-send :demo/mathy "tidy the README"; } | m8 send
         \\
-        \\It goes straight to the agent's own file. A chat has no top, and
-        \\neither has a model.
+        \\The reference is written directly to stdout; it does not send a
+        \\message or change a chat pointer.
         \\
     );
 }

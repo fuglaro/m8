@@ -28,19 +28,23 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 tag [--no-advance] :MOB/AGENT
         \\
-        \\A document that is one 🧠 names a turn already, so the address is
-        \\pointed at it and nothing is written. Anything else is kept as a new
-        \\turn and pointed at. What comes out is the 🧠 now pointed at.
+        \\Read a document from stdin, keep it as a turn, and point the named
+        \\agent or chat at that turn. If stdin is a single bare 🧠 reference,
+        \\point at the existing turn instead. Writes the resulting 🧠 reference
+        \\to stdout.
         \\
-        \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy    carry mathy on
-        \\  m8 say --no-send :demo/mathy | m8 tag :demo/mathy//aside             fork a chat
-        \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy//other   keep a run elsewhere
+        \\OPTIONS:
         \\
-        \\  :demo/agent//chat  the turn goes in the chat, and its pointer advances
-        \\  :MOB/AGENT/+/TURN   a turn goes beside its parent
+        \\  --no-advance  Keep the turn without moving the address pointer.
         \\
-        \\`--no-advance` keeps the turn where it would have gone and moves
-        \\nothing, which is what a side question is.
+        \\EXAMPLES:
+        \\
+        \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy
+        \\  m8 say --no-send :demo/mathy | m8 tag :demo/mathy//aside
+        \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy//other
+        \\
+        \\A chat address advances its pointer by default. Use `--no-advance`
+        \\for a side turn that should not move it.
         \\
     );
 }

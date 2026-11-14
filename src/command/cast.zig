@@ -56,48 +56,78 @@ pub const command: api.Command = .{
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 cast [--size COLSxROWS] [--speed SPEEDS] [--no-riff ADDRESS] [--skip-snips] [--static]
+        \\  m8 cast [--size COLSxROWS] [--speed SPEEDS]
+        \\          [--no-riff ADDRESS] [--skip-snips] [--static]
         \\
-        \\Reads a ledger on stdin and writes an SVG that plays it the way riff
-        \\would have shown it: each 🙋 typed into the editor and sent, and
-        \\everything after it arriving above. It holds the last frame for 3
-        \\seconds and plays again. CSS is all it uses, so it plays wherever an
-        \\image does, a README included.
+        \\Reads a ledger on stdin and writes an animated SVG on stdout.
+        \\It uses only CSS, so it can play as an image in a README.
         \\
         \\  m8 say --no-send :games/zork | m8 encode | m8 cast >zork.svg
         \\
-        \\--size is the terminal, 80x24 unless said.
+        \\PLAYBACK:
         \\
-        \\--speed is how fast each sigil arrives: a number of milliseconds and
-        \\what it is per, c for a character, w a word, l a line, b a block,
-        \\and then if said the milliseconds paused before it starts. The first
-        \\is for every sigil not named, and a sigil names its own:
+        \\  Replays the ledger as riff would show it: each 🙋 is typed into
+        \\  the editor and sent, with the response arriving above. Records
+        \\  before the first 🙋 are left out, as riff shows nothing until
+        \\  something is sent. The last frame holds for 3 seconds, then the
+        \\  animation starts again.
         \\
-        \\  m8 cast --speed 40l,🤖60w,💭0b,🙋50c1000
+        \\OPTIONS:
         \\
-        \\Unless named, 🙋 is typed at 50c after 600 ms, and everything else is
-        \\30l, after 200 ms when it answers a 🙋 and straight on otherwise. A
-        \\sigil may be its shortcode instead, as in robot60w.
+        \\  --size COLSxROWS   terminal size (default: 80x24, minimum: 8x4).
         \\
-        \\--no-riff ADDRESS plays it at a plain terminal instead, each 🙋 typed
-        \\at a >>> prompt as the command that says it:
+        \\  --speed SPEEDS    arrival speeds and pauses; see SPEEDS below.
         \\
-        \\  >>> m8 :games/zork -- 'open mailbox'
+        \\  --no-riff ADDRESS
+        \\                    use a plain terminal instead of riff. Each 🙋
+        \\                    is typed at a >>> prompt as a command:
         \\
-        \\A message with a quote or a line break in it, or too wide for one
-        \\line, is said as a heredoc, m8 ADDRESS <<'^^', and the answer is what
-        \\that command writes.
+        \\                      >>> m8 :games/zork -- 'open mailbox'
         \\
-        \\--skip-snips leaves out what a turn kept aside: a 💭snip, and the 🧠
-        \\that names where one went.
+        \\                    Messages with a quote or line break, or too
+        \\                    wide for one line, use m8 ADDRESS <<'^^'.
+        \\                    The response is what that command writes.
         \\
-        \\--static draws it all at once instead, as tall as it is, with
-        \\nothing moving. A 🙋 at the end is left typed and unsent.
+        \\  --skip-snips      omit what a turn kept aside: a 💭snip and
+        \\                    the 🧠 that names where it went.
         \\
-        \\Records before the first 🙋 are left out, as riff shows nothing
-        \\until something is sent.
+        \\  --static          draw a still image, as tall as the ledger,
+        \\                    with nothing moving. A final 🙋 is left
+        \\                    typed and unsent.
+        \\
+        \\SPEEDS:
+        \\
+        \\  A comma-separated list: an optional default pace first, then
+        \\  sigil-specific paces. Each pace is MS followed by a unit and
+        \\  an optional pause in milliseconds before the record starts:
+        \\
+        \\    [SIGIL]MS{c|w|l|b}[PAUSE]
+        \\
+        \\    c  character    w  word    l  line    b  block
+        \\
+        \\  Use an emoji or its shortcode without colons:
+        \\
+        \\    m8 cast --speed 40l,🤖60w,💭0b,🙋50c1000
+        \\    m8 cast --speed 40l,robot60w,thought_balloon0b,raising_hand50c1000
+        \\
+        \\  Here 40l sets the default to 40 ms per line; 🤖60w uses 60 ms
+        \\  per word; 💭0b shows a block at once; 🙋50c1000 types at 50 ms
+        \\  per character after a 1000 ms pause.
+        \\
+        \\  Unless set explicitly, 🙋 uses 50c with a 600 ms pause, even
+        \\  when a default pace is given. Other sigils use 30l, pausing
+        \\  200 ms when answering a 🙋 and not pausing otherwise.
+        \\
+        \\SPEED SIGILS:
+        \\
+        \\  Emoji and shortcode spellings accepted by --speed:
         \\
     );
+    inline for (std.meta.tags(doc.Sigil)) |s| {
+        const word = s.word();
+        try w.print("  {s}  {s}\n", .{ s.emoji(), word[1 .. word.len - 1] });
+    }
+    try w.writeAll("\n");
 }
 
 /// What a pace is per.
@@ -1389,4 +1419,24 @@ test "cast malformed supplied ledger diagnoses on stderr, not SVG output" {
     try testing.expectError(error.Said, command.run(invocation.ctx(&.{"--static"}, &input)));
     try testing.expectEqualStrings("m8 cast: line 1: first line is not a record header\n", invocation.err.written());
     try testing.expect(std.mem.indexOf(u8, invocation.out.written(), "m8 cast:") == null);
+}
+
+test "cast help lists every accepted speed sigil spelling" {
+    const Invocation = @import("../command_input_test.zig").Invocation;
+    var invocation = try Invocation.init();
+    defer invocation.deinit();
+    try help(invocation.ctx(&.{}, null), &invocation.out.writer);
+    for (std.meta.tags(doc.Sigil)) |s| {
+        const word = s.word();
+        const name = word[1 .. word.len - 1];
+        const row = try std.fmt.allocPrint(testing.allocator, "  {s}  {s}\n", .{ s.emoji(), name });
+        defer testing.allocator.free(row);
+        try testing.expect(std.mem.indexOf(u8, invocation.out.written(), row) != null);
+        for ([_][]const u8{ s.emoji(), name }) |spelling| {
+            const text = try std.fmt.allocPrint(testing.allocator, "{s}50c1000", .{spelling});
+            defer testing.allocator.free(text);
+            const speeds = try parseSpeeds(text);
+            try testing.expectEqualDeep(Pace{ .ms = 50, .unit = .char, .pause = 1000 }, speeds.of(s));
+        }
+    }
 }

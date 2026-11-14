@@ -35,25 +35,35 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  ... | m8 parse FORMAT [--snip-chars N] [--snip-lines N]
         \\
-        \\The other direction. `encode` is about requests, which are
-        \\ledger-shaped; a response is turn-shaped, so it is read into the
-        \\records it adds to a ledger rather than into one.
+        \\Reads an API response from stdin and writes the turn it holds as m8
+        \\records. Unlike encode's ledger-shaped requests, responses are
+        \\turn-shaped. Parsing is incremental, whether the provider streamed
+        \\or returned everything at once.
         \\
+        \\EXAMPLE:
+        \\
+        \\  export M8_PROVIDER_url='["echo","http://127.0.0.1:8000/v1/responses"]'
         \\  m8 say --no-send :demo/mathy "Say hi." \
         \\    | m8 encode openai-responses \
-        \\    | M8_PROVIDER_url=http://127.0.0.1:8000/v1/responses m8 url-provider \
+        \\    | m8 url-provider \
         \\    | m8 parse openai-responses
         \\
-        \\The first configured snip limit reached wins. `--snip-chars` counts
-        \\UTF-8 characters, not bytes; `--snip-lines` keeps at most that many
-        \\lines. The remainder is kept as a 💭snip and recombined unchanged
-        \\when the thought is sent again. Without either option, nothing is
-        \\snipped.
-        \\Each limited thought is held until its block closes; other records
-        \\continue to stream as they arrive.
+        \\OPTIONS:
         \\
-        \\Parse errors name the failure, such as InvalidResponseJson or
-        \\OutputItemIdMismatch. For wire capture, use an external tee:
+        \\  --snip-chars N  Limit each thought to N UTF-8 characters (not bytes).
+        \\  --snip-lines N  Keep at most N lines of each thought.
+        \\
+        \\N must be a positive integer. The first configured limit reached
+        \\wins. The remainder is kept as a 💭snip and recombined unchanged when
+        \\sent again. Without either option, nothing is snipped. A limited
+        \\thought is held until its block closes; other records continue
+        \\streaming as they arrive.
+        \\
+        \\ERRORS AND CAPTURE:
+        \\
+        \\Parse errors name the failure (for example, InvalidResponseJson or
+        \\OutputItemIdMismatch). To capture the wire response, use tee:
+        \\
         \\  ... | tee response.sse | m8 parse openai-responses
         \\
     );

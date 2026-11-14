@@ -269,29 +269,35 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 encode [--break NAME]... [FORMAT]
         \\
-        \\With no FORMAT, the ledger is written as m8, the lossless format.
-        \\The ledger arrives on stdin, with every 🧠 expanded into what it
-        \\names. What comes out is one api's view of it.
+        \\Reads a ledger from stdin and writes one API's view of it. With no
+        \\FORMAT, writes m8, the lossless format. 🧠 references are expanded
+        \\into what they name.
+        \\
+        \\EXAMPLES:
         \\
         \\  m8 say --no-send :demo/mathy | m8 encode m8 >ledger.md
         \\  m8 encode openai-completions <ledger.md >request.json
         \\
-        \\Encoding is total and loses whatever the target cannot say, which is
-        \\what makes it a projection: the ledger it came from still holds all
-        \\of it. `m8` is the one format whose view is the whole ledger, which
-        \\is why `encode m8` is how a chat becomes one flat document. A file a
-        \\🔗 names goes as its provider entry's `upload` says, and with no
-        \\`upload`, or one that fails, is an error.
+        \\FORMATS:
         \\
-        \\`--break NAME` leaves a 🧠 naming NAME as it was written rather than
-        \\expanding it, so what comes out is the ledger from there on. NAME is
-        \\what a 🧠 says: a turn, or an agent.
+        \\Encoding is total and projects away what the target cannot express;
+        \\the source ledger retains it. `m8` shows the whole ledger and is
+        \\useful for flattening a chat. A 🔗 file is sent as its provider
+        \\entry's `upload` specifies; absent or failed upload is an error.
+        \\
+        \\OPTIONS:
+        \\
+        \\  --break NAME  Leave 🧠 references named NAME unexpanded, so output
+        \\                is the ledger from there on. NAME is the 🧠 name: a
+        \\                turn or an agent.
         \\
         \\  m8 say --no-send :demo/mathy | m8 encode --break mathy/+/tduyxbutjb
-        \\  m8 say --no-send :demo/mathy | m8 encode --break mathy     the chat, without its agent
+        \\  m8 say --no-send :demo/mathy | m8 encode --break mathy
         \\
-        \\A provider pipeline may supply defaults in M8_PROVIDER_param_NAME variables,
-        \\where NAME is the request field name. Defaults apply only when
+        \\PROVIDER DEFAULTS:
+        \\
+        \\A provider pipeline may set defaults in M8_PROVIDER_param_NAME, where
+        \\NAME is the request field. Defaults apply only when
         \\M8_PROVIDER_NAME matches the model provider. Explicit model parameters
         \\override defaults; null omits the field. Standalone encoding has no
         \\provider defaults.

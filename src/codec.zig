@@ -433,7 +433,7 @@ pub fn find(name: []const u8) ?Codec {
 /// rather than a copy of it, so nothing can come to be listed that `find`
 /// would not return.
 pub fn list(w: *std.Io.Writer) !void {
-    try w.writeAll("\nformats:\n\n");
+    try w.writeAll("\nSUPPORTED FORMATS:\n\n");
     for (all) |c| try w.print("  {s: <20} {s}\n", .{ c.name, c.summary });
 }
 

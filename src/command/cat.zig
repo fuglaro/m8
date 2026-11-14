@@ -21,20 +21,26 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 cat [--pack | --unwrap] [REF]
         \\
-        \\Reads m8 on stdin and writes block markdown by default. With REF, reads
-        \\the document the chat resolves to, or a named turn instead; stdin is
-        \\ignored. A chat with no kept turn reads its authored agent document.
-        \\--pack puts each record on one line, using - for its bullet and ↵
-        \\for internal newlines. Literal ↵ is doubled in packed records.
+        \\Reads m8 records from stdin and writes block Markdown by default.
+        \\With REF, reads the resolved document (or named turn) instead.
+        \\stdin is ignored. A chat with no kept turn uses its authored agent
+        \\document.
         \\
-        \\--unwrap removes record framing: a nonempty value becomes # VALUE,
-        \\followed by a blank line and literal content when present. Records
-        \\are separated by at least one blank line; input blank separators
-        \\are preserved. result/failed content retains its four-space indent.
+        \\OPTIONS:
         \\
-        \\Packed and block records may be mixed. Separator newlines and the
-        \\presence of the final newline are preserved in default and --pack
-        \\output. Nothing is resolved without REF. --pack and --unwrap are exclusive.
+        \\  --pack    Put each record on one line: - for its bullet and ↵ for
+        \\            internal newlines. A literal ↵ is doubled.
+        \\  --unwrap  Remove record framing. Nonempty values become # VALUE,
+        \\            then a blank line and literal content when present.
+        \\
+        \\Records are separated by at least one blank line; input blank
+        \\separators are preserved. result/failed content keeps its
+        \\four-space indent. Block and packed records may be mixed. Default
+        \\and packed output preserve separator newlines and whether the input
+        \\ends in a newline. Without REF, nothing is resolved.
+        \\--pack and --unwrap are exclusive.
+        \\
+        \\EXAMPLES:
         \\
         \\  ... | m8 cat --pack | grep '^- :call::' | m8 cat
         \\

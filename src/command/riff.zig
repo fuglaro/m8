@@ -44,8 +44,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  Each editor message sent runs the COMMAND with the message as
         \\  stdin, writing stdout to the terminal scrollback, and
         \\  scrolling stderr through the status bar. COMMAND runs in a
-        \\  detatched session without its own terminal, in riff's
-        \\  environment but with the terminal width given vie COLUMNS.
+        \\  detached session without its own terminal, in riff's
+        \\  environment but with the terminal width given via COLUMNS.
         \\
         \\EDITOR:
         \\
@@ -58,7 +58,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\     Enter: send (but a message sent mid-run waits its turn)
         \\    Ctrl-d: send (or close, if message is empty)
         \\    Ctrl-j: add a line break (alternatively Alt-Enter)
-        \\    Ctrl-c: interrupt an acive run (once again to close)
+        \\    Ctrl-c: interrupt an active run (once again to close)
         \\
         \\STATUS_BAR:
         \\

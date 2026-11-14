@@ -233,36 +233,44 @@ fn help(_: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 say [OPTS] :MOB/AGENT[:|-|=] ["PROMPT"]
         \\
-        \\Say something to a chat and keep the run. Only that chat advances.
+        \\Says something to a chat and keeps the run. Only that chat advances.
         \\A subchat is a fork: :mob/agent//aside starts where its parent is.
         \\A trailing : asks without advancing; - starts from the authored agent;
         \\= starts from the parent. With no submission, - or = resets the chat
         \\without running it.
         \\
-        \\PROMPT is one argument, even when it begins with a dash. It is a 🙋
+        \\PROMPT:
+        \\
+        \\PROMPT is one argument, even if it begins with a dash. It is a 🙋
         \\submission, or the ❗ answer when the conversation awaits one.
         \\Options precede the address. Stdin is untouched unless -i is given.
         \\
-        \\  -r             render and stream, even when stdout is not a terminal
-        \\  -v             report thoughts and tool calls on stderr, one line each
-        \\  -vv            write the whole turn to stderr as it happens
-        \\  -i             read stdin as prose and say it after PROMPT
-        \\  --chat NAME    select a subchat instead of writing //NAME
-        \\  --new          start from the agent, not the chat's current head
-        \\  --parent       start from the chat's parent
-        \\  --no-advance   keep the run without moving any chat
-        \\  --no-send      show the reference and submission; run and change nothing
-        \\  --answer       write only this run's final reply or question
-        \\  --unwrap       remove m8 framing and write Markdown, as cat does
+        \\OPTIONS:
+        \\
+        \\  -r             Render and stream, even when stdout is not a terminal.
+        \\  -v             Report thoughts and tool calls on stderr, one line each.
+        \\  -vv            Write the whole turn to stderr as it happens.
+        \\  -i             Read stdin as prose and say it after PROMPT.
+        \\  --chat NAME    Select a subchat instead of writing //NAME.
+        \\  --new          Start from the agent, not the chat's current head.
+        \\  --parent       Start from the chat's parent.
+        \\  --no-advance   Keep the run without moving any chat.
+        \\  --no-send      Show the reference and submission; run and change nothing.
+        \\  --answer       Write only this run's final reply or question.
+        \\  --unwrap       Remove m8 framing and write Markdown, as cat does.
+        \\
+        \\CONSTRAINTS AND OUTPUT:
         \\
         \\--chat takes an agent address without //chat or a trailing suffix.
         \\Use --no-advance, --parent or --new with it. Starting options must
         \\agree with the suffix, and --new and --parent cannot be combined.
-        \\--unwrap and -r are alternative spellings; --answer needs a run.
+        \\--unwrap and -r are alternatives; --answer needs a run.
         \\
-        \\A terminal receives rendered records; other stdout receives m8 Markdown.
-        \\--answer --unwrap writes just the answer text, without routing values.
-        \\An answer is taken only from this run, never an earlier turn.
+        \\A terminal receives rendered records; other stdout receives m8
+        \\Markdown. --answer --unwrap writes only answer text, without routing
+        \\values. An answer is taken only from this run, never an earlier turn.
+        \\
+        \\EXAMPLES:
         \\
         \\  m8 say :demo/mathy "Tell me about the Riemann sphere."
         \\  m8 say --chat aside --no-advance :demo/mathy "And the Möbius strip?"

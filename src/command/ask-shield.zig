@@ -46,17 +46,24 @@ fn run(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     _ = ctx;
     try out.writeAll(
-        \\  m8 ask-shield NAME CMD [ARGS]
+        \\  m8 ask-shield NAME CMD [ARGS ...]
         \\
-        \\NAME is who it asks as, made safe for question and answer IDs.
-        \\It defaults to the shield's identity; activation names override it.
+        \\Ask the person before running CMD. The shield stops with a yes/no
+        \\question; on resumption, only `y` or `yes` (case-insensitive) runs
+        \\the command. Any other answer refuses it and returns control to the
+        \\person who can choose what to do instead.
         \\
-        \\It stops with the command as a question, which the run that made
-        \\the call puts to the person as a ❓. What they say next is the
-        \\answer, and the call is run again with it.
+        \\ARGUMENTS:
         \\
-        \\`y` or `yes` runs the command. Anything else does not, and hands
-        \\the conversation back to the person to say what to do instead.
+        \\  NAME       Shield identity used to match the question and answer.
+        \\  CMD [ARGS] Command to run if approved.
+        \\
+        \\When activated from a document, the activation name overrides the
+        \\configured identity. NAME is made safe for question/answer IDs.
+        \\
+        \\EXAMPLE:
+        \\
+        \\  m8 ask-shield shell rm -i unwanted-file
         \\
     );
 }

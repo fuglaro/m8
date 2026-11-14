@@ -35,27 +35,22 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 watch [--unsnip] :MOB/AGENT//CHAT
         \\
-        \\Writes what the chat holds, and then whatever is added to it, until
-        \\it is interrupted. It is how to look on at a chat something else is
-        \\running, such as one an agent hands its work to.
+        \\Write the chat's current ledger, then new turns as the chat advances.
+        \\Runs until interrupted. After a reset, the next turn starts from
+        \\the agent again.
+        \\
+        \\OPTIONS:
+        \\
+        \\  --unsnip  Expand snipped content instead of showing its 🧠 reference.
+        \\
+        \\EXAMPLES:
         \\
         \\  m8 watch :crew/cody//delegated
+        \\  m8 watch --unsnip :crew/cody//delegated
         \\
-        \\Each piece opens with the 🧠 it continues: the turn before it, or
-        \\the agent when the chat starts afresh. A chat that is reset starts
-        \\over from its agent.
-        \\
-        \\What arrives is a turn at a time, since a turn is what is kept: a
-        \\reply once it is whole, and a call once it is answered.
-        \\
-        \\`--unsnip` expands snipped content instead of leaving its 🧠 standing.
-        \\
-        \\Only the chat's own pointer is read. One with none is waited on,
-        \\rather than shown as the chat above it.
-        \\
-        \\New ::stats:: lines from its sibling +.log go unchanged to stderr.
-        \\Old stats are not replayed. The log is advisory; the pointer remains
-        \\authoritative, and both are polled.
+        \\Only the named chat's pointer is followed. If it has no turn yet,
+        \\watch waits. New complete `::stats::` lines from the chat's sibling
+        \\`+.log` are forwarded to stderr; old log entries are not replayed.
         \\
     );
 }

@@ -97,49 +97,54 @@ fn run(ctx: Ctx) !u8 {
 fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\Usage: m8 munge [OPTIONS] COMMAND [COMMAND-OPTIONS] ARGS
+        \\  m8 munge [OPTIONS] COMMAND [COMMAND-OPTIONS] ARGS
         \\
-        \\Options:
-        \\  --page-lines N      page line target (default 30)
-        \\  --page-bytes N      page byte target (default 3000)
-        \\  --pages RANGE       select pages (for example 11-20 or 2@anchor)
+        \\Read, search, or edit files using page-addressed output. Global options
+        \\must appear before COMMAND; command-specific options follow it.
         \\
-        \\Commands:
+        \\OPTIONS:
         \\
-    );
-    try w.writeAll(
-        \\  read     read a file or list a directory
-        \\  write    change a file, or append to one
-        \\  scan     search files for a pattern, answered in pages
-    );
-    try w.writeAll(
+        \\  --page-lines N  Target lines per page (default: 30).
+        \\  --page-bytes N  Target bytes per page (default: 3000).
+        \\  --pages RANGE   Select pages, e.g. `11-20` or `2@anchor`.
         \\
-        \\Each command has its own options
+        \\COMMANDS:
         \\
-        \\read:
-        \\  read PATH           read a file or list a directory
-        \\  --byte-cap N        maximum answer size (default 20000 bytes)
+        \\  read PATH        Read a file or list a directory.
+        \\  write PATH TEXT  Replace or append file content.
+        \\  scan             Search files for a pattern.
         \\
-        \\write:
-        \\  write PATH TEXT     replace or append file content
-        \\  --old TEXT          text to match (if replacing) with fallback forgiveness on
-        \\                      indentation, whitespace, over-encoded \, a line-num prefix,
-        \\                      block-content tolerance between 8-char+ outer anchor lines;
-        \\                      only single line edits may match many.
-        \\  --tolerance N       % of anchored block lines allowed to differ (default 25)
-        \\  --diff-pad N        diff context lines (default 3)
-        \\  --dry-run           view diff without making changes
+        \\COMMAND OPTIONS:
         \\
-        \\scan:
-        \\  scan                search files
-        \\  --glob GLOB         file path matching
-        \\  --regex PATTERN     grep per-line on perl-style regex no backrefs no lookaround
-        \\  --byte-cap N        maximum answer size (default 20000 bytes)
+        \\  read [--byte-cap N] PATH
+        \\    --byte-cap N  Maximum answer size (default: 20000 bytes).
         \\
-        \\Use -- before a PATH that starts with --.
+        \\  write [--old TEXT] [--tolerance N] [--diff-pad N] [--dry-run] PATH [TEXT]
+        \\    --old TEXT       Replace matching text; without it, append TEXT.
+        \\    --tolerance N    Allowed differing anchored lines (default: 25%).
+        \\    --diff-pad N     Diff context lines (default: 3).
+        \\    --dry-run        Show the diff without writing changes.
         \\
-        \\Answers are addressed in pages; page sizes are shared so a read,
-        \\scan and write refer to the same coordinates.
+        \\    Replacement matching tolerates indentation, whitespace,
+        \\    over-encoded backslashes, and line-number prefixes. Multi-line
+        \\    blocks use outer anchor lines of at least 8 characters and
+        \\    tolerate differences within them. Only single-line edits may
+        \\    match more than once.
+        \\
+        \\  scan [--glob GLOB] [--regex PATTERN] [--byte-cap N]
+        \\    --glob GLOB      Match file paths.
+        \\    --regex PATTERN  Search each line with a Perl-style regex; no
+        \\                     backreferences or lookaround.
+        \\    --byte-cap N     Maximum answer size (default: 20000 bytes).
+        \\
+        \\EXAMPLES:
+        \\
+        \\  m8 munge --page-lines 50 read README.md
+        \\  m8 munge scan --glob '*.zig' --regex 'fn help'
+        \\  m8 munge write --dry-run README.md 'new text'
+        \\
+        \\Use `--` before a path beginning with `--`. Page sizing is shared
+        \\across read, scan, and write so their coordinates stay consistent.
         \\
     );
 }

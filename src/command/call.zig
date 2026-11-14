@@ -417,47 +417,51 @@ fn help(ctx: Ctx) !u8 {
 fn page(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
-        \\  m8 call [--mob-space] [--no-wrap|--md] PROG [ARGS]
+        \\  m8 call [--mob-space] [--no-wrap | --md] PROG [ARGS]
         \\
-        \\The program's stdout becomes a 🧾 receipt, followed by 🟢 or 🚫 for
-        \\how it ended. Stdin remains the descriptor call itself was given.
+        \\Runs PROG with ARGS. Stdin remains the descriptor call received.
+        \\Stdout becomes a 🧾 receipt followed by 🟢 or 🚫 for its outcome.
         \\
-        \\--mob-space runs the program with TMPDIR as its working directory,
-        \\the mob-space provided by the environment. TMPDIR must be set and
-        \\non-empty; without this option the working directory is inherited.
+        \\OPTIONS:
         \\
-        \\--md makes it a 📜 instead: the same answer, written to be read as
-        \\markdown rather than as literal output.
+        \\  --mob-space  Run with TMPDIR as the working directory. TMPDIR must
+        \\               be set and non-empty. Without this option, inherit
+        \\               the working directory.
+        \\  --md         Write the answer as a 📜 markdown document.
+        \\  --no-wrap    Pass through stdout records (for example, 🔗 files)
+        \\               and add the verdict.
         \\
-        \\--no-wrap passes stdout through as the records the program wrote,
-        \\such as a 🔗 for files it hands over, and still adds the verdict.
-        \\A PROG named `m8` is the current launcher, whose absolute path every
-        \\program is also handed as M8.
+        \\PROGRAM ENVIRONMENT:
         \\
-        \\A program asks the person something by exiting 75 with nothing on
-        \\stdout and a stderr that opens `QUESTION:tool:`. It is run again
-        \\once they answer, with what they said in $M8_EXCLAMATION_1,
-        \\and the next answer in $M8_EXCLAMATION_2. Exiting 75 again
-        \\without asking hands the
-        \\conversation back to the person rather than the model.
+        \\A PROG named `m8` means the current launcher. Every program also
+        \\receives its absolute path as M8.
         \\
-        \\A whole argument naming a call variable becomes whole argv elements:
+        \\A program can ask a question by exiting 75, writing nothing to
+        \\stdout, and opening stderr with `QUESTION:tool:`. It is run again
+        \\after the answer, in $M8_EXCLAMATION_1 (then _2, and so on). Exiting
+        \\75 again without asking returns the conversation to the person.
+        \\
+        \\CALL VARIABLES:
+        \\
+        \\A whole-argument placeholder expands to whole argv elements:
         \\
         \\  {{command}}       --command VALUE
         \\  {{command|-c}}    -c VALUE
         \\  {{command|}}      VALUE
         \\  {{deep?--deep}}   --deep, only when exactly true
-        \\  {{deep!--deep}}   --deep, omit only when exactly true
+        \\  {{deep!--deep}}   --deep, omitted only when exactly true
         \\  {{}}              -- followed by the whole call as JSON
         \\  {{|}}             the whole call as JSON, without a flag
         \\
-        \\An unset variable leaves nothing behind. An empty one remains an empty
-        \\argument. A placeholder is a whole word, so its value cannot become
-        \\syntax in the command being run.
+        \\An unset variable leaves nothing; an empty one remains an empty
+        \\argument. Placeholders must be whole words, so values cannot become
+        \\command syntax.
         \\
-        \\What a program may not do is a 🛡 rather than a flag here. A shield
-        \\is the process a program runs inside, so it is arranged around this
-        \\rather than asked about within it. See `m8 secure-shield` and `m8 ask-shield`.
+        \\SECURITY:
+        \\
+        \\What a program may not do is a 🛡, not a flag here. A shield is the
+        \\process a program runs inside. See `m8 secure-shield` and
+        \\`m8 ask-shield`.
         \\
     );
 }

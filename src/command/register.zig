@@ -16,10 +16,19 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.print(
         \\  m8 register [-l]
         \\
-        \\Registers existing {s} directories from the current directory
-        \\upward. Registration applies to the canonical directory path.
-        \\-l lists candidates and marks those already registered without
-        \\changing the registry.
+        \\Find existing {s} directories from the current directory upward.
+        \\Without options, register each unregistered candidate by its canonical
+        \\path. This trusts those directories for m8 configuration discovery.
+        \\
+        \\OPTIONS:
+        \\
+        \\  -l  List candidates and mark those already registered; do not change
+        \\      the registry.
+        \\
+        \\EXAMPLES:
+        \\
+        \\  m8 register
+        \\  m8 register -l
         \\
     , .{config.dir_name});
 }

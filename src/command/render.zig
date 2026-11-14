@@ -33,34 +33,35 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     try w.writeAll(
         \\  m8 render [-r] [--parsable] [--no-highlight]
         \\
-        \\Reads a document on stdin and writes it in the emoji spelling,
-        \\whatever stdout is, as it arrives. It is a pure filter: no network,
-        \\and nothing is resolved. It asks only how wide the terminal is, or
-        \\$COLUMNS.
+        \\Reads a document from stdin and writes its emoji spelling as it
+        \\arrives. This filter makes no network requests and resolves nothing.
+        \\It uses the terminal width or $COLUMNS.
+        \\
+        \\EXAMPLES:
         \\
         \\  m8 say --no-send :demo/mathy | m8 encode | m8 render | less -R
         \\  m8 render <ledger.md
         \\
-        \\Every 📜, 🤖, 💭 and 📲 is highlighted as markdown, and a line wider than the
-        \\terminal is broken, carrying its quote and indent.
-        \\🧾 and 🚫 blocks use the literal indent style, without markdown or wrapping.
+        \\RENDERED OUTPUT:
         \\
-        \\--parsable breaks no line and pads no table, so what a terminal shows
-        \\parses again once copied out of it. The colour is still written, and
-        \\a terminal leaves it behind; a file keeps it.
+        \\📜, 🤖, 💭 and 📲 blocks are highlighted as Markdown and long lines
+        \\are wrapped with their quote and indent. 🧾 and 🚫 blocks use literal
+        \\indent, without Markdown or wrapping.
         \\
-        \\--no-highlight writes no colour.
+        \\OPTIONS:
+        \\
+        \\  -r               Write raw Markdown, the spelling used in files.
+        \\                   Line endings and quotes are normalized; otherwise
+        \\                   the document is unchanged.
+        \\  --parsable       Do not wrap lines or pad tables, so copied output
+        \\                   parses again. Color is still written.
+        \\  --no-highlight   Do not write color.
         \\
         \\  m8 render --parsable --no-highlight <ledger.md >shown.m8
-        \\
-        \\`-r` is raw: markdown, the spelling every file is kept in. A
-        \\document survives that round trip with nothing changed but line
-        \\endings and quotes, which is how to check that one parses.
-        \\
         \\  m8 render -r <ledger.md >same.md
         \\
-        \\A document that does not parse is an error naming the line, once
-        \\everything before that line has been written.
+        \\A document that does not parse is an error naming the line; content
+        \\before that line has already been written.
         \\
     );
 }

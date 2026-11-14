@@ -31,19 +31,25 @@ fn page(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  ... | m8 toy-provider
         \\  m8 toy-provider --models
         \\
-        \\Reads a ledger on stdin and writes the turn that answers it, both as
-        \\m8. The last 🧠 in the ledger names the model. `--models` prints
-        \\every name that answers, one a line.
+        \\Reads a ledger on stdin and writes the answer as m8 records on stdout,
+        \\in the ledger's document mode. The last 🧠 selects the model; its
+        \\name is `/toy/NAME`. `--models` lists names that answer, one per line.
         \\
-        \\models:
+        \\A family name is a prefix, not a list of model names. A Z-Machine
+        \\name is a story file's stem, from core/Z-Machine in a config
+        \\directory. Available files depend on the config directories.
+        \\
+        \\MODELS:
         \\
         \\
     );
     for (models) |m| try w.print("  {s: <16} {s}\n", .{ m.name, m.summary });
     try w.writeAll(
         \\
-        \\A Z-Machine name is a story file's stem, from core/Z-Machine in a
-        \\config directory.
+        \\RUNNER:
+        \\
+        \\  Each RUN;;;tool;;;property=value line in the last user message
+        \\  becomes a tool call. Other lines are said back as text.
         \\
     );
 }

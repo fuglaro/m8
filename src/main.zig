@@ -40,6 +40,8 @@ fn overview(w: *std.Io.Writer) !void {
         \\  m8 :MOB/AGENT[:|-|=] [-r] [-v] [-- PROMPT]
         \\  m8 COMMAND [ARGS]
         \\
+        \\CHATS:
+        \\
         \\:MOB/AGENT is shorthand for `m8 say -i`: prompt text and stdin
         \\prose are submitted. Put -- before a prompt given as arguments.
         \\Use -r to render off-terminal and -v for progress on stderr.
@@ -58,12 +60,16 @@ fn overview(w: *std.Io.Writer) !void {
         \\  m8 :demo/mathy -- "Tell me more."
         \\  m8 :demo/mathy//aside -- "A different thought."
         \\
+        \\COMPOSITION:
+        \\
         \\Commands compose through stdin and stdout. Use `say --no-send` to
         \\build a read-only request for composition; say does not infer
         \\documents from stdin:
         \\
         \\  m8 say --no-send :demo/mathy | m8 encode openai-completions >request.json
         \\  m8 say --answer :demo/mathy "And in one sentence?"
+        \\
+        \\PROVIDERS:
         \\
         \\A provider is a file core/providers/NAME.json. Its `cmd`, `encode`,
         \\`parse` and `models` are commands. Other nameable values reach them
@@ -74,8 +80,9 @@ fn overview(w: *std.Io.Writer) !void {
 }
 
 fn overviewCommands(w: *std.Io.Writer) !void {
-    try w.writeAll("\nCOMMANDS:\n");
+    try w.writeAll("\nCOMMANDS:\n\n");
     for (command.all) |c| try w.print("  {s: <13} {s}\n", .{ c.name, c.summary });
+    try w.writeAll("\nUse `m8 COMMAND --help` for a command's options and examples.\n");
 }
 
 pub fn main(init: std.process.Init) !u8 {
