@@ -461,11 +461,18 @@ fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Tho
 
     var text: std.ArrayList(u8) = .empty;
     for (records[from..at]) |r| {
-        if (text.items.len > 0) try text.append(arena, '\n');
+        // A kept-aside thought is a continuation chunk from a snipped block:
+        // its own content carries any original newline at the split boundary.
+        // Other thought records are distinct bubbles, separated by a newline.
+        const continuation = r.sigil == .thought and
+            std.mem.eql(u8, r.value, api.snip) and r.content != null;
+        if (text.items.len > 0 and !continuation) try text.append(arena, '\n');
         try text.appendSlice(arena, api.thoughtText(r));
     }
     if (thought.text.len > 0) {
-        if (text.items.len > 0) try text.append(arena, '\n');
+        const continuation = records[at].sigil == .thought and
+            std.mem.eql(u8, records[at].value, api.snip) and records[at].content != null;
+        if (text.items.len > 0 and !continuation) try text.append(arena, '\n');
         try text.appendSlice(arena, thought.text);
     }
     return .{ .text = text.items, .signature = thought.signature };

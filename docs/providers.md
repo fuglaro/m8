@@ -79,7 +79,11 @@ Four entries name commands directly:
 
 * `cmd` gets the request answered.
 * `encode` makes the ledger a request.
-* `parse` makes the answer a turn.
+* `parse` makes the answer a turn. Its argv may include parser options; for
+  example, `"parse": ["m8", "parse", "anthropic-messages", "--snip-chars", "80", "--snip-lines", "2"]`
+  keeps the readable part of long thoughts short and stores the exact remainder
+  as a snip. The first limit reached wins. With neither option, parsing is
+  unchanged.
 * `models` lists what it serves. See [Listing models](#listing-models).
 
 The first three are one pipeline, each one's output the next
