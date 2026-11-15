@@ -392,8 +392,9 @@ fn gather(ctx: Ctx, glob: []const u8, out: *std.ArrayList([]const u8)) !void {
     try braces(ctx.arena, glob, &patterns);
 
     for (patterns.items) |pattern| {
-        const from = root(pattern);
-        try walk(ctx, if (from.len == 0) "." else from, pattern, out);
+        const relative = stripRelativePrefix(pattern);
+        const from = root(relative);
+        try walk(ctx, if (from.len == 0) "." else from, relative, out);
     }
 }
 
@@ -438,6 +439,14 @@ fn braces(arena: Allocator, pattern: []const u8, out: *std.ArrayList([]const u8)
     }), out);
 }
 
+/// A leading `./` is only an explicit spelling of a path relative to the
+/// current directory; it does not add a path segment to the glob.
+fn stripRelativePrefix(path: []const u8) []const u8 {
+    var relative = path;
+    while (std.mem.startsWith(u8, relative, "./")) relative = relative[2..];
+    return relative;
+}
+
 /// The part of a glob that is a plain path, which is where a walk can start.
 fn root(pattern: []const u8) []const u8 {
     const star = std.mem.indexOfAny(u8, pattern, "*?") orelse return std.fs.path.dirname(pattern) orelse "";
@@ -472,9 +481,10 @@ fn walk(ctx: Ctx, here: []const u8, pattern: []const u8, out: *std.ArrayList([]c
 
 /// Whether a path is what a glob named.
 fn matches(pattern: []const u8, path: []const u8) bool {
+    const relative = stripRelativePrefix(pattern);
     var pats: [64][]const u8 = undefined;
     var strs: [64][]const u8 = undefined;
-    const np = cut(pattern, &pats);
+    const np = cut(relative, &pats);
     const ns = cut(path, &strs);
     return segments(pats[0..np], strs[0..ns]);
 }
@@ -568,6 +578,11 @@ test "a glob names what it names" {
     try testing.expect(matches("**", "anything/at/all.txt"));
     try testing.expect(matches("*.md", "README.md"));
     try testing.expect(!matches("*.md", "docs/README.md"));
+    try testing.expect(matches("./*.png", "image.png"));
+    try testing.expect(matches("./src/*.zig", "src/main.zig"));
+    try testing.expect(matches("../*.png", "../image.png"));
+    try testing.expect(matches("../src/**/*.png", "../src/icons/image.png"));
+    try testing.expect(!matches("../*.png", "image.png"));
     try testing.expect(matches("src/?ain.zig", "src/main.zig"));
     try testing.expect(!matches("src/?ain.zig", "src/domain.zig"));
 
@@ -595,6 +610,8 @@ test "braces spell themselves out" {
 test "a walk starts at the deepest plain directory" {
     try testing.expectEqualStrings("src/command", root("src/command/*.zig"));
     try testing.expectEqualStrings("src", root("src/**/*.zig"));
+    try testing.expectEqualStrings("..", root("../*.png"));
+    try testing.expectEqualStrings("../src", root("../src/**/*.png"));
     try testing.expectEqualStrings("", root("**/*.zig"));
     try testing.expectEqualStrings("", root("*.md"));
 }
