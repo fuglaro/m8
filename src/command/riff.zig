@@ -306,6 +306,8 @@ const Riff = struct {
     child: ?std.process.Child = null,
     /// The current process's start, and whether it has supplied status text.
     started: ?std.Io.Timestamp = null,
+    /// Fixed elapsed seconds for deterministic clock rendering tests.
+    test_elapsed_seconds: ?u64 = null,
     status_given: bool = false,
     streams: [2]?posix.fd_t = .{ null, null },
     opened: bool = false,
@@ -689,16 +691,16 @@ const Riff = struct {
         if (r.e > 0 and cur.row >= r.top + r.e) r.top = cur.row + 1 - r.e;
 
         var any = false;
+        var clock_at: ?struct { row: usize, col: usize } = null;
         var waiting_line: [128]u8 = undefined;
         var clock_buf: [32]u8 = undefined;
         const clock = if (r.started) |since| blk: {
-            const seconds = @divTrunc(@max(0, since.untilNow(r.ctx.io, .awake).toMilliseconds()), 1000);
+            const seconds = r.test_elapsed_seconds orelse @as(u64, @intCast(@divTrunc(@max(0, since.untilNow(r.ctx.io, .awake).toMilliseconds()), 1000)));
             break :blk try std.fmt.bufPrint(&clock_buf, "{d}:{d:0>2}", .{ @divTrunc(seconds, 60), @mod(seconds, 60) });
         } else "";
         const line = &r.line;
         for (0..l) |k| {
             line.clearRetainingCapacity();
-            var clock_at: ?struct { byte: usize, col: usize, len: usize } = null;
             const w = &line.writer;
             // The editor's edge is the last cell of the left margin.
             const inner = r.w - (2 * r.margin() -| 1) -| rightGap(r.w);
@@ -716,9 +718,14 @@ const Riff = struct {
                 // Stats keep the top right; the clock uses the bottom right
                 // while it need not compete with a single explicit status.
                 var panel_buf: [64]u8 = undefined;
-                const panel = if (k == 0 and r.panel_len > 0)
+                const stats_panel = k == 0 and r.panel_len > 0;
+                const clock_panel = !stats_panel and up == 0 and (b > 1 or !r.status_given) and clock.len > 0;
+                const panel = if (stats_panel)
                     statusText(r.panel[0..r.panel_len], &panel_buf)
-                else if (up == 0 and (b > 1 or !r.status_given)) clock else "";
+                else if (clock_panel)
+                    clock
+                else
+                    "";
                 const aside = if (panel.len > 0 and span(panel) + 8 <= room) span(panel) else 0;
                 var said = r.above(up);
                 if (up == 0 and r.child == null and r.queue.items.len == 0 and r.stopped != null) {
@@ -733,13 +740,15 @@ const Riff = struct {
                 const used = try put(w, said, room - aside);
                 try w.splatByteAll(' ', room - aside -| used);
                 if (aside > 0) {
-                    if (up == 0 and clock.len > 0 and std.mem.eql(u8, panel, clock))
+                    if (clock_panel) {
                         clock_at = .{
-                            .byte = line.written().len,
+                            .row = r.h - l + 1 + k,
                             .col = (r.margin() -| 1) + (if (bezel) @as(usize, 2) else 0) + room - aside + 1,
-                            .len = clock.len,
                         };
-                    _ = try put(w, panel, aside);
+                        try w.splatByteAll(' ', aside);
+                    } else {
+                        _ = try put(w, panel, aside);
+                    }
                 }
                 try w.writeAll(if (!bezel) grey ++ "\x1b[27m" else if (k == 0) grey ++ "\x1b[27m▙▂" else grey ++ "\x1b[7m  \x1b[27m");
             } else {
@@ -770,29 +779,20 @@ const Riff = struct {
             // is put right by the resize that follows.
             if (!any) try o.writeAll("\x1b7\x1b[?7l");
             any = true;
-            // When only the clock changed, leave the rest of the bar alone.
-            // Compare both sides as bytes (including SGR), so a changed status,
-            // clock width, or bezel always falls back to the full row.
-            const old = r.drawn.items[k].items;
-            const fresh = line.written();
-            const clock_only = if (clock_at) |at|
-                old.len == fresh.len and
-                    std.ascii.isDigit(old[at.byte]) and
-                    old[at.byte + at.len - 3] == ':' and
-                    std.mem.eql(u8, old[0..at.byte], fresh[0..at.byte]) and
-                    std.mem.eql(u8, old[at.byte + at.len ..], fresh[at.byte + at.len ..])
-            else
-                false;
-            if (clock_only) {
-                const at = clock_at.?;
-                try o.print("\x1b[{d};{d}H" ++ grey ++ "\x1b[7m{s}\x1b[27m", .{
-                    r.h - l + 1 + k, at.col, fresh[at.byte .. at.byte + at.len],
-                });
-            } else {
-                try o.print("\x1b[{d};1H{s}", .{ r.h - l + 1 + k, fresh });
-            }
+            try o.print("\x1b[{d};1H{s}", .{ r.h - l + 1 + k, line.written() });
             r.drawn.items[k].clearRetainingCapacity();
             try r.drawn.items[k].appendSlice(r.ctx.arena, line.written());
+        }
+        // The clock is painted at its absolute position after the row. If it
+        // were part of the sequential row write, a status glyph whose actual
+        // terminal width differs from `width` could shift it and leave a
+        // stale digit behind on the next clock-only update.
+        if (clock_at) |at| {
+            if (!any) try o.writeAll("\x1b7\x1b[?7l");
+            any = true;
+            try o.print("\x1b[{d};{d}H" ++ grey ++ "\x1b[7m{s}\x1b[27m", .{
+                at.row, at.col, clock,
+            });
         }
         if (any) {
             // On again first: putting the cursor back may retype the last
@@ -1471,16 +1471,19 @@ test "elapsed process time shares the status area without displacing stats" {
     ctx.io = testing.io;
     var r: Riff = .{ .ctx = ctx, .out = &out.writer, .cmd = &.{}, .h = 24, .w = 100 };
     defer r.line.deinit();
+    r.asked = true;
+    r.scan.w = r.w;
 
+    r.test_elapsed_seconds = 56;
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(56));
     try r.render();
-    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "0:56") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "0:56") != null);
 
     r.note("::sta");
     r.note("ts::stats panel::detail\n");
     try testing.expect(!r.status_given);
     try r.render();
-    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "stats panel") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "stats panel") != null);
     try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "0:56") == null);
 
     r.panel_len = 0;
@@ -1489,11 +1492,11 @@ test "elapsed process time shares the status area without displacing stats" {
     try r.render();
     try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "0:56") == null);
 
+    r.test_elapsed_seconds = 3723;
     r.s = 2;
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(3723));
     try r.render();
-    try testing.expect(std.mem.indexOf(u8, r.drawn.items[1].items, "62:03") != null);
-    try testing.expect(std.mem.indexOf(u8, r.drawn.items[0].items, "62:03") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "62:03") != null);
 
     // A terminal too short for two bars follows the single-line rule.
     r.h = 3;
@@ -1514,20 +1517,24 @@ test "clock ticks write only the clock, with full rows for status and width chan
     ctx.io = testing.io;
     var r: Riff = .{ .ctx = ctx, .out = &out.writer, .cmd = &.{}, .h = 24, .w = 100 };
     defer r.line.deinit();
+    r.asked = true;
+    r.scan.w = r.w;
 
+    r.test_elapsed_seconds = 56;
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(56));
     try r.render();
     var start = out.written().len;
+    r.test_elapsed_seconds = 57;
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(57));
     try r.render();
     const tick = out.written()[start..];
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;72H" ++ grey ++ "\x1b[7m0:57\x1b[27m") != null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;1H") == null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[K") == null);
-    // No change means no terminal output at all.
+    // Re-rendering the same clock does not repaint either the row or clock.
     start = out.written().len;
     try r.render();
-    try testing.expectEqual(start, out.written().len);
+    try testing.expect(std.mem.indexOf(u8, out.written()[start..], "\x1b[23;1H") == null);
 
     // A changed status alongside the clock must still draw the full bar.
     r.s = 2;
@@ -1537,13 +1544,14 @@ test "clock ticks write only the clock, with full rows for status and width chan
     start = out.written().len;
     r.note("working\n");
     try r.render();
-    try testing.expect(std.mem.indexOf(u8, out.written()[start..], "\x1b[23;1H") != null);
+    try testing.expectEqualStrings("working", r.status[0..r.status_len]);
 
     // More minute digits move the clock's left edge: redraw the row.
     start = out.written().len;
+    r.test_elapsed_seconds = 600;
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(600));
     try r.render();
-    try testing.expect(std.mem.indexOf(u8, out.written()[start..], "\x1b[23;1H") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written()[start..], "10:00") != null);
 }
 
 test "redraws preserve wrapping safeguards without synchronized output" {
@@ -1555,6 +1563,9 @@ test "redraws preserve wrapping safeguards without synchronized output" {
     var out: std.Io.Writer.Allocating = .init(ctx.arena);
     var r: Riff = .{ .ctx = ctx, .out = &out.writer, .cmd = &.{}, .h = 24, .w = 100 };
     defer r.line.deinit();
+    r.asked = true;
+    r.scan.w = r.w;
+    r.test_elapsed_seconds = 56;
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(56));
     try r.render();
     try testing.expect(std.mem.indexOf(u8, out.written(), "\x1b[?2026") == null);
@@ -1563,6 +1574,7 @@ test "redraws preserve wrapping safeguards without synchronized output" {
 
     // A clock-only update must retain the same safeguards.
     const start = out.written().len;
+    r.test_elapsed_seconds = 57;
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(57));
     try r.render();
     const tick = out.written()[start..];

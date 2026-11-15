@@ -19,7 +19,7 @@
   > :shield:secure contain-reads no-writes
   > `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{pattern|--regex}}` `{{path|--glob}}`
   > * `pattern` **string**
-  >   Regex to search with using a Perl-style pattern (no
+  >   Regex to search content using a Perl-style pattern (no
   >   backrefs, lookaround, or multi-line matching)
   > * `path?` **string**
   >   Glob match for files with ** and * expansion (relative,

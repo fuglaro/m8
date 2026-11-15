@@ -1349,8 +1349,12 @@ test "a run says what it is doing, a line at a time" {
     // A long one is said as soon as the line is full, cut, and left alone.
     err.clearRetainingCapacity();
     try sink.begin(.thought, "plan");
-    try sink.text("x" ** 200);
-    const full = "\u{1F4AD} plan " ++ "x" ** (Status.max - 5) ++ "\u{2026}\n";
+    const plan = try arena.alloc(u8, 200);
+    @memset(plan, 'x');
+    try sink.text(plan);
+    const full_body = try arena.alloc(u8, Status.max - 5);
+    @memset(full_body, 'x');
+    const full = try std.fmt.allocPrint(arena, "\u{1F4AD} plan {s}\u{2026}\n", .{full_body});
     try std.testing.expectEqualStrings(full, err.written());
     try sink.text("more");
     try sink.end();
@@ -1366,8 +1370,13 @@ test "a run says what it is doing, a line at a time" {
     try status.call(arena, .{ .id = "c1", .name = "edit", .arguments = "{\"path\":\"a.md\",\"n\":2,\"old\":\"one\\ntwo\"}" });
     try std.testing.expectEqualStrings("\u{1F4F2}edit(path=a.md,n=2,old=one two)\n", err.written());
     err.clearRetainingCapacity();
-    try status.call(arena, .{ .id = "c2", .name = "write", .arguments = "{\"text\":\"" ++ "y" ** 300 ++ "\"}" });
-    try std.testing.expectEqualStrings("\u{1F4F2}write(text=" ++ "y" ** (Status.max - 11) ++ "\u{2026}\n", err.written());
+    const call_text = try arena.alloc(u8, 300);
+    @memset(call_text, 'y');
+    const call_args = try std.fmt.allocPrint(arena, "{{\"text\":\"{s}\"}}", .{call_text});
+    try status.call(arena, .{ .id = "c2", .name = "write", .arguments = call_args });
+    const clipped = try arena.alloc(u8, Status.max - 11);
+    @memset(clipped, 'y');
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(arena, "\u{1F4F2}write(text={s}\u{2026}\n", .{clipped}), err.written());
 
     // Unasked, it says nothing.
     var quiet: Status = .{};

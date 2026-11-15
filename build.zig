@@ -1,6 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
-
 pub fn build(b: *std.Build) void {
     const version = buildVersion(b);
     const target = b.standardTargetOptions(.{});
@@ -59,10 +57,9 @@ pub fn build(b: *std.Build) void {
     // The launcher: every command but the ones named apart, reached by
     // calling it.
     const exe = command(b, target, optimize, small, "m8", "src/main.zig", "", every, no_curl_dep, formats, split, layout, version);
-    b.getInstallStep().dependOn(install(b, target, exe, small));
+    b.getInstallStep().dependOn(install(b, exe));
 
     const run = b.addRunArtifact(exe);
-    if (b.args) |args| run.addArgs(args);
     b.step("run", "Run m8").dependOn(&run.step);
 
     // The ones named apart: a program each, installed beside the launcher,
@@ -71,7 +68,7 @@ pub fn build(b: *std.Build) void {
     while (apart.next()) |name| {
         if (!among(every, name)) std.process.fatal("-Dsplit: no command named '{s}'", .{name});
         const leaf = command(b, target, optimize, small, b.fmt("m8-{s}", .{name}), "src/leaf.zig", name, every, no_curl_dep, formats, split, layout, version);
-        b.getInstallStep().dependOn(install(b, target, leaf, small));
+        b.getInstallStep().dependOn(install(b, leaf));
     }
 
     const tests = b.addTest(.{
@@ -102,7 +99,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const zrun_step = b.addRunArtifact(zrun);
-    if (b.args) |args| zrun_step.addArgs(args);
     b.step("zrun", "Play a story file").dependOn(&zrun_step.step);
 }
 
@@ -135,25 +131,8 @@ fn command(
     return exe;
 }
 
-/// Install an artifact, removing Darwin's local linker symbols in a small
-/// build. ReleaseSmall already omits debug symbols, but Mach-O retains the
-/// LLVM outliner's thousands of `_OUTLINED_FUNCTION_*` names unless `strip -x`
-/// is applied after linking. Other object formats honor Zig's strip setting.
-/// `strip` is the host's, so a Mach-O built from another host keeps the names.
-fn install(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    artifact: *std.Build.Step.Compile,
-    small: bool,
-) *std.Build.Step {
-    const installed = b.addInstallArtifact(artifact, .{});
-    if (!small or target.result.os.tag != .macos or builtin.os.tag != .macos)
-        return &installed.step;
-
-    const strip = b.addSystemCommand(&.{ "strip", "-x" });
-    strip.addArg(b.getInstallPath(installed.dest_dir.?, installed.dest_sub_path));
-    strip.step.dependOn(&installed.step);
-    return &strip.step;
+fn install(b: *std.Build, artifact: *std.Build.Step.Compile) *std.Build.Step {
+    return &b.addInstallArtifact(artifact, .{}).step;
 }
 
 /// What a binary is told about its build: the one command it is, when it is a
@@ -178,8 +157,8 @@ fn options(
     o.addOption(bool, "format_openai_completions", formats.openai_completions);
     o.addOption(bool, "format_anthropic_messages", formats.anthropic_messages);
     o.addOption(bool, "format_openai_responses", formats.openai_responses);
-    inline for (std.meta.fields(Layout)) |field| {
-        o.addOption(field.type, field.name, @field(layout, field.name));
+    inline for (@typeInfo(Layout).@"struct".field_names, @typeInfo(Layout).@"struct".field_types) |name, field_type| {
+        o.addOption(field_type, name, @field(layout, name));
     }
     return o;
 }
@@ -228,7 +207,7 @@ fn wireFormats(b: *std.Build, small: bool) Formats {
 /// is in a folder beneath. So this is read off the sources rather than kept,
 /// and the registry's own test holds the two to each other.
 fn commands(b: *std.Build) []const u8 {
-    var dir = b.build_root.handle.openDir(b.graph.io, "src/command", .{ .iterate = true }) catch
+    var dir = b.root.root_dir.handle.openDir(b.graph.io, "src/command", .{ .iterate = true }) catch
         @panic("src/command is missing");
     defer dir.close(b.graph.io);
 

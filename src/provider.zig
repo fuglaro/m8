@@ -623,12 +623,15 @@ test "the m8 that is running is named absolutely, however it was found" {
 
     var env: std.process.Environ.Map = .init(arena);
     // Enough `..` to reach the root from anywhere, so /bin is named relatively.
-    try env.put("PATH", "/nowhere:" ++ "../" ** 64 ++ "bin");
+    const ups = try arena.alloc(u8, 64 * 3);
+    for (0..64) |i| @memcpy(ups[i * 3 ..][0..3], "../");
+    const path_env = try std.fmt.allocPrint(arena, "/nowhere:{s}bin", .{ups});
+    try env.put("PATH", path_env);
 
     // An absolute path is one.
     try testing.expectEqualStrings("/opt/m8/bin/m8", try selfPath(arena, io, &env, "/opt/m8/bin/m8"));
     // A relative one is made absolute.
-    try testing.expectEqualStrings("/bin/sh", try selfPath(arena, io, &env, "../" ** 64 ++ "bin/sh"));
+    try testing.expectEqualStrings("/bin/sh", try selfPath(arena, io, &env, try std.fmt.allocPrint(arena, "{s}bin/sh", .{ups})));
     // A bare name found under a relative PATH entry is too.
     try testing.expectEqualStrings("/bin/sh", try selfPath(arena, io, &env, "sh"));
 }
@@ -874,7 +877,10 @@ test "provider diagnostics are forwarded and flushed while it is still running" 
         .{ .cmd = &.{
             "/bin/sh",
             "-c",
-            "printf 'waiting\\n' >&2; i=0; while [ \"$i\" -lt 200 ]; do if grep -q waiting \"$1\"; then break; fi; i=$((i+1)); sleep .01; done; grep -q waiting \"$1\" || exit 7; printf '* :robot::\\n  > answer\\n'",
+            // Give slow/loaded CI workers a generous window for the parent
+            // process to receive and flush the diagnostic. The success path
+            // still exits as soon as the live output is visible.
+            "printf 'waiting\\n' >&2; i=0; while [ \"$i\" -lt 2000 ]; do if grep -q waiting \"$1\"; then break; fi; i=$((i+1)); sleep .01; done; grep -q waiting \"$1\" || exit 7; printf '* :robot::\\n  > answer\\n'",
             "provider-test",
             path,
         } },

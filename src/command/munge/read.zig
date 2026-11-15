@@ -680,8 +680,10 @@ test "a long line in the last third is pushed whole into the next page" {
 
     // Seventy wide lines pass two thirds of the character budget while staying
     // well under the line count, and then one line runs past the end.
+    const wide_word = try arena.alloc(u8, 98);
+    @memset(wide_word, 'w');
     var filler: std.ArrayList(u8) = .empty;
-    for (0..70) |i| try filler.print(arena, "{d} {s}\n", .{ i + 1, "w" ** 98 });
+    for (0..70) |i| try filler.print(arena, "{d} {s}\n", .{ i + 1, wide_word });
     const long = try arena.alloc(u8, 5000);
     @memset(long, 'y');
     const body = try std.fmt.allocPrint(arena, "{s}{s}\ntail\n", .{ filler.items, long });

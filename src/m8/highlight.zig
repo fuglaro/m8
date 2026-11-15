@@ -801,8 +801,8 @@ fn themed(opts: Options) Options {
 
 test "palette starts neutral and the built-in setting supplies its styles" {
     const neutral: Palette = .{};
-    inline for (std.meta.fields(Palette)) |field| {
-        try testing.expectEqualDeep(Style{}, @field(neutral, field.name));
+    inline for (@typeInfo(Palette).@"struct".field_names) |name| {
+        try testing.expectEqualDeep(Style{}, @field(neutral, name));
     }
     const look = themed(.{});
     try testing.expectEqualDeep((Style{ .bold = true, .fg = 75 }), look.palette.heading);

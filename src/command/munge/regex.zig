@@ -806,6 +806,7 @@ test "nothing pathological takes long" {
 
     // The pattern that makes a backtracker hang. Linear time is structural
     // here, so it simply answers.
-    const line = "a" ** 40;
-    try testing.expect(try firstMatch(arena, "(a+)+b", line) == null);
+    var line: [40]u8 = undefined;
+    @memset(&line, 'a');
+    try testing.expect(try firstMatch(arena, "(a+)+b", &line) == null);
 }

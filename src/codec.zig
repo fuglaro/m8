@@ -576,7 +576,7 @@ test "a line longer than the buffer is still one line" {
     const arena = a.allocator();
 
     // Three lines, the middle one several buffers wide.
-    const long = "x" ** 200;
+    const long = try repeatBytes(arena, 'x', 200);
     const src = try std.fmt.allocPrint(arena, "one\n{s}\nthree\n", .{long});
 
     var fixed: std.Io.Reader = .fixed(src);
@@ -585,7 +585,7 @@ test "a line longer than the buffer is still one line" {
     const r = &lim.interface;
 
     try testing.expectEqualStrings("one\n", (try nextLine(arena, r)).?);
-    try testing.expectEqualStrings(long ++ "\n", (try nextLine(arena, r)).?);
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}\n", .{long}), (try nextLine(arena, r)).?);
     try testing.expectEqualStrings("three\n", (try nextLine(arena, r)).?);
     try testing.expect((try nextLine(arena, r)) == null);
 }
@@ -597,7 +597,7 @@ test "a long last line with no newline on it is still given up" {
 
     // A whole JSON response arrives exactly this way: one line, no newline,
     // and nothing says how big it is.
-    const body = "{\"choices\":[" ++ ("y" ** 500) ++ "]}";
+    const body = try std.fmt.allocPrint(arena, "{{\"choices\":[{s}]}}", .{try repeatBytes(arena, 'y', 500)});
 
     var fixed: std.Io.Reader = .fixed(body);
     var buf: [64]u8 = undefined;
@@ -606,4 +606,10 @@ test "a long last line with no newline on it is still given up" {
 
     try testing.expectEqualStrings(body, (try nextLine(arena, r)).?);
     try testing.expect((try nextLine(arena, r)) == null);
+}
+
+fn repeatBytes(arena: Allocator, byte: u8, len: usize) ![]u8 {
+    const out = try arena.alloc(u8, len);
+    @memset(out, byte);
+    return out;
 }

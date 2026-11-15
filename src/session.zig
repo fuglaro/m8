@@ -237,7 +237,7 @@ fn appendLog(arena: Allocator, io: std.Io, path: []const u8, value: []const u8) 
     if (std.fs.path.dirname(path)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
     const bytes = try std.fmt.allocPrint(arena, "::stats::{s}\n", .{value});
     // One append write where possible, without locking or delivery guarantees.
-    const rc = std.posix.system.open(try arena.dupeZ(u8, path), .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true, .CLOEXEC = true }, @as(std.posix.mode_t, 0o600));
+    const rc = std.posix.system.open(try std.fmt.allocPrintSentinel(arena, "{s}", .{path}, 0), .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true, .CLOEXEC = true }, @as(std.posix.mode_t, 0o600));
     if (std.posix.errno(rc) != .SUCCESS) return error.LogOpenFailed;
     const file: std.Io.File = .{ .handle = @intCast(rc), .flags = .{ .nonblocking = false } };
     defer file.close(io);
