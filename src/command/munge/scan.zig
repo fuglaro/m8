@@ -127,7 +127,7 @@ fn run(ctx: Ctx) !u8 {
         const r = results.items[to];
         const opens = introduces(results.items, to, want.from);
         const n = r.body.len + if (opens) r.head.len else 0;
-        const separator = if (to > want.from and opens) @as(usize, 1) else 0;
+        const separator = if (vm != null and to > want.from and opens) @as(usize, 1) else 0;
         if (to > want.from and held + separator + n > cap) {
             capped = true;
             to -= 1;
@@ -136,12 +136,12 @@ fn run(ctx: Ctx) !u8 {
         held += separator + n; // separators are content; the trailer is not
     }
     if (to > want.to) to = want.to;
-    // The blank line belongs between files, where it ends one list and starts
-    // another. Between pages of one file there is no break to make: they are
-    // points of the same list, and a gap would split it into two.
+    // Regex results are multi-line file blocks, so separate files with a blank
+    // line. A no-pattern scan is a one-line listing and stays single-spaced.
+    // Pages of one file have no break: they are points of the same list.
     for (results.items[want.from .. to + 1], want.from..) |result, i| {
         if (introduces(results.items, i, want.from)) {
-            if (i != want.from) try ctx.out.writeByte('\n');
+            if (vm != null and i != want.from) try ctx.out.writeByte('\n');
             try ctx.out.writeAll(result.head);
         }
         try ctx.out.writeAll(result.body);

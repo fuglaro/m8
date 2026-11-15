@@ -13,7 +13,7 @@
   >
   > `m8` `call` `--md` `m8` `say` `--answer` `--unwrap` `:games/zork` `{{command|}}`
   > * `command` **string**
-  >   The command to give to the game. Say anything to get started.
+  >   The command to give to the game. Say anything to get started
 
 * :toolbox::read_journal
   > > Read the contents of the journal.
@@ -22,9 +22,9 @@
   >
   > `m8` `call` `--mob-space` `m8` `munge` `{{pages}}` `read` `--` `journal.txt`
   > * `pages?` **string**
-  >   Page range to read e.g. "10-10" or "11-20" or "21-100", or
+  >   Page range to read e.g. 10-10 or 11-20 or 21-100 or
   >   "2@string_match" to read 2 pages starting at string_match.
-  >   About 100 lines per page, fewer when lines are very long.
+  >   About 100 lines per page, fewer when lines are very long
 
 * :toolbox::edit_journal
   > > Edit the journal or add to it.
@@ -36,13 +36,13 @@
   >
   > `m8` `call` `--mob-space` `--md` `m8` `munge` `{{pages}}` `write` `{{old_string|--old}}` `--` `journal.txt` `{{new_string|}}`
   > * `new_string` **string**
-  >   The text to insert.
+  >   The text to insert
   > * `old_string?` **string**
-  >   The text to replace. Omit to write or append.
+  >   The text to replace. Omit to write or append
   > * `pages?` **string**
   >   Page range to scope the matches during replace e.g.
-  >   "10-10" or "11-20" or "21-100", or "2@string_match" to
-  >   scope within 2 pages starting at string match.
+  >   10-10 or 11-20 or 21-100 or 2@string_match to
+  >   scope within 2 pages starting at string match
 
 * :toolbox::search_journal
   > > Grep search inside the journal.
@@ -50,9 +50,9 @@
   > `m8` `call` `--mob-space` `m8` `munge` `{{pages}}` `scan` `{{regex}}` `journal.txt`
   > * `regex` **string**
   >   Regex to search with using a Perl-style pattern (no
-  >   backrefs, lookaround, or multi-line matching).
+  >   backrefs, lookaround, or multi-line matching)
   > * `pages?` **string**
-  >   Paginate results to browse through many matches e.g. "11-20".
+  >   Paginate results to browse through many matches e.g. 11-20
 
 * :toolbox::zork
 * :toolbox::read_journal

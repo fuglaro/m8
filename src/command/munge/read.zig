@@ -231,7 +231,7 @@ pub fn select(spec: []const u8, pages: []const Page, bytes: []const u8) Ask {
     var lo: ?usize = null;
     var hi: ?usize = null;
     var i: usize = 0;
-    var seen = false;
+    var number_count: usize = 0;
     while (i < spec.len) {
         if (!std.ascii.isDigit(spec[i])) {
             i += 1;
@@ -243,21 +243,21 @@ pub fn select(spec: []const u8, pages: []const Page, bytes: []const u8) Ask {
             i = j;
             continue;
         };
-        seen = true;
+        number_count += 1;
         if (lo == null or n < lo.?) lo = n;
         if (hi == null or n > hi.?) hi = n;
         i = j;
     }
-    // Words and nothing else. Somebody wrote `all`, or `the whole thing`.
-    if (!seen) return .whole;
+    if (number_count == 0) return .whole;
 
-    // An open end is punctuation before the first digit, or anything at all
-    // after the last. The sides differ because writing differs: a leading word
-    // is a label — the argument is called `pages`, so `pages 3-4` is one — and
-    // a trailing word is never anything but "onwards".
+    // With one number, punctuation before or text after it can mark an open
+    // end (`-5`, `5+`). Two numbers already define a range, so surrounding
+    // punctuation such as quotes must not widen it.
     const trimmed = std.mem.trim(u8, spec, " \t");
-    if (trimmed.len > 0 and !std.ascii.isAlphanumeric(trimmed[0])) lo = 1;
-    if (trimmed.len > 0 and !std.ascii.isDigit(trimmed[trimmed.len - 1])) hi = pages.len;
+    if (number_count == 1 and trimmed.len > 0) {
+        if (!std.ascii.isAlphanumeric(trimmed[0])) lo = 1;
+        if (!std.ascii.isDigit(trimmed[trimmed.len - 1])) hi = pages.len;
+    }
 
     // Page numbers are one-based. Be forgiving when a caller uses zero for
     // the first page, without changing the other end of a range: `0-5` is
@@ -706,6 +706,11 @@ test "a range is read as generously as it can be" {
     const plain = select("3-5", pages, body).span;
     try testing.expectEqual(@as(usize, 2), plain.from);
     try testing.expectEqual(@as(usize, 4), plain.to);
+
+    // Surrounding quotes are ignored when two numbers already define a range.
+    const quoted = select("\"4-5\"", pages, body).span;
+    try testing.expectEqual(@as(usize, 3), quoted.from);
+    try testing.expectEqual(@as(usize, 4), quoted.to);
 
     // Zero is a forgiving spelling of the one-based first page. Only the
     // zero endpoint changes, so the range keeps its requested width.
