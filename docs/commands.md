@@ -349,6 +349,12 @@ There are four:
 * `openai-responses` — OpenAI's responses api, which is
   where Codex and a ChatGPT plan answer.
 
+* `openai-completions` and `anthropic-messages` group consecutive
+  tool calls onto one assistant message, followed by their answers.
+  * A call after an answer starts another assistant turn, even without
+    assistant text between the rounds.
+* `openai-responses` keeps calls and outputs as separate items in ledger order.
+
 `m8 encode --help` is the same list, and any provider may
 name any of them. With no format named, `m8 encode` uses
 `m8`, the lossless format.

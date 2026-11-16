@@ -141,9 +141,16 @@ fn run(
     claimed: []bool,
 ) !usize {
     var end = start;
+    var answered = false;
     while (end < records.len) : (end += 1) {
         switch (records[end].sigil) {
-            .call, .result, .scroll, .link, .ok, .failed => {},
+            .call => {
+                // Calls before the first answer are one parallel batch. Once
+                // an answer has begun, a later call starts another assistant
+                // turn even when neither round said any text.
+                if (answered) break;
+            },
+            .result, .scroll, .link, .ok, .failed => answered = true,
             else => break,
         }
     }
@@ -633,8 +640,8 @@ test "calls gather onto the turn that made them, ahead of their answers" {
         .{ .sigil = .agent, .value = "local/tiny" },
         .{ .sigil = .bot, .content = "Let me look." },
         .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
-        .{ .sigil = .result, .value = "c1", .content = "hi" },
         .{ .sigil = .call, .value = "say,c2", .content = "* text `\"bye\"`" },
+        .{ .sigil = .result, .value = "c1", .content = "hi" },
         .{ .sigil = .failed, .value = "c2", .content = "nope" },
         .{ .sigil = .bot, .content = "Done." },
     };
@@ -660,6 +667,53 @@ test "calls gather onto the turn that made them, ahead of their answers" {
     try testing.expectEqualStrings("c2", field(msgs[2], "tool_call_id").string);
     try testing.expectEqualStrings("nope", field(msgs[2], "content").string);
     try testing.expectEqualStrings("assistant", field(msgs[3], "role").string);
+}
+
+test "textless sequential tool rounds stay separate and preserve earlier messages" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const first_round = [_]doc.Record{
+        .{ .sigil = .call, .value = "look,c1", .content = "{}" },
+        .{ .sigil = .call, .value = "look,c2", .content = "{}" },
+        .{ .sigil = .result, .value = "c1", .content = "one" },
+        .{ .sigil = .ok, .value = "c1" },
+        .{ .sigil = .result, .value = "c2", .content = "two" },
+        .{ .sigil = .ok, .value = "c2" },
+    };
+    const prior = try encode(arena, &first_round, .{ .model = "tiny" });
+    const records = first_round ++ [_]doc.Record{
+        .{ .sigil = .call, .value = "look,c3", .content = "{}" },
+        .{ .sigil = .result, .value = "c3", .content = "three" },
+        .{ .sigil = .ok, .value = "c3" },
+    };
+    const current = try encode(arena, &records, .{ .model = "tiny" });
+    const before = field(try std.json.parseFromSliceLeaky(std.json.Value, arena, prior, .{}), "messages").array.items;
+    const after = field(try std.json.parseFromSliceLeaky(std.json.Value, arena, current, .{}), "messages").array.items;
+
+    try testing.expectEqual(@as(usize, 3), before.len);
+    try testing.expectEqual(@as(usize, 5), after.len);
+    try testing.expectEqualStrings("assistant", field(after[0], "role").string);
+    try testing.expectEqual(@as(usize, 2), field(after[0], "tool_calls").array.items.len);
+    try testing.expectEqualStrings("c1", field(after[1], "tool_call_id").string);
+    try testing.expectEqualStrings("c2", field(after[2], "tool_call_id").string);
+    try testing.expectEqualStrings("assistant", field(after[3], "role").string);
+    const calls = field(after[3], "tool_calls").array.items;
+    try testing.expectEqual(@as(usize, 1), calls.len);
+    try testing.expectEqualStrings("c3", field(calls[0], "id").string);
+    try testing.expectEqualStrings("c3", field(after[4], "tool_call_id").string);
+
+    // Appending another round leaves every earlier message unchanged.
+    for (before, 0..) |message, i| {
+        var left: std.Io.Writer.Allocating = .init(arena);
+        var right: std.Io.Writer.Allocating = .init(arena);
+        var ls: std.json.Stringify = .{ .writer = &left.writer };
+        var rs: std.json.Stringify = .{ .writer = &right.writer };
+        try ls.write(message);
+        try rs.write(after[i]);
+        try testing.expectEqualStrings(left.written(), right.written());
+    }
 }
 
 test "an answer that arrived late is still written beside its call" {
