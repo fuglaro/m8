@@ -690,10 +690,14 @@ const Riff = struct {
         if (cur.row < r.top) r.top = cur.row;
         if (r.e > 0 and cur.row >= r.top + r.e) r.top = cur.row + 1 - r.e;
 
+        const PanelAt = struct { row: usize, col: usize };
         var any = false;
-        var clock_at: ?struct { row: usize, col: usize } = null;
+        var clock_at: ?PanelAt = null;
+        var stats_at: ?PanelAt = null;
         var waiting_line: [128]u8 = undefined;
         var clock_buf: [32]u8 = undefined;
+        var panel_buf: [64]u8 = undefined;
+        const stats_text = if (r.panel_len > 0) statusText(r.panel[0..r.panel_len], &panel_buf) else "";
         const clock = if (r.started) |since| blk: {
             const seconds = r.test_elapsed_seconds orelse @as(u64, @intCast(@divTrunc(@max(0, since.untilNow(r.ctx.io, .awake).toMilliseconds()), 1000)));
             break :blk try std.fmt.bufPrint(&clock_buf, "{d}:{d:0>2}", .{ @divTrunc(seconds, 60), @mod(seconds, 60) });
@@ -717,16 +721,11 @@ const Riff = struct {
                 const room = if (bezel) inner - 4 else inner;
                 // Stats keep the top right; the clock uses the bottom right
                 // while it need not compete with a single explicit status.
-                var panel_buf: [64]u8 = undefined;
-                const stats_panel = k == 0 and r.panel_len > 0;
+                const stats_panel = k == 0 and stats_text.len > 0;
                 const clock_panel = !stats_panel and up == 0 and (b > 1 or !r.status_given) and clock.len > 0;
-                const panel = if (stats_panel)
-                    statusText(r.panel[0..r.panel_len], &panel_buf)
-                else if (clock_panel)
-                    clock
-                else
-                    "";
-                const aside = if (panel.len > 0 and span(panel) + 8 <= room) span(panel) else 0;
+                const overlay = if (stats_panel) stats_text else if (clock_panel) clock else "";
+                const overlay_width = if (overlay.len > 0) span(overlay) + 1 else 0;
+                const fits = overlay_width > 0 and overlay_width + 8 <= room;
                 var said = r.above(up);
                 if (up == 0 and r.child == null and r.queue.items.len == 0 and r.stopped != null) {
                     said = std.fmt.bufPrint(
@@ -737,18 +736,14 @@ const Riff = struct {
                 }
                 var said_buf: [512]u8 = undefined;
                 said = statusText(said, &said_buf);
-                const used = try put(w, said, room - aside);
-                try w.splatByteAll(' ', room - aside -| used);
-                if (aside > 0) {
-                    if (clock_panel) {
-                        clock_at = .{
-                            .row = r.h - l + 1 + k,
-                            .col = (r.margin() -| 1) + (if (bezel) @as(usize, 2) else 0) + room - aside + 1,
-                        };
-                        try w.splatByteAll(' ', aside);
-                    } else {
-                        _ = try put(w, panel, aside);
-                    }
+                const used = try put(w, said, room);
+                try w.splatByteAll(' ', room -| used);
+                if (fits) {
+                    const at: PanelAt = .{
+                        .row = r.h - l + 1 + k,
+                        .col = (r.margin() -| 1) + (if (bezel) @as(usize, 2) else 0) + room - overlay_width + 1,
+                    };
+                    if (stats_panel) stats_at = at else if (clock_panel) clock_at = at;
                 }
                 try w.writeAll(if (!bezel) grey ++ "\x1b[27m" else if (k == 0) grey ++ "\x1b[27m▙▂" else grey ++ "\x1b[7m  \x1b[27m");
             } else {
@@ -783,14 +778,20 @@ const Riff = struct {
             r.drawn.items[k].clearRetainingCapacity();
             try r.drawn.items[k].appendSlice(r.ctx.arena, line.written());
         }
-        // The clock is painted at its absolute position after the row. If it
-        // were part of the sequential row write, a status glyph whose actual
-        // terminal width differs from `width` could shift it and leave a
-        // stale digit behind on the next clock-only update.
+        // Right-side panels are overlays, not space reserved by the status
+        // text. Their ellipsis makes the boundary visible even when text runs
+        // underneath, and absolute positions keep it from shifting them.
+        if (stats_at) |at| {
+            if (!any) try o.writeAll("\x1b7\x1b[?7l");
+            any = true;
+            try o.print("\x1b[{d};{d}H" ++ grey ++ "\x1b[7m…", .{ at.row, at.col });
+            _ = try put(o, stats_text, span(stats_text));
+            try o.writeAll("\x1b[27m");
+        }
         if (clock_at) |at| {
             if (!any) try o.writeAll("\x1b7\x1b[?7l");
             any = true;
-            try o.print("\x1b[{d};{d}H" ++ grey ++ "\x1b[7m{s}\x1b[27m", .{
+            try o.print("\x1b[{d};{d}H" ++ grey ++ "\x1b[7m…{s}\x1b[27m", .{
                 at.row, at.col, clock,
             });
         }
@@ -1528,10 +1529,10 @@ test "clock ticks write only the clock, with full rows for status and width chan
     r.started = std.Io.Timestamp.now(ctx.io, .awake).subDuration(.fromSeconds(57));
     try r.render();
     const tick = out.written()[start..];
-    try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;72H" ++ grey ++ "\x1b[7m0:57\x1b[27m") != null);
+    try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;71H" ++ grey ++ "\x1b[7m…0:57\x1b[27m") != null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[23;1H") == null);
     try testing.expect(std.mem.indexOf(u8, tick, "\x1b[K") == null);
-    // Re-rendering the same clock does not repaint either the row or clock.
+    // Re-rendering the same clock does not repaint the row.
     start = out.written().len;
     try r.render();
     try testing.expect(std.mem.indexOf(u8, out.written()[start..], "\x1b[23;1H") == null);
