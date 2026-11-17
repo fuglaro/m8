@@ -34,7 +34,6 @@ const every = .{
     @import("command/toy-provider.zig"),
     @import("command/models.zig"),
     @import("command/riff.zig"),
-    @import("command/watch.zig"),
     @import("command/register.zig"),
 };
 

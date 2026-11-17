@@ -147,7 +147,6 @@ m8 say :demo/mathy "Tell me more."
 m8 say -r -i :demo/mathy "Summarize this:" <notes.txt
 m8 say --no-send :demo/mathy | m8 encode openai-responses
 m8 say --answer --unwrap :demo/critic//job "Review that."
-m8 watch :crew/cody//delegated
 ```
 
 * `--no-send` emits the reference and optional submission without running or
@@ -174,7 +173,6 @@ m8 watch :crew/cody//delegated
     headings, and content is unquoted.
 * `render` writes a document in the rendered spelling, and
   `render -r` writes markdown back.
-* `watch :MOB/AGENT` writes a chat out as it moves.
 * `top :MOB/AGENT` writes a file's self-reference. See [Tops](language.md#tops).
 
 A document follows an address by being written after it:

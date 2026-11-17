@@ -798,17 +798,14 @@ retaining counts across events. The existing
 [Codex configuration](../.m8st8/core/providers/codex.json) shows OpenAI usage.
 Neither requires an installed helper script.
 
-### Watching stats
+### Logged stats
 
-`m8 watch` keeps polling the pointer and tails new complete `::stats::` lines
-from its sibling `+.log`, forwarding them unchanged to stderr. Ledger output
-stays on stdout. Existing stats are not replayed when watch starts.
+Stats are appended to the chat’s sibling `+.log`.
 Logged stats prefix the detail field with the latest saved ledger reference,
 for example `::stats::✥80▆1K::+/abcdefghij: 1200 in, 80 out`; the compact panel
 and provider formatter are unchanged. Without a saved stage, stats stay unlinked.
 
 The log carries stats only, not pointer changes or resets. It is advisory, not
 another ledger: no locks, transactions, or delivery guarantees.
-Concurrent or interrupted writes may leave malformed lines, and watch ignores
-unrecognized records. The pointer remains authoritative even when the log is
-missing or truncated.
+Concurrent or interrupted writes may leave malformed lines. The pointer remains
+authoritative even when the log is missing or truncated.
