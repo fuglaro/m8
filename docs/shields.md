@@ -220,10 +220,41 @@ scripts, use `"$M8"` to reach that same executable; script text is not rewritten
 
 ## Sandbox restrictions
 
-`secure-shield` combines all supplied names into **one sandbox profile**. This
-matters because separate `sandbox-exec` configurations cannot be nested. It
-requires macOS and `sandbox-exec`; unsupported platforms fail rather than run
-without protection.
+`secure-shield` combines all supplied names into **one sandbox invocation**.
+On macOS it uses `sandbox-exec`; separate sandbox profiles cannot be nested.
+On Linux it uses Bubblewrap (`bwrap`, installed separately) and requires working
+unprivileged user namespaces. Missing backends, unsupported platforms and
+unsupported restrictions fail rather than run without protection.
+
+### Linux (Bubblewrap)
+
+The Linux backend currently supports filesystem **write** restrictions:
+
+* `contain-writes` and `contain-writes-soft`: writable cwd and scratch (TMP).
+  Linux has no Darwin temp allowance, so these two are equivalent.
+* `contain-writes-home`: writable cwd, TMP and HOME.
+* `only-tmp-writes`: writable TMP only.
+* `no-writes`: no writable filesystem trees.
+* `no-edit-git`: the nearest `.git` entry is mounted read-only.
+
+Write policies intersect: `contain-writes` removes the extra HOME allowance,
+`only-tmp-writes` removes cwd/HOME, and `no-writes` removes every allowance.
+Paths are canonicalized before mounting. Writable grants inside a protected
+`.git` tree are rejected.
+
+```sh
+m8 secure-shield "contain-writes no-edit-git" bash -c 'ls'
+```
+
+Read restrictions (`contain-reads`, `contain-reads-home`, `private`),
+`no-edit-m8-st8`, `airgap` and `no-loop` are **not supported on Linux** yet.
+Bubblewrap's network namespace switch alone cannot preserve either split
+internet/loopback policy, so these names are rejected, not approximated.
+Consequently the example `workbench`, `sandbox` and `jail` compositions above
+are not portable unchanged. A write restriction does not hide files, scrub the
+environment, or prevent access to existing Unix sockets.
+
+### macOS (sandbox-exec)
 
 On macOS, the sandbox queries `getconf DARWIN_USER_TEMP_DIR` and resolves
 that directory for the `contain-writes-soft` allowance. Apple's developer-tool

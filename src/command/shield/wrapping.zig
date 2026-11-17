@@ -17,7 +17,7 @@ pub const Error = error{
     UnknownShield,
     /// A restriction the profile has no line for.
     UnknownRestriction,
-    /// Kernel restrictions need `sandbox-exec`.
+    /// No native sandbox backend is supported on this platform.
     Unsupported,
     /// The person said no, or there was nobody to ask.
     Refused,

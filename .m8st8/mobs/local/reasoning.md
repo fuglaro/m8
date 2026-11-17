@@ -1,1 +1,1 @@
-* :brain::/local/rapid-mlx/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-MLX-3bit
+* :brain::/local/Qwen3.8-Flash-Next-REAP-288-MLX-4bit

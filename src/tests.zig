@@ -10,6 +10,7 @@ comptime {
     _ = @import("m8/model.zig");
     _ = @import("session.zig");
     _ = @import("sandbox.zig");
+    _ = @import("sandbox_linux.zig");
     _ = @import("toolbox.zig");
     _ = @import("shield.zig");
     _ = @import("provider.zig");

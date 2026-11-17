@@ -5,6 +5,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const api = @import("../api.zig");
 const sandbox = @import("../sandbox.zig");
+const linux = @import("../sandbox_linux.zig");
 const wrapping = @import("shield/wrapping.zig");
 const Ctx = api.Ctx;
 
@@ -37,15 +38,22 @@ fn run(ctx: Ctx) !u8 {
     var tmp = ctx.env.get("TMPDIR") orelse "";
     var made = false;
 
-    if (builtin.os.tag != .macos) {
-        try ctx.err.writeAll("m8 secure-shield: needs sandbox-exec, which is macOS only\n");
+    if (builtin.os.tag != .macos and builtin.os.tag != .linux) {
+        try ctx.err.writeAll("m8 secure-shield: needs macOS sandbox-exec or Linux Bubblewrap (bwrap)\n");
         return wrapping.Error.Unsupported;
     }
     if (tmp.len == 0) {
         tmp = try sandbox.makeTmp(ctx.arena, ctx.io, ctx.env);
         made = true;
     }
-    const full = try sandbox.exec(ctx.arena, ctx.io, ctx.env, w.argv, names.items, tmp);
+    const full = if (builtin.os.tag == .linux)
+        linux.exec(ctx.arena, ctx.io, ctx.env, w.argv, names.items, tmp) catch |err| {
+            if (err == error.UnsupportedRestriction)
+                try ctx.err.writeAll("m8 secure-shield: Linux bwrap supports write restrictions and no-edit-git only; read and network restrictions are unsupported\n");
+            return err;
+        }
+    else
+        try sandbox.exec(ctx.arena, ctx.io, ctx.env, w.argv, names.items, tmp);
 
     var environ: ?*const std.process.Environ.Map = null;
     if (made)
@@ -58,7 +66,7 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     try out.writeAll(
         \\  m8 secure-shield "RESTRICTIONS" CMD [ARGS ...]
         \\
-        \\Run CMD in the macOS sandbox with the named restrictions combined
+        \\Run CMD in the native sandbox with the named restrictions combined
         \\into one profile. RESTRICTIONS must be one argument containing one
         \\or more space-separated names. Unknown names are rejected.
         \\
@@ -82,8 +90,11 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
         try out.print("  {s: <22} {s}\n", .{ r.name, r.summary });
     try out.writeAll(
         \\
-        \\Requires macOS `sandbox-exec`. Unknown restrictions are refused,
-        \\never silently ignored.
+        \\Requires macOS `sandbox-exec` or Linux `bwrap` (Bubblewrap). Linux
+        \\supports write restrictions and no-edit-git; contain-writes-soft is
+        \\equivalent to contain-writes. Read/network restrictions and
+        \\no-edit-m8-st8 are unsupported on Linux. Unsupported restrictions,
+        \\missing backends and unknown names fail closed.
         \\
     );
 }
