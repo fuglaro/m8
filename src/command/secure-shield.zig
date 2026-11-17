@@ -49,7 +49,7 @@ fn run(ctx: Ctx) !u8 {
     const full = if (builtin.os.tag == .linux)
         linux.exec(ctx.arena, ctx.io, ctx.env, w.argv, names.items, tmp) catch |err| {
             if (err == error.UnsupportedRestriction)
-                try ctx.err.writeAll("m8 secure-shield: Linux bwrap supports write restrictions and no-edit-git only; read and network restrictions are unsupported\n");
+                try ctx.err.writeAll("m8 secure-shield: Linux bwrap does not support airgap, no-loop or no-edit-m8-st8\n");
             return err;
         }
     else
@@ -72,13 +72,13 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
         \\
         \\EXAMPLE:
         \\
-        \\  m8 secure-shield "private airgap" bash -c 'ls'
+        \\  m8 secure-shield "private contain-writes" bash -c 'ls'
         \\
         \\DOCUMENT ACTIVATION:
         \\
         \\  ▐ 🛡️:secure
         \\  │ `m8` `secure-shield`
-        \\  ▐ 🛡️:secure private airgap
+        \\  ▐ 🛡️:secure private contain-writes
         \\
         \\RESTRICTIONS:
         \\
@@ -91,8 +91,8 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
     try out.writeAll(
         \\
         \\Requires macOS `sandbox-exec` or Linux `bwrap` (Bubblewrap). Linux
-        \\supports write restrictions and no-edit-git; contain-writes-soft is
-        \\equivalent to contain-writes. Read/network restrictions and
+        \\supports read/write restrictions and no-edit-git; contain-writes-soft is
+        \\equivalent to contain-writes. Network restrictions and
         \\no-edit-m8-st8 are unsupported on Linux. Unsupported restrictions,
         \\missing backends and unknown names fail closed.
         \\

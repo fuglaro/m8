@@ -1,5 +1,5 @@
-//! Bubblewrap backend. Deliberately supports only write restrictions: read
-//! policies and network policies need semantics bwrap does not provide here.
+//! Bubblewrap backend. Read containment is implemented with an empty root and
+//! narrowly mounted runtime roots; unsupported layouts fail closed.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -19,6 +19,10 @@ pub fn exec(
     const cwd_len = try std.process.currentPath(io, &cwd_buf);
     const cwd = try arena.dupe(u8, cwd_buf[0..cwd_len]);
 
+    var read_policy = false;
+    var strict_read = false;
+    var read_home = false;
+    var private_reads = false;
     var saw_writes = false;
     var saw_strict = false;
     var only_tmp = false;
@@ -26,7 +30,16 @@ pub fn exec(
     var no_writes = false;
     var protect_git = false;
     for (active) |name| {
-        if (std.mem.eql(u8, name, "contain-writes") or std.mem.eql(u8, name, "contain-writes-soft")) {
+        if (std.mem.eql(u8, name, "contain-reads")) {
+            read_policy = true;
+            strict_read = true;
+        } else if (std.mem.eql(u8, name, "contain-reads-home")) {
+            read_policy = true;
+            read_home = true;
+        } else if (std.mem.eql(u8, name, "private")) {
+            read_policy = true;
+            private_reads = true;
+        } else if (std.mem.eql(u8, name, "contain-writes") or std.mem.eql(u8, name, "contain-writes-soft")) {
             saw_writes = true;
             saw_strict = true;
         } else if (std.mem.eql(u8, name, "contain-writes-home")) {
@@ -52,7 +65,7 @@ pub fn exec(
         }
     }
 
-    const canonical_tmp = if (saw_writes and !no_writes)
+    const canonical_tmp = if (read_policy or (saw_writes and !no_writes))
         try std.Io.Dir.cwd().realPathFileAlloc(io, tmp, arena)
     else
         tmp;
@@ -63,6 +76,45 @@ pub fn exec(
         try appendCollapsed(arena, &grants, if (only_tmp) canonical_tmp else cwd);
         if (!only_tmp) try appendCollapsed(arena, &grants, canonical_tmp);
         if (!only_tmp and !saw_strict) if (home) |h| try appendCollapsed(arena, &grants, h);
+    }
+
+    // Canonical roots are mounted first, aliases second. Collapsing nested
+    // roots avoids later parent mounts hiding earlier child restrictions.
+    var read_roots: std.ArrayList([]const u8) = .empty;
+    var aliases: std.ArrayList(Alias) = .empty;
+    if (read_policy) {
+        try addReadRoot(arena, io, &read_roots, &aliases, cwd);
+        try addReadRoot(arena, io, &read_roots, &aliases, tmp);
+        for (system_paths) |path| try addReadRoot(arena, io, &read_roots, &aliases, path);
+        if (read_home and !strict_read and !private_reads) if (env.get("HOME")) |raw| {
+            if (raw.len > 0) try addReadRoot(arena, io, &read_roots, &aliases, raw);
+        };
+        if (!private_reads) {
+            for (tool_paths) |path| try addReadRoot(arena, io, &read_roots, &aliases, path);
+            if (env.get("HOME")) |raw| {
+                if (raw.len > 0) for ([_][]const u8{ ".local/bin", ".cargo/bin", "go/bin" }) |suffix| {
+                    const path = try std.fs.path.join(arena, &.{ raw, suffix });
+                    try addReadRoot(arena, io, &read_roots, &aliases, path);
+                };
+            }
+        }
+    }
+
+    var effective_writes: std.ArrayList([]const u8) = .empty;
+    if (read_policy and !no_writes) {
+        if (!saw_writes) {
+            try effective_writes.appendSlice(arena, read_roots.items);
+        } else {
+            // Mounts grant both read and write access. Never mount a write
+            // grant that would reveal data outside the read allowlist.
+            for (grants.items) |grant| for (read_roots.items) |root| {
+                if (containsPath(grant, root)) {
+                    try appendCollapsed(arena, &effective_writes, root);
+                } else if (containsPath(root, grant)) {
+                    try appendCollapsed(arena, &effective_writes, grant);
+                }
+            };
+        }
     }
 
     var git: ?[]const u8 = null;
@@ -76,22 +128,78 @@ pub fn exec(
 
     var out: std.ArrayList([]const u8) = .empty;
     try out.appendSlice(arena, &.{ "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--cap-drop", "ALL" });
-    if (saw_writes or !protect_git) {
-        try out.appendSlice(arena, &.{ "--ro-bind", "/", "/" });
+    if (read_policy) {
+        try out.appendSlice(arena, &.{ "--tmpfs", "/" });
+        for (read_roots.items) |path| {
+            try out.appendSlice(arena, &.{ if (coveredBy(effective_writes.items, path)) "--bind" else "--ro-bind", path, path });
+        }
+        for (effective_writes.items) |path| {
+            if (!hasExact(read_roots.items, path)) try out.appendSlice(arena, &.{ "--bind", path, path });
+        }
+        // Recreate merged-/usr and caller-provided aliases without exposing
+        // their parent directories (e.g. /bin -> /usr/bin, symlinked HOME).
+        // Use symlinks, not additional binds: permission checks then reach
+        // the canonical mounts, including nested write/metadata restrictions.
+        for (aliases.items) |alias| {
+            if (coveredBy(read_roots.items, alias.target)) continue;
+            // A visible parent alias already preserves its host children.
+            // Creating a second alias below it would overwrite real entries.
+            var parent_alias = false;
+            for (aliases.items) |other| {
+                if (!std.mem.eql(u8, other.target, alias.target) and containsPath(other.target, alias.target)) {
+                    parent_alias = true;
+                    break;
+                }
+            }
+            if (!parent_alias) try out.appendSlice(arena, &.{ "--symlink", alias.source, alias.target });
+        }
     } else {
-        // no-edit-git alone is a write restriction on one entry, not a
-        // read-only-root policy. Protect that entry below after this bind.
-        try out.appendSlice(arena, &.{ "--bind", "/", "/" });
+        try out.appendSlice(arena, &.{ if (saw_writes or !protect_git) "--ro-bind" else "--bind", "/", "/" });
+        for (grants.items) |path| try out.appendSlice(arena, &.{ "--bind", path, path });
     }
-    for (grants.items) |path| try out.appendSlice(arena, &.{ "--bind", path, path });
     try out.appendSlice(arena, &.{ "--dev", "/dev", "--remount-ro", "/dev", "--proc", "/proc", "--remount-ro", "/proc" });
     if (git) |path| {
-        // A git file (worktree pointer) is valid as a bind source as well.
-        try out.appendSlice(arena, &.{ "--ro-bind", path, path });
+        var visible = !read_policy;
+        for (read_roots.items) |root| if (containsPath(root, path)) {
+            visible = true;
+            break;
+        };
+        if (visible) try out.appendSlice(arena, &.{ "--ro-bind", path, path });
     }
+    if (read_policy) try out.appendSlice(arena, &.{ "--remount-ro", "/" });
+    try out.appendSlice(arena, &.{ "--chdir", cwd });
     try out.append(arena, "--");
     try out.appendSlice(arena, argv);
     return out.items;
+}
+
+// Keep these explicit: binding /usr would also expose /usr/local under
+// private, and binding all of /etc would expose host credentials.
+const system_paths = [_][]const u8{
+    "/usr/bin",         "/usr/sbin",          "/usr/lib",         "/usr/lib64",     "/usr/share",
+    "/bin",             "/sbin",              "/lib",             "/lib64",         "/etc/hosts",
+    "/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/ld.so.cache", "/etc/localtime", "/etc/passwd",
+    "/etc/group",       "/etc/ssl",
+};
+const tool_paths = [_][]const u8{ "/usr/local/bin", "/usr/local/lib", "/usr/local/opt" };
+const Alias = struct { source: []const u8, target: []const u8 };
+
+fn addReadRoot(arena: Allocator, io: std.Io, roots: *std.ArrayList([]const u8), aliases: *std.ArrayList(Alias), path: []const u8) !void {
+    if (!std.fs.path.isAbsolute(path)) return Error.UnsupportedWritableLayout;
+    const canonical = std.Io.Dir.cwd().realPathFileAlloc(io, path, arena) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return,
+        else => return err,
+    };
+    try appendCollapsed(arena, roots, canonical);
+    if (!std.mem.eql(u8, canonical, path)) {
+        for (aliases.items) |alias| if (std.mem.eql(u8, alias.target, path)) return;
+        try aliases.append(arena, .{ .source = canonical, .target = path });
+    }
+}
+
+fn hasExact(paths: []const []const u8, path: []const u8) bool {
+    for (paths) |candidate| if (std.mem.eql(u8, candidate, path)) return true;
+    return false;
 }
 
 fn appendCollapsed(arena: Allocator, list: *std.ArrayList([]const u8), path: []const u8) !void {
@@ -106,6 +214,11 @@ fn appendCollapsed(arena: Allocator, list: *std.ArrayList([]const u8), path: []c
         }
     }
     try list.append(arena, path);
+}
+
+fn coveredBy(paths: []const []const u8, path: []const u8) bool {
+    for (paths) |candidate| if (containsPath(candidate, path)) return true;
+    return false;
 }
 
 fn containsPath(parent: []const u8, child: []const u8) bool {
@@ -151,9 +264,39 @@ test "rejects unsupported policies" {
     const arena = arena_state.allocator();
     var env = std.process.Environ.Map.init(arena);
     defer env.deinit();
-    for ([_][]const u8{ "contain-reads", "airgap", "no-loop", "no-edit-m8-st8", "private" }) |restriction| {
+    for ([_][]const u8{ "airgap", "no-loop", "no-edit-m8-st8" }) |restriction| {
         try testing.expectError(Error.UnsupportedRestriction, exec(arena, std.testing.io, &env, &.{"true"}, &.{restriction}, "/tmp"));
     }
+}
+
+test "read policies use an empty root and explicit read-only mounts" {
+    const testing = std.testing;
+    var state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    var env = std.process.Environ.Map.init(arena);
+    defer env.deinit();
+    try env.put("HOME", "/");
+    const a = try exec(arena, testing.io, &env, &.{"true"}, &.{ "contain-reads", "no-writes" }, "/tmp");
+    const b = try exec(arena, testing.io, &env, &.{"true"}, &.{ "contain-reads-home", "private" }, "/tmp");
+    try testing.expect(hasArgPair(a, "--tmpfs", "/"));
+    try testing.expect(hasPair(a, "--ro-bind", "/usr/bin", "/usr/bin"));
+    try testing.expect(!hasPair(a, "--ro-bind", "/", "/"));
+    try testing.expect(!hasPair(b, "--ro-bind", "/", "/"));
+    for (a, 0..) |arg, i| {
+        if (std.mem.eql(u8, arg, "--ro-bind")) try testing.expect(i + 2 < a.len);
+        if (std.mem.eql(u8, arg, "--bind")) try testing.expect(i + 2 < a.len);
+    }
+}
+
+fn hasArgPair(argv: []const []const u8, flag: []const u8, value: []const u8) bool {
+    for (argv, 0..) |arg, i| if (std.mem.eql(u8, arg, flag) and i + 1 < argv.len and std.mem.eql(u8, argv[i + 1], value)) return true;
+    return false;
+}
+
+fn hasPair(argv: []const []const u8, flag: []const u8, source: []const u8, target: []const u8) bool {
+    for (argv, 0..) |arg, i| if (std.mem.eql(u8, arg, flag) and i + 2 < argv.len and std.mem.eql(u8, argv[i + 1], source) and std.mem.eql(u8, argv[i + 2], target)) return true;
+    return false;
 }
 
 test "write restriction intersection is tmp-only" {

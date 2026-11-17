@@ -228,8 +228,14 @@ unsupported restrictions fail rather than run without protection.
 
 ### Linux (Bubblewrap)
 
-The Linux backend currently supports filesystem **write** restrictions:
+The Linux backend supports filesystem read and write restrictions:
 
+* `contain-reads`: expose cwd, scratch (TMP), system runtime paths and tool
+  directories; other host paths are absent from the sandbox.
+* `contain-reads-home`: additionally expose HOME.
+* `private`: as `contain-reads`, without tool directories or the extra HOME
+  allowance. Combining it with a home-aware policy still takes the stricter
+  result.
 * `contain-writes` and `contain-writes-soft`: writable cwd and scratch (TMP).
   Linux has no Darwin temp allowance, so these two are equivalent.
 * `contain-writes-home`: writable cwd, TMP and HOME.
@@ -240,19 +246,68 @@ The Linux backend currently supports filesystem **write** restrictions:
 Write policies intersect: `contain-writes` removes the extra HOME allowance,
 `only-tmp-writes` removes cwd/HOME, and `no-writes` removes every allowance.
 Paths are canonicalized before mounting. Writable grants inside a protected
-`.git` tree are rejected.
+`.git` tree are rejected. Write grants never widen the read allowlist: for
+example, `private contain-writes-home` does not expose HOME unless it is
+already covered by cwd or TMP.
+
+Read containment starts with an empty root, mounting only allowed paths. System
+paths include `/usr/bin`, `/usr/sbin`, `/usr/lib`, `/usr/lib64`, `/usr/share`,
+their `/bin`, `/sbin`, `/lib`, `/lib64` aliases, and selected runtime files under
+`/etc` (hosts, resolver, NSS, linker cache, timezone, passwd, group, and SSL).
+Tool paths are `/usr/local/bin`, `/usr/local/lib`, `/usr/local/opt`, plus
+`~/.local/bin`, `~/.cargo/bin` and `~/go/bin`. Missing paths grant nothing.
+Custom runtimes outside those paths must be inside cwd/TMP or use an appropriate
+HOME allowance. Symlinks do not grant access to targets outside the allowlist.
+
+Unlike macOS's separate read/write rules, Linux bind mounts cannot provide
+write-only access to hidden host trees. Consequently, read containment also
+limits where host filesystem writes are possible. Without a write restriction,
+exposed mounts remain writable subject to ordinary Unix permissions. The
+synthetic root itself is read-only. Host paths outside the allowlist are hidden,
+including their metadata; this differs from macOS's unrestricted stat access.
 
 ```sh
-m8 secure-shield "contain-writes no-edit-git" bash -c 'ls'
+m8 secure-shield "private contain-writes no-edit-git" bash -c 'ls'
 ```
 
-Read restrictions (`contain-reads`, `contain-reads-home`, `private`),
 `no-edit-m8-st8`, `airgap` and `no-loop` are **not supported on Linux** yet.
 Bubblewrap's network namespace switch alone cannot preserve either split
 internet/loopback policy, so these names are rejected, not approximated.
 Consequently the example `workbench`, `sandbox` and `jail` compositions above
-are not portable unchanged. A write restriction does not hide files, scrub the
-environment, or prevent access to existing Unix sockets.
+are not portable unchanged. Filesystem restrictions do not scrub environment
+variables or impose network policy. Read containment hides filesystem socket
+paths outside the allowlist, but does not isolate the network or abstract Unix
+sockets. Standard input/output and deliberately inherited file descriptors are
+not made private by hiding their original filesystem paths.
+
+#### Testing on Linux
+
+Run the end-to-end tests with a built Linux binary and installed `bwrap`:
+
+```sh
+dev/test-linux-shield.sh /absolute/path/to/m8
+```
+
+The tests create and remove native-filesystem fixtures; unavailable Bubblewrap
+or namespaces fail the test rather than silently skip it. To test from an
+Apple Silicon Mac using Lima:
+
+```sh
+brew install lima
+limactl start --name=m8-bwrap-test --vm-type=vz --cpus=2 --memory=2 \
+  --disk=12 --mount-none --containerd=none --tty=false template:ubuntu
+limactl shell m8-bwrap-test -- sudo apt-get update
+limactl shell m8-bwrap-test -- sudo apt-get install -y bubblewrap
+zig build -Dtarget=aarch64-linux-musl -p zig-out/linux-bwrap
+limactl copy zig-out/linux-bwrap/bin/m8 m8-bwrap-test:/tmp/m8
+limactl copy dev/test-linux-shield.sh m8-bwrap-test:/tmp/test-linux-shield.sh
+limactl shell m8-bwrap-test -- sh /tmp/test-linux-shield.sh /tmp/m8
+limactl stop m8-bwrap-test
+```
+
+Use an architecture matching your VM. For subsequent runs, start the existing
+VM with `limactl start m8-bwrap-test`, then rebuild, copy and run the tests.
+The VM needs no shared host directories or privileged container configuration.
 
 ### macOS (sandbox-exec)
 
