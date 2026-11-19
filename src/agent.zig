@@ -75,6 +75,8 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
     var allowed: std.ArrayList([]const u8) = .empty;
     const ToolVar = struct { name: []const u8, value: api.EnvVar };
     var tool_vars: std.ArrayList(ToolVar) = .empty;
+    // Top-level activations scope forward over command-bearing toolbox records.
+    var active: std.ArrayList(shield.Activation) = .empty;
 
     for (records) |r| switch (r.sigil) {
         // Every 🧠 that named an agent was replaced by what it named, so
@@ -93,9 +95,15 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
         // definition configuration; a bare blockless header offers it. The
         // three forms stay separate, while all carry the same tool name.
         .tool => {
-            const parsed = try toolbox.parse(arena, .md, r.value, r.content orelse "");
+            var parsed = try toolbox.parse(arena, .md, r.value, r.content orelse "");
             if (r.content != null) {
                 if (parsed.env_var.len > 0) return toolbox.Error.VariableOnDefinition;
+                if (parsed.command != .none and active.items.len > 0) {
+                    var shields: std.ArrayList(shield.Activation) = .empty;
+                    try shields.appendSlice(arena, active.items);
+                    try shields.appendSlice(arena, parsed.shields);
+                    parsed.shields = shields.items;
+                }
                 var merged = false;
                 for (tools.items) |*old| if (std.mem.eql(u8, old.name, parsed.name)) {
                     try mergeTool(arena, old, parsed);
@@ -113,6 +121,9 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
             }
         },
 
+        .shield => if (r.content == null)
+            try active.append(arena, try shield.parseValue(arena, r.value)),
+
         else => {},
     };
 
@@ -127,7 +138,7 @@ pub fn project(arena: Allocator, records: []const doc.Record) LoadError!Definiti
     def.allowed = allowed.items;
     const set = try shield.project(arena, .md, records);
     def.shields = set.defs;
-    def.active = set.active;
+    def.active = active.items;
     def.runners = set.runners;
     return def;
 }
@@ -292,6 +303,43 @@ test "a definition yields its model, shields and tools" {
     try testing.expectEqual(@as(usize, 1), d.tools.len);
     try testing.expectEqualStrings("say", d.tools[0].name);
     try testing.expectEqual(@as(usize, 1), (try offer(arena, d)).len);
+}
+
+test "top-level shields scope forward from each activation to tool commands" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const f = try Fixture.init(arena, &threaded, "m8-agent-forward-shields");
+    defer f.deinit(arena);
+    try f.agent(arena, "test/scoped.md",
+        \\* :brain::/local/tiny
+        \\
+        \\* :toolbox::before
+        \\  > `echo` `before`
+        \\
+        \\* :shield::jail
+        \\
+        \\* :toolbox::after
+        \\  > `echo` `after`
+        \\  > :shield:audit
+        \\
+        \\* :toolbox::before
+        \\
+        \\* :toolbox::after
+    );
+
+    const d = try load(arena, f.io, config.Dirs{ .roots = &.{f.dir} }, "test/scoped");
+    const offered = try offer(arena, d);
+    try testing.expectEqual(@as(usize, 2), offered.len);
+    try testing.expectEqualStrings("before", offered[0].name);
+    try testing.expectEqual(@as(usize, 0), offered[0].shields.len);
+    try testing.expectEqualStrings("after", offered[1].name);
+    try testing.expectEqual(@as(usize, 2), offered[1].shields.len);
+    try testing.expectEqualStrings("jail", offered[1].shields[0].name);
+    try testing.expectEqualStrings("audit", offered[1].shields[1].name);
 }
 
 test "tool variables use separate headers and accumulate" {

@@ -562,13 +562,10 @@ fn answer(
     };
     if (argv.len == 0) return failure(arena, c.id, "the command is empty", .{});
 
-    // A tool's own 🛡 activate on top of whatever the agent already turned
-    // on. Activation order is wrapping order, so the agent's are further out
-    // and a tool can only ever add another layer inside them.
-    var active: std.ArrayList(shield.Activation) = .empty;
-    try active.appendSlice(arena, shields.active);
-    try active.appendSlice(arena, tool.shields);
-    const stood = shield.resolve(arena, shields.defs, active.items) catch |e|
+    // Top-level activations were scoped to command definitions during agent
+    // projection; the tool's shields already include those that precede it.
+    // Tool-local activations follow them, so they can only add inner wrappers.
+    const stood = shield.resolve(arena, shields.defs, tool.shields) catch |e|
         return failure(arena, c.id, "{s}", .{@errorName(e)});
     const wrapped = try shield.wrap(arena, stood.wrappers, argv, ctx.self);
 

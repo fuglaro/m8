@@ -47,8 +47,10 @@ Definitions alone do nothing. You can keep them in a shared document and include
 that document without turning any shields on. An activation of an unknown shield
 fails rather than running the tool unwrapped.
 
-A top-level activation applies to every tool in the agent. An activation inside
-a tool adds a wrapper for that tool:
+A top-level activation applies to toolboxes whose command definitions follow it
+in ledger order. It does not reach backward to earlier toolboxes, and merely
+offering a previously defined tool later does not bring it into scope. An
+activation inside a tool adds a wrapper for that tool:
 
 ```markdown
 * :shield::secure
@@ -63,8 +65,9 @@ a tool adds a wrapper for that tool:
   > `m8` `call` `inspect-project`
 ```
 
-The agent's activations are resolved first, then the tool's. A tool cannot remove
-an agent's active shield.
+Top-level activations in scope at the tool's command definition are resolved
+first, then the tool's own. A tool cannot remove a shield that is in scope for
+it.
 
 In stream spelling, the equivalent definition and activation are:
 

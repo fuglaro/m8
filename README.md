@@ -147,7 +147,7 @@ whatever it includes or is told:
 >
 > * :brain::/local/Ternary-Bonsai-8B-mlx-2bit,max_output_tokens:8192
 
-* `demo/shields` defines `jail`, and the bare 🛡 turns it on for every tool.
+* `demo/shields` defines `jail`, and the bare 🛡 activates it for toolboxes defined after it.
 * `demo/helpers` brings whatever tools it defines, and all of them run jailed.
 * The model named last is the one that answers.
 
