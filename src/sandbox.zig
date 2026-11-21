@@ -42,7 +42,7 @@ pub const all = [_]Restriction{
     .{ .name = "contain-reads", .summary = "no reading outside cwd, TMP, system and tool dirs" },
     .{ .name = "contain-reads-home", .summary = "as above, with HOME readable too" },
     .{ .name = "private", .summary = "as contain-reads, and tool dirs go too" },
-    .{ .name = "contain-writes-soft", .summary = "writes confined to cwd, TMP and native Darwin user temp" },
+    .{ .name = "contain-writes-soft", .summary = "writes confined to cwd and TMP, plus platform temp compatibility paths" },
     .{ .name = "contain-writes", .summary = "writes confined to cwd and TMP" },
     .{ .name = "contain-writes-home", .summary = "writes confined to cwd, TMP and HOME" },
     .{ .name = "only-tmp-writes", .summary = "writes confined to the current tool's TMP" },
@@ -720,13 +720,15 @@ test "the table is atoms, so a level is a composition and not an entry" {
         try testing.expect(find(n) != null);
 }
 
-test "soft write containment retains only native temp beyond strict containment" {
+test "soft write containment retains /private/tmp and native temp beyond strict containment" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
+    const private_tmp_write = "(allow file-write* (subpath \"/private/tmp\"))";
     const native_write = "(allow file-write* (subpath (param \"DARWIN_USER_TEMP_DIR\")))";
     const soft = try res(arena, &.{"contain-writes-soft"});
     try testing.expect(std.mem.indexOf(u8, soft, native_write) != null);
+    try testing.expect(std.mem.indexOf(u8, soft, private_tmp_write) != null);
     try testing.expect(std.mem.indexOf(u8, soft, "(allow file-write* (subpath \"/\"))") == null);
     try testing.expect(std.mem.indexOf(u8, soft, "(allow file-write* (subpath (param \"HOME\")))") == null);
     try testing.expect(std.mem.indexOf(u8, soft, "(allow file-write* (subpath (param \"CWD\")))") != null);
@@ -734,6 +736,7 @@ test "soft write containment retains only native temp beyond strict containment"
     for ([_][]const u8{ "contain-writes", "contain-writes-home", "only-tmp-writes", "no-writes" }) |strict| {
         const combined = try res(arena, &.{ "contain-writes-soft", strict });
         try testing.expect(std.mem.indexOf(u8, combined, native_write) == null);
+        try testing.expect(std.mem.indexOf(u8, combined, private_tmp_write) == null);
         try testing.expectEqualStrings(combined, try res(arena, &.{ strict, "contain-writes-soft" }));
     }
     const strict = try res(arena, &.{"contain-writes"});
@@ -763,4 +766,14 @@ test "soft containment permits a separate native temp but strict restrictions re
         try testing.expect(!try sandboxAllowsNative(arena, io, cwd, &.{ "contain-writes-soft", strict }, write_native, native));
     }
     try testing.expect(try sandboxAllowsNative(arena, io, cwd, &.{ "contain-writes-soft", "contain-writes" }, "echo ok > file && echo ok > tool-scratch/file", native));
+}
+test "TLS trust evaluation service is available except under airgap" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const grant = "(allow mach-lookup (global-name \"com.apple.TrustEvaluationAgent\"))";
+    const ordinary = try res(arena, &.{"contain-writes-soft"});
+    const airgapped = try res(arena, &.{"airgap"});
+    try testing.expect(std.mem.indexOf(u8, ordinary, grant) != null);
+    try testing.expect(std.mem.indexOf(u8, airgapped, grant) == null);
 }

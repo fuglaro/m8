@@ -138,9 +138,11 @@ This one just groups other shields:
   > :shield:secure airgap contain-writes
 ```
 
-Activating `workbench` uses the softer write boundary: cwd, scratch (TMP), and
-macOS's native `DARWIN_USER_TEMP_DIR` are writable. `sandbox` inherits that
-write boundary and additionally restricts reads and protects configuration.
+Activating `workbench` uses the softer write boundary: cwd and scratch (TMP) are
+writable; on macOS it also permits `/private/tmp` and native
+`DARWIN_USER_TEMP_DIR`, while Linux maps scratch over `/tmp` for runtimes that
+ignore `TMPDIR`. `sandbox` inherits that write boundary and additionally
+restricts reads and protects configuration.
 Activating `jail` expands `sandbox` and adds `airgap` and strict
 `contain-writes` to the same `secure` invocation. There is no need to define an
 alias for every restriction. Names belong to the shield they follow: names
@@ -240,7 +242,9 @@ The Linux backend supports filesystem read and write restrictions:
   allowance. Combining it with a home-aware policy still takes the stricter
   result.
 * `contain-writes` and `contain-writes-soft`: writable cwd and scratch (TMP).
-  Linux has no Darwin temp allowance, so these two are equivalent.
+  When scratch is writable, Bubblewrap binds it over `/tmp`; the host `/tmp` is
+  never exposed by that compatibility alias. Linux has no Darwin temp allowance,
+  so these two policies are equivalent.
 * `contain-writes-home`: writable cwd, TMP and HOME.
 * `only-tmp-writes`: writable TMP only.
 * `no-writes`: no writable filesystem trees.
@@ -314,10 +318,11 @@ The VM needs no shared host directories or privileged container configuration.
 
 ### macOS (sandbox-exec)
 
-On macOS, the sandbox queries `getconf DARWIN_USER_TEMP_DIR` and resolves
-that directory for the `contain-writes-soft` allowance. Apple's developer-tool
-launchers use a shared cache there independently of `TMPDIR`. Lookup failure
-grants no extra access.
+On macOS, `contain-writes-soft` also permits `/private/tmp` (the target of
+`/tmp`) for runtimes that hard-code `/tmp`, as well as the native temp directory
+resolved from `getconf DARWIN_USER_TEMP_DIR`. Apple's developer-tool launchers
+use that shared cache independently of `TMPDIR`. Lookup failure grants no extra
+access.
 
 Strict `contain-writes` keeps writes limited to cwd and scratch (TMP), even
 when combined with `contain-writes-soft`. Under strict containment, xcrun may
@@ -330,7 +335,7 @@ environment variable is injected.
 | `contain-reads-home` | As above, with HOME readable too |
 | `private` | As `contain-reads`, without tool directories |
 | `contain-writes` | Write only cwd and scratch (TMP) |
-| `contain-writes-soft` | Write only cwd, scratch (TMP), and native `DARWIN_USER_TEMP_DIR` |
+| `contain-writes-soft` | Write only cwd, scratch (TMP), `/private/tmp`, and native `DARWIN_USER_TEMP_DIR` |
 | `contain-writes-home` | Write only cwd, TMP and HOME |
 | `only-tmp-writes` | Write only the current tool's TMP |
 | `no-writes` | No filesystem writes, including TMP |

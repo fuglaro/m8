@@ -129,7 +129,7 @@ pub fn exec(
     var out: std.ArrayList([]const u8) = .empty;
     try out.appendSlice(arena, &.{ "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--cap-drop", "ALL" });
     if (read_policy) {
-        try out.appendSlice(arena, &.{ "--tmpfs", "/" });
+        try out.appendSlice(arena, &.{ "--tmpfs", "/", "--dir", "/tmp" });
         for (read_roots.items) |path| {
             try out.appendSlice(arena, &.{ if (coveredBy(effective_writes.items, path)) "--bind" else "--ro-bind", path, path });
         }
@@ -157,6 +157,11 @@ pub fn exec(
         try out.appendSlice(arena, &.{ if (saw_writes or !protect_git) "--ro-bind" else "--bind", "/", "/" });
         for (grants.items) |path| try out.appendSlice(arena, &.{ "--bind", path, path });
     }
+    // Some local-model runtimes hard-code /tmp instead of honoring TMPDIR.
+    // Alias only the tool scratch, never the host's /tmp; omit it whenever
+    // policy has revoked scratch writes.
+    if (saw_writes and !no_writes and !std.mem.eql(u8, canonical_tmp, "/tmp"))
+        try out.appendSlice(arena, &.{ "--bind", canonical_tmp, "/tmp" });
     try out.appendSlice(arena, &.{ "--dev", "/dev", "--remount-ro", "/dev", "--proc", "/proc", "--remount-ro", "/proc" });
     if (git) |path| {
         var visible = !read_policy;
@@ -314,7 +319,7 @@ test "write restriction intersection is tmp-only" {
             try testing.expect(std.mem.eql(u8, got[i + 1], "/tmp") or std.mem.endsWith(u8, got[i + 1], "/tmp"));
         }
     }
-    try testing.expectEqual(@as(usize, 1), binds);
+    try testing.expectEqual(@as(usize, 2), binds);
 }
 
 test "strict contain-writes intersects contain-writes-home regardless of order" {
@@ -334,7 +339,7 @@ test "strict contain-writes intersects contain-writes-home regardless of order" 
         if (std.mem.eql(u8, arg, "--bind")) binds += 1;
         if (i > 0 and std.mem.eql(u8, a[i - 1], "--bind")) try testing.expect(!std.mem.eql(u8, arg, "/"));
     }
-    try testing.expect(binds >= 1 and binds <= 2);
+    try testing.expect(binds >= 2 and binds <= 3);
 }
 
 test "nested writable grants collapse to their parent in either order" {
@@ -430,4 +435,20 @@ fn exitedZero(term: std.process.Child.Term) bool {
         .exited => |code| code == 0,
         else => false,
     };
+}
+test "writable scratch is aliased at /tmp, but no-writes revokes the alias" {
+    const testing = std.testing;
+    var state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    var env = std.process.Environ.Map.init(arena);
+    defer env.deinit();
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = try std.process.currentPath(testing.io, &cwd_buf);
+    const scratch = try arena.dupe(u8, cwd_buf[0..cwd_len]);
+
+    const soft = try exec(arena, testing.io, &env, &.{"true"}, &.{"contain-writes-soft"}, scratch);
+    try testing.expect(hasPair(soft, "--bind", scratch, "/tmp"));
+    const strict = try exec(arena, testing.io, &env, &.{"true"}, &.{"no-writes"}, scratch);
+    try testing.expect(!hasPair(strict, "--bind", scratch, "/tmp"));
 }

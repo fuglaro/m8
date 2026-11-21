@@ -92,8 +92,8 @@ fn page(ctx: Ctx, out: *std.Io.Writer) !void {
         \\
         \\Requires macOS `sandbox-exec` or Linux `bwrap` (Bubblewrap). Linux
         \\supports read/write restrictions and no-edit-git; contain-writes-soft is
-        \\equivalent to contain-writes. Network restrictions and
-        \\no-edit-m8-st8 are unsupported on Linux. Unsupported restrictions,
+        \\equivalent to contain-writes (writable scratch is also mounted at /tmp).
+        \\Network restrictions and no-edit-m8-st8 are unsupported on Linux. Unsupported restrictions,
         \\missing backends and unknown names fail closed.
         \\
     );

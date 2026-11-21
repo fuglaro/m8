@@ -58,7 +58,7 @@ fn run(ctx: Ctx) !u8 {
     // asked for. An empty one is one that was not given.
     const given = (try opts.parse(ctx, "scan", &options, 0)) orelse return 1;
     const pattern = nonEmpty(given.text("regex"));
-    const glob = nonEmpty(given.text("glob")) orelse everything;
+    const glob = searchGlob(given.text("glob"));
     const cap = given.number("byte-cap") orelse default_byte_cap;
     const page_config = read.pageConfig(given);
 
@@ -732,4 +732,18 @@ test "a glob with no pattern names files the way a search would" {
         "huge.bin (23MB)\n",
         try named(arena, "huge.bin", null, 23 * 1024 * 1024, .{}),
     );
+}
+/// A directory spelling for the current tree means the same as an omitted glob.
+fn searchGlob(raw: ?[]const u8) []const u8 {
+    const glob = nonEmpty(raw) orelse return everything;
+    if (std.mem.eql(u8, glob, ".") or std.mem.eql(u8, glob, "./")) return everything;
+    return glob;
+}
+
+
+test "the current directory spelling searches the tree" {
+    try testing.expectEqualStrings(everything, searchGlob("."));
+    try testing.expectEqualStrings(everything, searchGlob("./"));
+    try testing.expectEqualStrings(everything, searchGlob(null));
+    try testing.expectEqualStrings("src/**/*.zig", searchGlob("src/**/*.zig"));
 }

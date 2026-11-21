@@ -17,7 +17,7 @@
 ;;                       revokes the blanket XPC lookup system.sb grants
 ;;
 ;; Filesystem writes
-;;   contain-writes-soft  as contain-writes, plus native Darwin user temp
+;;   contain-writes-soft  as contain-writes, plus /private/tmp and native Darwin user temp
 ;;   contain-writes       writes confined to cwd and TMP
 ;;   contain-writes-home  writes confined to cwd, TMP and HOME
 ;;   only-tmp-writes      writes confined to TMP
@@ -117,6 +117,11 @@
 (allow file-read* (subpath (param "HOME")))  ;;!! !private !contain-reads
 (allow file-write* (subpath (param "HOME"))) ;;!! !contain-writes-soft !contain-writes !only-tmp-writes !no-writes
 
+;; /tmp resolves to /private/tmp on macOS. Local-model runtimes may ignore
+;; TMPDIR, so soft containment keeps this shared temp tree available; stricter
+;; write policies revoke the exception.
+(allow file-write* (subpath "/private/tmp")) ;;!! !contain-writes !contain-writes-home !only-tmp-writes !no-writes
+
 ;; Native per-user temp is shared with other tools, unlike the mob's TMP.
 ;; A failed lookup supplies an empty parameter and grants nothing.
 ;; Strict write restrictions remove the entire exception.
@@ -166,7 +171,10 @@
 ;; --- name resolution ---
 ;; Allow mDNSResponder after no-loop's deny so internet DNS still works.
 ;; airgap removes these exceptions: resolver access is a network channel.
-;; Use the socket and named XPC services, not blanket system-socket access.
+;; SecureTransport's certificate checks use this global Mach service, which
+;; is not covered by the blanket XPC-service lookup grant. Keep it unavailable
+;; under airgap because the trust agent may perform network lookups.
+(allow mach-lookup (global-name "com.apple.TrustEvaluationAgent")) ;;!! !airgap
 (allow network-outbound                                     ;;!! !airgap
   (literal "/private/var/run/mDNSResponder"))               ;;!! !airgap
 (allow mach-lookup                                          ;;!! !airgap
