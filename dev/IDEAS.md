@@ -2,6 +2,7 @@
 
 ## TODO (Upcoming and WIP)
 
+* unsloth/inkling2mini
 
 * Review everything again on the mission statement in the README.md.
   - and on our implied style guide. One agent reflected after direction:
@@ -9,13 +10,6 @@
     is suspect unless it removes a real conceptual boundary—not merely several nearby lines.
     Tests should not push complexity into the code - but they may hold the complexity.
 
-
-* OMIT: Reconsider tool calls in serial.
-* DONE(can be configured with tui that launches riff with a wrapper around each run. in-wrapper post hooks can inspect the last entris in the ledger for a question or robot sigil.): Figure out componentised multi-agent management e.g: https://herdr.dev/ - or check it composes well into https://github.com/herdrdev/herdr
-* OMIT(can be done in anthropic by model parameters): Cache breakpoint managment:
-  * 5min ttl in tool loops - upgrade to 1hr on hand to user?
-  * Options on model def? or provider directive sigils? Or just do in providers?
-* DONE(Just supported /etc/m8st8 as standard): System locked mode - pre-made agents with locked shields and tools. Locks to root owned configs and agents. When a file exists in root owned /etc… then change storage respect structure. (agents must come from root, tools can't open larger).
 
 ## Framework
 
@@ -38,11 +32,6 @@
 * Errors that say where.
   * path, record, line, value, include lineage
   * `m8: BadEnvironmentName` alone costs a hunt.
-* Render nested marckdown.
-  * Terminal rendering of robot/user block content depending on the provider.
-* Tool call terminal rendering.
-* Tool response terminal rendering (esp. diffs)
-* Directive to snip some tool responses.
 
 ### Media Extras
 
@@ -50,7 +39,7 @@
   Maybe with a text-image format we find/make??? Custom markdown? ```palettemap...
   Leveraging unicode colors as a LUT??? Needs to be reasonably
   cross-common-font compatible so constraining to some common standardised ones
-  is crucial - if even possible. 2 char wide grid?
+  is crucial - if even possible. 2 char wide grid? unsloth/inkling2mini supports 40x40 images - allow ascii-to-px-to-ascii?
 * Mini renderer for depth and id pass drawn in ascii. Also edge line pass?
 
 ### Tool loop de-opinion
@@ -64,8 +53,8 @@
 * The loop is just those two steps, repeated.
  * the main command line keeps it as the sensible default
  * anything else composes the steps its own way
-* riff needs the gap between steps.
- * a 🙋 slipped in before the next call runs
+* Where are the ReAct loops? Do we need a react command? That does the tool call loop? Or does send run it all inside? `m8 next`? Error when waiting on user? Does this allow putting a user message onto intercept a tool loop??? Be nice in riff. Riff chaser commands?
+* Separate react from send? Tool call as a component. So another harness can use m8 itself as a provider! It can be a provider for itself. Harness and provider - like the chat tab in omlx.
 
 ### Hooks and Orchistration
 
@@ -74,89 +63,17 @@
 * Enough hooks to support a Herdr setup: https://github.com/herdrdev/herdr
   * Env vars will do it.
 
-### MAYBE: Codec-specific metadata sigil
-
-* Consider shifting 🔏 into a promoted codec-metadata arbitrary sigil.
-
-### Loose ends
-
-* `m8 @teamA/` - who is the lead?
-* MAYBE: `{mob}` magic tool parameter - same mob, `/suffix` if not top level.
-* Where is progress recorded?
-* Match workstreams to agents and mob chats.
-* Mob -> swarm? Or swarm for something else.
-* The TUI - tmux sessions? dmux wrapped?
-  * tmux is shield-dangerous; see riff.
-
-
-
-
-
-
-## Mobs, Agents and Subagents
-
-See: PLAN_AGENTS_*.md
-
-* MAYBE: the framework knowing about subagents at all.
-  * Pi excludes them.
-  * A subagent may just be a 🧰 whose command is `m8 @agent`.
-* Biggest undecided design.
-* Wants one honing session, like types got.
-* No self-spawning needed - an agent is called fresh, or its chat carried on.
-  * Said in the README, under Mobs.
-* Parallel calls to agents is one tool call! The tool distributes!
--v also streams the tool stderr! So it can show its progress.
-
-### Shapes on the table
-
-* minion - `m8 @{mob}AGENT -- "prompt"`
-  * fresh
-  * also resets a peer, or yourself via `m8 @{self}`
-* mate - `m8 +{mob}AGENT -- "prompt"`
-  * a peer, continued
-* Long form:
-  * `m8 minion -m MOB -a AGENT [--as CHAT] -- PROMPT`
-  * `m8 mate -m MOB -c CHAT [--as CHAT] -- PROMPT`
-* Named chats makeable from the command line.
-* A chat spawner usable as a tool.
-
-### Principle
-
-* Keep arguments simple; complexity lives in the mob definition.
-* Anything a mob can say is not also sayable in arguments.
-
-### Access
-
-* MAYBE: Sub `@` and peer `@+` controls.
-  * Why maybe - could shields on the spawning 🧰 say it?
-* Allowed minions and peers.
-* May a sub spawn a peer session?
-* May an agent call its parent mob's agent?
-  * `{{mob}}` reflection, or hardcoded?
-* Subagent inside the sandbox, and not.
-
-### Discovery
-
-* MAYBE: `@.../` loads every skill and subagent in a mob.
-* MAYBE: Agents advertise themselves as subagents.
-* MAYBE: Skill-finder minion - auto-post 🙋?
-
-
-
-## Sandbox and Cross-OS
-
-* Windows - anything that contains falls back to deny.
-  * @ - not great ":"?
-* Linux - like Windows first, own containment later.
-* `core/` unwritable by tools on macOS only.
-  * `mac-sandbox.sb:169`
-* A real process-exec filter, not `(allow process-exec)`.
-
-
-
 ## Distribution
 
 ### Docs
+
+```
+* Readme
+  - combine What It Is and The Mission
+  - section on allowing the user to define the trust model.
+    - you may run m8 in a container like other harnesses, but m8 gives you an easy way to secure an agent's tools instead, and gatekeep their creation. An agent is only as dangerous as the tools it can run, and how open to permissions they are.
+```
+
 
 ```
 ▐ 🤖
@@ -273,17 +190,4 @@ See: PLAN_AGENTS_*.md
 * Option to build with any inbuilt-defaults which write out on first run.
   * Internally store compressed.
 
-
-
-## Fun
-
-* Give an agent a Zork tool, and watch it.
-* Z-machine Procedural generation.
-  * generator + seed = endless graded tasks
-  * TextWorld's insight - MIT; its backend wraps GPLv2 Jericho
-  * the ledger already carries the seed.
-* Unicode text games.
-* Test against terminal tests.
-* Local Wikipedia search over a vector database.
-* Jed style classifier auto-tool approval.
 
