@@ -1,1 +1,1 @@
-* :brain::/local/Flint-40B-A2.5B-abliterated-MLX-4bit
+* :brain::/local/Inkling-2-Mini-oQ4e-mtp
