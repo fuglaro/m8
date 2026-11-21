@@ -701,7 +701,7 @@ fn toolAnswer(
         else if (complaint.len > 0)
             (try failure(arena, id, "Failed with exit code {d}: {s}", .{ status, complaint }))[0]
         else
-            (try failure(arena, id, "the tool exited without an m8 failure", .{}))[0];
+            (try failure(arena, id, "The tool exited {d}.", .{status}))[0];
         try kept.append(arena, verdict);
     }
     return kept.items;
