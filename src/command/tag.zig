@@ -27,6 +27,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
     _ = ctx;
     try w.writeAll(
         \\  m8 tag [--no-advance] :MOB/AGENT
+        \\  m8 tag :MOB/AGENT/+/TURN
         \\
         \\Read a document from stdin, keep it as a turn, and point the named
         \\agent or chat at that turn. If stdin is a single bare 🧠 reference,
@@ -40,6 +41,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\EXAMPLES:
         \\
         \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy
+        \\  m8 tag :demo/mathy/+/tduyxbutjb
+        \\  m8 tag :demo/mathy//aside/+/tduyxbutjb
         \\  m8 say --no-send :demo/mathy | m8 tag :demo/mathy//aside
         \\  m8 say --no-send :demo/mathy "hi" | m8 send | m8 tag :demo/mathy//other
         \\
@@ -68,6 +71,27 @@ fn run(ctx: Ctx) !u8 {
                 "those are `m8 tag --no-advance` and `m8 say CHAT-` (or `say --parent CHAT`)\n",
         );
         return 1;
+    }
+
+    // A turn reference is a compact pointer operation: its containing chat is
+    // the target, and the named immutable turn is what that chat should read.
+    if (a.kind == .turn) {
+        if (moving.stay or ctx.in.len != 0) {
+            try ctx.err.writeAll("m8 tag: a turn reference takes no stdin or --no-advance\n");
+            return 1;
+        }
+        if (!try session.exists(ctx.arena, ctx.io, dirs, a.name)) {
+            try ctx.err.print("m8: no turn named '{s}'\n", .{a.name});
+            return 1;
+        }
+        const marker = std.mem.indexOf(u8, a.name, "/+/") orelse return error.InvalidName;
+        const chat = a.name[0..marker];
+        const chat_address = try std.fmt.allocPrint(ctx.arena, ":{s}", .{chat});
+        const target = try address.typed(ctx.arena, ctx.io, dirs, chat_address, ctx.err);
+        if (target.kind != .chat) return error.InvalidName;
+        try session.point(ctx.arena, ctx.io, dirs, try session.pointerOf(ctx.arena, chat), a.name);
+        try doc.write(ctx.out, ctx.mode, .{ .sigil = .agent, .value = a.name });
+        return 0;
     }
 
     if (ctx.in.len == 0 or doc.detect(ctx.in) == null) {

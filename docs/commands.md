@@ -161,6 +161,8 @@ m8 say --answer --unwrap :demo/critic//job "Review that."
 * `send` runs a ledger and writes the turn without keeping it.
 * `tag :MOB/AGENT` keeps a turn and points the chat at it.
   * `--no-advance` keeps the turn and moves nothing.
+  * `tag :MOB/AGENT/+/TURN` points the turn's own agent/chat at that existing
+    turn directly. The subchat form works too: `tag :MOB/AGENT//CHAT/+/TURN`.
 * Promptless `say CHAT-` resets a chat to its authored agent; `say CHAT=` resets it
   to its parent. `say --new CHAT` and `say --parent CHAT` are the equivalent
   spellings.
