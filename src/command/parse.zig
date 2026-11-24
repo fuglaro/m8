@@ -128,6 +128,14 @@ fn run(ctx: Ctx) !u8 {
     for (reply.calls) |call| {
         if (live.opened) try ctx.out.writeByte('\n');
         live.opened = true;
+        if (call.metadata.len > 0) {
+            try doc.write(ctx.out, ctx.mode, .{
+                .sigil = .thought,
+                .value = codec.snip,
+                .content = try codec.sealedCall(ctx.arena, call.metadata),
+            });
+            try ctx.out.writeByte('\n');
+        }
         try doc.write(ctx.out, ctx.mode, .{
             .sigil = .call,
             .value = try std.fmt.allocPrint(ctx.arena, "{s},{s}", .{ call.name, call.id }),

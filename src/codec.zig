@@ -54,14 +54,41 @@ pub fn sealed(arena: Allocator, signature: []const u8) ![]const u8 {
     return w.written();
 }
 
+/// A call-scoped opaque metadata line. The tag is m8's discriminator; the JSON
+/// payload is carried verbatim and interpreted only by the codec that owns it.
+pub fn sealedCall(arena: Allocator, payload: []const u8) ![]const u8 {
+    var w: std.Io.Writer.Allocating = .init(arena);
+    try w.writer.writeAll(Sigil.signature.text(.md));
+    try w.writer.writeAll(":call:");
+    try markdown.writeSpan(&w.writer, payload);
+    return w.written();
+}
+
+/// The payload of a `🔏:call:` line, or null when this is another signature.
+pub fn callMetadataOn(arena: Allocator, line: []const u8) !?[]const u8 {
+    for ([_]doc.Mode{ .md, .m8 }) |mode| {
+        const hit = sigils.match(mode, line) orelse continue;
+        if (hit.sigil != .signature) continue;
+        const rest = std.mem.cutPrefix(u8, line[hit.len..], ":call:") orelse return null;
+        const got = try markdown.spans(arena, rest);
+        if (got.len != 1) return error.BadCallMetadata;
+        var w: std.Io.Writer.Allocating = .init(arena);
+        try markdown.writeSpan(&w.writer, got[0]);
+        if (!std.mem.eql(u8, w.written(), rest)) return error.BadCallMetadata;
+        return got[0];
+    }
+    return null;
+}
+
 /// The signature a line carries, in either spelling, or null when the line is
-/// not a 🔏. One whose rest is not a code span is an error rather than text,
+/// not a plain 🔏. One whose rest is not a code span is an error rather than text,
 /// or a thought would lose its signature without a word.
 pub fn signatureOn(arena: Allocator, line: []const u8) !?[]const u8 {
     for ([_]doc.Mode{ .md, .m8 }) |mode| {
         const hit = sigils.match(mode, line) orelse continue;
         if (hit.sigil != .signature) continue;
         const rest = line[hit.len..];
+        if (std.mem.startsWith(u8, rest, ":call:")) return null;
         const got = try markdown.spans(arena, rest);
         if (got.len != 1) return error.BadSignature;
         var w: std.Io.Writer.Allocating = .init(arena);
@@ -148,6 +175,8 @@ pub const Call = struct {
     name: []const u8,
     /// The arguments as the model wrote them, still JSON.
     arguments: []const u8,
+    /// Opaque provider metadata attached to this call, as a JSON object.
+    metadata: []const u8 = "",
 };
 
 /// Assemble model parameters into their request object. Paths may share
@@ -521,6 +550,16 @@ test "a thought uses its block, or its compact value" {
         .sigil = .thought,
         .value = snip,
     }));
+}
+
+test "call metadata has an explicit lock-and-call discriminator" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const content = try sealedCall(arena, "{\"vendor\":{\"opaque\":\"sig\"}}");
+    const line = std.mem.trim(u8, content, "\n");
+    try testing.expectEqualStrings("{\"vendor\":{\"opaque\":\"sig\"}}", (try callMetadataOn(arena, line)).?);
+    try testing.expect((try signatureOn(arena, line)) == null);
 }
 
 test "m8 encodes to itself" {

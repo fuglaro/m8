@@ -124,7 +124,25 @@ fn writeInstructions(arena: Allocator, s: *std.json.Stringify, records: []const 
     try s.write(text.items);
 }
 
-/// The ledger, an item at a time and in its own order.
+/// `🔏:call:` belongs to the immediately following call. Its JSON payload is
+/// provider metadata only; the call's name, id and arguments live on 📲.
+fn callMetadataBefore(
+    arena: Allocator,
+    records: []const doc.Record,
+    at: usize,
+) !?std.json.Value {
+    if (at == 0 or records[at - 1].sigil != .thought) return null;
+    const content = records[at - 1].content orelse return null;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const payload = (try api.callMetadataOn(arena, line)) orelse continue;
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{});
+        if (value != .object) return error.InvalidCallMetadata;
+        return value;
+    }
+    return null;
+}
+
 ///
 /// The only thing gathered is an answer: a call is answered by what the tool
 /// said and then by how it went, and this api has one item to say both in. So
@@ -153,6 +171,10 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                 // A call that does not read was failed, and goes out with
                 // nothing.
                 try s.write(toolbox.parseArgs(arena, .md, r.content orelse "") catch "{}");
+                if (try callMetadataBefore(arena, records, i)) |metadata| {
+                    try s.objectField("provider_specific_fields");
+                    try s.write(metadata);
+                }
                 try s.endObject();
             },
             .result, .scroll, .link, .ok, .failed => {
@@ -762,6 +784,7 @@ const Building = struct {
     name: []const u8 = "",
     call_id: []const u8 = "",
     encrypted: []const u8 = "",
+    call_metadata: []const u8 = "",
     /// Of the response rather than any item, and only known at its end.
     reason: []const u8 = "",
     incomplete: bool = false,
@@ -786,6 +809,7 @@ const Building = struct {
         b.name = "";
         b.call_id = "";
         b.encrypted = "";
+        b.call_metadata = "";
 
         const which = str(item.object.get("type")) orelse return;
         if (std.mem.eql(u8, which, "message")) {
@@ -798,6 +822,8 @@ const Building = struct {
             b.call_id = str(item.object.get("call_id")) orelse "";
             b.name = str(item.object.get("name")) orelse "";
             b.id = str(item.object.get("id")) orelse "";
+            if (item.object.get("provider_specific_fields")) |fields|
+                b.call_metadata = try jsonText(b.arena, fields);
         }
     }
 
@@ -841,6 +867,8 @@ const Building = struct {
                     b.args = .empty;
                     try b.args.appendSlice(b.arena, arguments);
                 }
+                if (item.object.get("provider_specific_fields")) |fields|
+                    b.call_metadata = try jsonText(b.arena, fields);
             },
             .none => {},
         }
@@ -897,6 +925,7 @@ const Building = struct {
                     .id = b.call_id,
                     .name = b.name,
                     .arguments = raw,
+                    .metadata = b.call_metadata,
                 });
             },
         }
@@ -915,6 +944,13 @@ const Building = struct {
         return .{ .calls = b.calls.items };
     }
 };
+
+fn jsonText(arena: Allocator, value: std.json.Value) ![]const u8 {
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    var s: std.json.Stringify = .{ .writer = &buf.writer };
+    try s.write(value);
+    return buf.written();
+}
 
 fn num(v: ?std.json.Value) ?i64 {
     const got = v orelse return null;
@@ -974,6 +1010,26 @@ test "the system prompt is a field, and the rest is the ledger in its own order"
     try testing.expectEqualStrings("function_call_output", field(input[3], "type").string);
     try testing.expectEqualStrings("hi", field(input[3], "output").string);
     try testing.expectEqualStrings("assistant", field(input[4], "role").string);
+}
+
+test "call-scoped metadata round-trips separately from call identity and arguments" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const records = [_]doc.Record{
+        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen::call:`{\"vendor\":{\"opaque\":\"sig\"}}`" },
+        .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
+    };
+    const v = try requestOf(arena, &records, .{ .model = "gemini/hydrogen" });
+    const input = field(v, "input").array.items;
+    try testing.expectEqual(@as(usize, 1), input.len);
+    try testing.expectEqualStrings("function_call", field(input[0], "type").string);
+    try testing.expectEqualStrings("c1", field(input[0], "call_id").string);
+    try testing.expectEqualStrings("say", field(input[0], "name").string);
+    try testing.expectEqualStrings("{\"text\":\"hi\"}", field(input[0], "arguments").string);
+    const metadata = field(input[0], "provider_specific_fields");
+    try testing.expectEqualStrings("sig", field(field(metadata, "vendor"), "opaque").string);
 }
 
 test "a call answered twice is one output, and a failure keeps only what it said" {
@@ -1100,7 +1156,7 @@ test "a streamed reply reads as the items it was made of" {
         \\data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"Let me look.","annotations":[]}]}}
         \\
         \\event: response.output_item.added
-        \\data: {"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_i","call_id":"call_1","name":"say","arguments":""}}
+        \\data: {"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_i","call_id":"call_1","name":"say","arguments":"","provider_specific_fields":{"google":{"thought_signature":"sig"}}}}
         \\
         \\event: response.function_call_arguments.delta
         \\data: {"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"text\":"}
@@ -1143,6 +1199,8 @@ test "a streamed reply reads as the items it was made of" {
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
+    const metadata = try std.json.parseFromSliceLeaky(std.json.Value, arena, reply.calls[0].metadata, .{});
+    try testing.expectEqualStrings("sig", field(field(metadata, "google"), "thought_signature").string);
 }
 
 test "a finished response parses without built-in aside stats" {
