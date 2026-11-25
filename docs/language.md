@@ -424,7 +424,6 @@ renders markdown renders them. A tty gets `m8`.
 * 🙋 user -> `:raising_hand:`
 * 🤖 bot -> `:robot:`
 * 💭 thinking -> `:thought_balloon:`
-  * 🔏 signature -> `:lock_with_ink_pen:`
 * 📲 call -> `:calling:`
 * 🧾 result -> `:receipt:`
   * 📜 scroll -> `:scroll:`
@@ -441,13 +440,12 @@ renders markdown renders them. A tty gets `m8`.
   * ❗ exclamation -> `:exclamation:`
 
 A sigil takes a value, a content block, or both — or, for the
-one that is a fence rather than a record, neither. A 💭 without a
-block uses its value as a compact one-line thought. Its `snip` value
-is special only when that same 💭 also has a block; otherwise it is
-simply the one-line thought `snip`. 🧰 has three separate header
-forms: a content-bearing header defines a tool, a blockless header
-with a variable and values configures that tool, and a bare blockless
-header offers it. A definition header may not combine content and
+one that is a fence rather than a record, neither. A 💭 may use a value-only
+or block-only form for ordinary thought text. When it has both, the value
+identifies a kept-aside form; the block is opaque to the language and its
+content is interpreted by the codec. 🧰 has three separate header forms: a
+content-bearing header defines a tool, a blockless header with a variable and
+values configures that tool, and a bare blockless header offers it. A definition header may not combine content and
 variable configuration.
 
 Tool definitions compose by name across included agents. The occurrence that
@@ -463,7 +461,7 @@ tool remain additive.
 
 * Value only: 🧠 📚 🔏 🟢 💭
 * Content only: 🙋 🧭
-* Both: 🤖 🧰 📲 🧾 📜 🔗 🚫 🛡️ 🏃 ❓ ❗
+* Both: 🤖 🧰 📲 🧾 📜 🔗 🚫 🛡️ 🏃 ❓ ❗; 💭 only for kept-aside forms
 * Neither: 🔝
 
 ### Stopping Short
@@ -511,37 +509,56 @@ value and nothing under it.
 
 ### Kept Aside
 
-A 💭 whose value is `snip` and which has a block asks for what it
-holds to be kept out of the way. Keeping it writes a snip, and leaves
-the 🧠 naming it in its place. Without a block, `💭snip` is simply the
-compact one-line thought "snip".
+A 💭 takes thought text as a value, a block, or both. With only a value,
+the value is thought text; with only a block, the block is thought text. With
+both, the value is a discriminator for a kept-aside form:
+
+* `:lock_with_ink_pen:` — the block contains a code span holding the thought
+  signature.
+* `:call:` — the block contains a code span holding provider-specific JSON
+  metadata for a tool call.
+* `:thought_balloon:` — the block is extended thought text.
+
+The kept-aside record is replaced in the visible ledger by a 🧠 reference to
+the file holding the original record. This keeps the record in the ledger by
+reference while hiding its content from the TUI. Only the actual record sigil
+is rendered as an emoji: an extended-thought snip is headed
+`💭::thought_balloon:`.
+
+A signature snip follows the thought it belongs to. Call metadata follows the
+call it belongs to. In either case the snip is immediately after the record it
+qualifies. The plain value `snip` has no special meaning.
 
 ```m8
-▐ 💭:snip
-│ 🔏`c2lnbmF0dXJl`
+▐ 💭:
+│ Weighing the result
 
-▐ 🧠:demo/mathy/+/snip-oniwhbxumk
+▐ 💭::lock_with_ink_pen:
+│ `c2lnbmF0dXJl`
+
+▐ 📲:search,c1
+│ * query `"example"`
+
+▐ 💭::call:
+│ `{"vendor":{"opaque":"metadata"}}`
+
+▐ 💭::thought_balloon:
+│ An extended thought kept aside.
 ```
 
-> * :thought_balloon::snip
->   > :lock_with_ink_pen:`c2lnbmF0dXJl`
->
-> * :brain::demo/mathy/+/snip-oniwhbxumk
-
-A compact thought keeps its text on the header:
+Compact thought text can stay on the header:
 
 ```m8
 ▐ 💭:Checking the result
 ```
 
-> * :thought_balloon::Checking the result
-
-Providers should use this compact form for one-line thought summaries when
-possible, and must interpret a value-only 💭 as thought text when reading it.
+Providers should use the compact form for one-line thought summaries when
+possible. A value-only or block-only 💭 is thought text, including if its
+value is `snip` or one of the kept-aside discriminator strings.
 
 * Which thoughts ask is the codec's decision.
   * A signature is the case today - it exists only to be handed back.
-* A snip is a file holding the `💭snip` as it was written.
+* A snip is a file holding the kept-aside 💭 record as written.
   * Its name is `snip-` and ten random letters.
   * `snip-` and a turn's ten letters never collide.
 * The 🧠 is an inclusion like any other.
@@ -551,7 +568,7 @@ possible, and must interpret a value-only 💭 as thought text when reading it.
 * A snip goes beside the turn that names it, in its `+/`.
 * `m8 :MOB/AGENT` keeps one as it arrives.
   * The 🧠 shown is the file written.
-* `m8 send` keeps nothing, so what it writes carries the `💭snip` whole.
+* `m8 send` keeps nothing, so what it writes carries the kept-aside thought records whole.
   * `tag` writes the snip with the turn.
 
 ### Handing Over Files

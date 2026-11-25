@@ -241,6 +241,32 @@ test "a blockless thought keeps its value, including snip" {
     try testing.expect(collect.got.records.items[0].content == null);
 }
 
+test "kept-aside payloads pass through without framework interpretation" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const body =
+        \\* :thought_balloon:::lock_with_ink_pen:
+        \\  > signature, not a code span
+        \\
+        \\* :thought_balloon:::call:
+        \\  > provider payload, not JSON
+        \\
+        \\* :thought_balloon:::thought_balloon:
+        \\  > extended thoughts
+    ;
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    _ = try parse(arena, &r, collect.sink());
+    try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
+    try testing.expectEqualStrings(":lock_with_ink_pen:", collect.got.records.items[0].value);
+    try testing.expectEqualStrings("signature, not a code span", collect.got.records.items[0].content.?);
+    try testing.expectEqualStrings(":call:", collect.got.records.items[1].value);
+    try testing.expectEqualStrings("provider payload, not JSON", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings(":thought_balloon:", collect.got.records.items[2].value);
+    try testing.expectEqualStrings("extended thoughts", collect.got.records.items[2].content.?);
+}
+
 test "a reply in the language streams as it is written" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();

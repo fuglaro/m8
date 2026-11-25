@@ -768,7 +768,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try session.write(arena, f.io, config.Dirs{ .roots = &dirs }, turn, &.{
         .{ .sigil = .agent, .value = "test/mathy" },
         .{ .sigil = .thought, .content = "weighing it" },
-        .{ .sigil = .thought, .value = "snip", .content = ":lock_with_ink_pen:`SIG`" },
+        .{ .sigil = .thought, .value = ":lock_with_ink_pen:", .content = "`SIG`" },
         .{ .sigil = .bot, .content = "Hi." },
     });
 
@@ -786,7 +786,7 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     const l = try expand(arena, f.io, config.Dirs{ .roots = &dirs }, turn);
     try testing.expectEqual(@as(usize, 4), l.records.len);
     try testing.expectEqualStrings("weighing it", l.records[1].content.?);
-    try testing.expectEqualStrings(":lock_with_ink_pen:`SIG`", l.records[2].content.?);
+    try testing.expectEqualStrings("`SIG`", l.records[2].content.?);
     try testing.expect(session.isSnip(l.records[2]));
     try testing.expectEqualStrings("test/mathy", l.origin);
 
@@ -1382,7 +1382,7 @@ test "double-slash chat references expand and settle, keeping turns and snips ap
     const turn = "crew/cody//delegated/+/qgivwhgxnh";
     try session.write(arena, f.io, dirs, turn, &.{
         .{ .sigil = .agent, .value = "crew/cody" },
-        .{ .sigil = .thought, .value = "snip", .content = "kept aside" },
+        .{ .sigil = .thought, .value = ":thought_balloon:", .content = "kept aside" },
         .{ .sigil = .bot, .content = "hello" },
     });
     try session.point(arena, f.io, dirs, "crew/cody//delegated/+", turn);

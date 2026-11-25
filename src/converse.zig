@@ -903,7 +903,7 @@ const LiveReply = struct {
     arena: Allocator,
     io: std.Io,
     dirs: config.Dirs = .{},
-    /// Where a `💭snip` is kept as it arrives, or null to hand it on whole.
+    /// Where a kept-aside thought is kept as it arrives, or null to hand it on whole.
     snips: ?[]const u8 = null,
     out: *std.Io.Writer,
     mode: doc.Mode,
@@ -940,13 +940,13 @@ const LiveReply = struct {
         self.said.open(s, value);
         // A thought kept aside follows the summary of it, and would take the
         // summary's place: the line is for the one a person would read.
-        self.status.thinking(s == .thought and !std.mem.eql(u8, value, session.snip), value);
+        self.status.thinking(s == .thought and !session.isSnipValue(value), value);
     }
 
     fn snipped(self: *const LiveReply) bool {
         return self.pending == .thought and
             self.said.text.items.len > 0 and
-            std.mem.eql(u8, self.said.value, session.snip);
+            session.isSnipValue(self.said.value);
     }
 
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
@@ -992,7 +992,7 @@ const LiveReply = struct {
         if (try self.said.close()) |r| {
             const k: doc.Record = if (self.snips != null and session.isSnip(r)) .{
                 .sigil = .agent,
-                .value = try session.keepSnip(self.arena, self.io, self.dirs, self.snips.?, r.content.?),
+                .value = try session.keepSnip(self.arena, self.io, self.dirs, self.snips.?, r.value, r.content.?),
             } else r;
             try self.kept.append(self.arena, k);
             if (self.body) |*b| {
@@ -1360,7 +1360,7 @@ test "a run says what it is doing, a line at a time" {
 
     // What is kept aside and what is answered are not what it is doing.
     err.clearRetainingCapacity();
-    try sink.record(.thought, session.snip, "the whole of it");
+    try sink.record(.thought, session.extended_thought, "the whole of it");
     try sink.record(.bot, "", "answer");
     try std.testing.expectEqualStrings("", err.written());
 

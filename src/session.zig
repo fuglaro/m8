@@ -16,7 +16,12 @@ pub const history = "+";
 /// A chat's pointer, inside the chat's own folder.
 pub const pointer = "+";
 
-/// The transient value a provider uses when its content should be kept aside.
+/// Discriminators for thought records whose content is kept aside.
+pub const signature = ":lock_with_ink_pen:";
+pub const call_metadata = ":call:";
+pub const extended_thought = ":thought_balloon:";
+
+/// Kept for snip filenames; not a ledger discriminator.
 pub const snip = "snip";
 
 /// A snip is a turn's aside, kept in the same `+` folder as the turn that
@@ -30,26 +35,29 @@ pub fn newSnip(arena: Allocator, io: std.Io) ![]const u8 {
 }
 
 /// Keep `content` as a new snip in `folder`, and say what it is called.
-///
-/// The snip holds the `💭snip` a codec wrote, so the 🧠 naming it reads back
-/// as exactly that, and keeping what was read keeps it aside again.
+/// The reference record retains its discriminator and content exactly.
 pub fn keepSnip(
     arena: Allocator,
     io: std.Io,
     dirs: config.Dirs,
     folder: []const u8,
+    value: []const u8,
     content: []const u8,
 ) ![]const u8 {
     const name = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, try newSnip(arena, io) });
-    try writeFile(arena, io, dirs, name, &.{.{ .sigil = .thought, .value = snip, .content = content }});
+    try writeFile(arena, io, dirs, name, &.{.{ .sigil = .thought, .value = value, .content = content }});
     return name;
 }
 
-/// Whether a record asks for what it holds to be kept aside. The marker is
-/// meaningful only with a block on the same thought; a blockless `💭snip` is
-/// the compact one-line thought "snip".
+/// A thought with a discriminator value and block is a kept-aside form.
+pub fn isSnipValue(value: []const u8) bool {
+    return std.mem.eql(u8, value, signature) or
+        std.mem.eql(u8, value, call_metadata) or
+        std.mem.eql(u8, value, extended_thought);
+}
+
 pub fn isSnip(r: doc.Record) bool {
-    return r.sigil == .thought and r.content != null and std.mem.eql(u8, r.value, snip);
+    return r.sigil == .thought and r.content != null and isSnipValue(r.value);
 }
 
 /// Whether a name is a snip's: the file a kept-aside thought was written to.
@@ -286,7 +294,7 @@ fn newId(io: std.Io) [id_len]u8 {
 
 /// Write `records` as the file called `name`, in the nearest config directory.
 ///
-/// A turn's `💭snip` is kept first: what it holds goes to a snip beside the
+/// A kept-aside thought is kept first: what it holds goes to a snip beside the
 /// turn, and the turn keeps only the 🧠 naming it. Which thoughts ask is the
 /// codec's decision; that they are kept is this.
 pub fn write(
@@ -311,7 +319,7 @@ fn validateReferences(dirs: config.Dirs, records: []const doc.Record) !void {
     }
 }
 
-/// The records with every `💭snip` written to a snip, and the 🧠 naming it
+/// The records with every kept-aside thought written to a snip, and the 🧠 naming it
 /// left in its place.
 fn keepAside(
     arena: Allocator,
@@ -323,7 +331,7 @@ fn keepAside(
     const folder = std.fs.path.dirname(turn) orelse history;
     var out: std.ArrayList(doc.Record) = .empty;
     for (records) |r| try out.append(arena, if (isSnip(r))
-        .{ .sigil = .agent, .value = try keepSnip(arena, io, dirs, folder, r.content.?) }
+        .{ .sigil = .agent, .value = try keepSnip(arena, io, dirs, folder, r.value, r.content.?) }
     else
         r);
     return out.items;
@@ -376,9 +384,12 @@ test "an id is lowercase letters only" {
     for (seen) |s| try std.testing.expect(s);
 }
 
-test "snip needs a block on the same thought" {
-    try testing.expect(!isSnip(.{ .sigil = .thought, .value = snip }));
-    try testing.expect(isSnip(.{ .sigil = .thought, .value = snip, .content = "hidden" }));
+test "thought asides require a discriminator and block" {
+    try testing.expect(!isSnip(.{ .sigil = .thought, .value = signature }));
+    try testing.expect(isSnip(.{ .sigil = .thought, .value = signature, .content = "`hidden`" }));
+    try testing.expect(isSnip(.{ .sigil = .thought, .value = call_metadata, .content = "`{}`" }));
+    try testing.expect(isSnip(.{ .sigil = .thought, .value = extended_thought, .content = "hidden" }));
+    try testing.expect(!isSnip(.{ .sigil = .thought, .value = snip, .content = "hidden" }));
     try testing.expect(!isSnip(.{ .sigil = .thought, .value = "summary", .content = "hidden" }));
 }
 

@@ -192,7 +192,7 @@ fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                 i += 1;
             },
             .thought => {
-                if (try signed(arena, api.thoughtText(r))) |thought| {
+                if (try signed(arena, r)) |thought| {
                     try turn.speak(.assistant);
                     try writeThinking(s, try owedTo(arena, records, i, thought));
                 }
@@ -450,23 +450,16 @@ const Thought = struct {
 /// The api refuses an unsigned thinking block, so one is not sent. A thought
 /// that arrived from somewhere else has no signature to give, and dropping it
 /// is this projection losing what the target cannot say.
-fn signed(arena: Allocator, content: []const u8) !?Thought {
-    var text: std.ArrayList(u8) = .empty;
+fn signed(arena: Allocator, record: doc.Record) !?Thought {
+    if (!std.mem.eql(u8, record.value, api.signature_value)) return null;
+    const content = record.content orelse return null;
     var signature: []const u8 = "";
-    var said = false;
-
     var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        if (try api.signatureOn(arena, line)) |value| {
-            signature = value;
-            continue;
-        }
-        if (said) try text.append(arena, '\n');
-        said = true;
-        try text.appendSlice(arena, line);
-    }
+    while (lines.next()) |line| if (try api.signatureOn(arena, line)) |value| {
+        signature = value;
+    };
     if (signature.len == 0) return null;
-    return .{ .text = text.items, .signature = signature };
+    return .{ .signature = signature };
 }
 
 /// A signed thought with the unsigned 💭 just before it put back in front:
@@ -475,7 +468,7 @@ fn signed(arena: Allocator, content: []const u8) !?Thought {
 fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Thought) !Thought {
     var from = at;
     while (from > 0 and records[from - 1].sigil == .thought and
-        (try signed(arena, api.thoughtText(records[from - 1]))) == null) from -= 1;
+        (try signed(arena, records[from - 1])) == null) from -= 1;
     if (from == at) return thought;
 
     var text: std.ArrayList(u8) = .empty;
@@ -484,13 +477,13 @@ fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Tho
         // its own content carries any original newline at the split boundary.
         // Other thought records are distinct bubbles, separated by a newline.
         const continuation = r.sigil == .thought and
-            std.mem.eql(u8, r.value, api.snip) and r.content != null;
+            std.mem.eql(u8, r.value, api.extended_thought_value) and r.content != null;
         if (text.items.len > 0 and !continuation) try text.append(arena, '\n');
         try text.appendSlice(arena, api.thoughtText(r));
     }
     if (thought.text.len > 0) {
         const continuation = records[at].sigil == .thought and
-            std.mem.eql(u8, records[at].value, api.snip) and records[at].content != null;
+            std.mem.eql(u8, records[at].value, api.extended_thought_value) and records[at].content != null;
         if (text.items.len > 0 and !continuation) try text.append(arena, '\n');
         try text.appendSlice(arena, thought.text);
     }
@@ -508,7 +501,7 @@ fn thinking(
 ) !void {
     if (text.len > 0) try out.append(arena, .{ .sigil = .thought, .content = text });
     if (signature.len == 0) return;
-    try out.append(arena, .{ .sigil = .thought, .value = api.snip, .content = try sealed(arena, signature) });
+    try out.append(arena, .{ .sigil = .thought, .value = api.signature_value, .content = try sealed(arena, signature) });
 }
 
 const sealed = api.sealed;
@@ -748,7 +741,7 @@ const Building = struct {
                 if (b.shown) try b.sink.end();
                 b.shown = false;
                 if (b.signature.items.len > 0)
-                    try b.sink.record(.thought, api.snip, try sealed(b.arena, b.signature.items));
+                    try b.sink.record(.thought, api.signature_value, try sealed(b.arena, b.signature.items));
             },
             .tool_use => {
                 const raw = if (b.args.items.len == 0) "{}" else b.args.items;
@@ -945,7 +938,7 @@ test "a thought goes out only when it is signed" {
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Hi." },
         .{ .sigil = .thought, .value = "hmm" },
-        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen:`abc123`" },
+        .{ .sigil = .thought, .value = api.signature_value, .content = "`abc123`" },
         .{ .sigil = .thought, .content = "came off another wire" },
         .{ .sigil = .bot, .content = "Hello." },
     };
@@ -1044,8 +1037,8 @@ test "a streamed reply reads as the blocks it was made of" {
     // The signature follows the thought it signs, in a 💭 asking to be kept
     // aside, so the reply can be sent back and believed without being read.
     try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[1].sigil);
-    try testing.expectEqualStrings(api.snip, collect.got.records.items[1].value);
-    try testing.expectEqualStrings(":lock_with_ink_pen:`abc123`", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings(api.signature_value, collect.got.records.items[1].value);
+    try testing.expectEqualStrings("`abc123`", collect.got.records.items[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
 
@@ -1053,7 +1046,7 @@ test "a streamed reply reads as the blocks it was made of" {
     // that carried it ended. The 📲 did not: a call cannot be shown until it
     // is whole.
     try testing.expectEqualStrings(
-        "thought:weighing it\nthought::lock_with_ink_pen:`abc123`\nbot:Let me look.",
+        "thought:weighing it\nthought:`abc123`\nbot:Let me look.",
         collect.seen.items,
     );
 
@@ -1083,7 +1076,7 @@ test "a whole reply reads the same as a streamed one" {
 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
-    try testing.expectEqualStrings(":lock_with_ink_pen:`abc123`", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings("`abc123`", collect.got.records.items[1].content.?);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
     try testing.expectEqualStrings(
         \\{"text":"hi"}

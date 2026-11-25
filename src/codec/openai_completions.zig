@@ -92,23 +92,16 @@ fn writeSystem(arena: Allocator, s: *std.json.Stringify, records: []const doc.Re
     try s.endObject();
 }
 
-/// `🔏:call:` belongs to the immediately following call. The payload is
-/// provider metadata, independent of the call's identity and arguments.
-fn callMetadataBefore(
-    arena: Allocator,
-    records: []const doc.Record,
-    at: usize,
-) !?std.json.Value {
-    if (at == 0 or records[at - 1].sigil != .thought) return null;
-    const content = records[at - 1].content orelse return null;
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        const payload = (try api.callMetadataOn(arena, line)) orelse continue;
-        const value = try std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{});
-        if (value != .object) return error.InvalidCallMetadata;
-        return value;
-    }
-    return null;
+/// Call metadata is the thought record immediately after its call.
+fn callMetadataAfter(arena: Allocator, records: []const doc.Record, at: usize) !?std.json.Value {
+    if (at + 1 >= records.len) return null;
+    const r = records[at + 1];
+    if (r.sigil != .thought or !std.mem.eql(u8, r.value, api.call_metadata_value)) return null;
+    const content = r.content orelse return null;
+    const payload = (try api.callMetadataOn(arena, content)) orelse return null;
+    const value = try std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{});
+    if (value != .object) return error.InvalidCallMetadata;
+    return value;
 }
 
 fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Record) !void {
@@ -171,6 +164,7 @@ fn run(
             switch (records[end].sigil) {
                 .call => if (!std.mem.eql(u8, ledger_format.callBatchId(records[end].value), batch_id)) break,
                 .result, .scroll, .link, .ok, .failed => {},
+                .thought => if (std.mem.eql(u8, records[end].value, api.call_metadata_value)) {},
                 else => break,
             }
         }
@@ -184,6 +178,7 @@ fn run(
                     if (answered) break;
                 },
                 .result, .scroll, .link, .ok, .failed => answered = true,
+                .thought => if (!std.mem.eql(u8, records[end].value, api.call_metadata_value)) break,
                 else => break,
             }
         }
@@ -203,7 +198,7 @@ fn run(
         try s.write(callId(r.value));
         try s.objectField("type");
         try s.write("function");
-        if (try callMetadataBefore(arena, records, record_index)) |metadata| {
+        if (try callMetadataAfter(arena, records, record_index)) |metadata| {
             try s.objectField("provider_specific_fields");
             try s.write(metadata);
         }
@@ -1169,8 +1164,8 @@ test "Google call signatures round-trip through Chat Completions" {
         try testing.expectEqualStrings(signature, field(metadata, "thought_signature").string);
 
         const records = [_]doc.Record{
-            .{ .sigil = .thought, .value = api.snip, .content = try api.sealedCall(arena, reply.calls[0].metadata) },
             .{ .sigil = .call, .value = "list,c1", .content = "" },
+            .{ .sigil = .thought, .value = api.call_metadata_value, .content = try api.sealedCall(arena, reply.calls[0].metadata) },
             .{ .sigil = .call, .value = "list,c2", .content = "" },
         };
         const request = try encode(arena, &records, .{ .model = "gemini/test" });

@@ -126,23 +126,21 @@ fn writeInstructions(arena: Allocator, s: *std.json.Stringify, records: []const 
     try s.write(text.items);
 }
 
-/// `🔏:call:` belongs to the immediately following call. Its JSON payload is
-/// provider metadata only; the call's name, id and arguments live on 📲.
-fn callMetadataBefore(
+/// Call metadata is the thought record immediately after the call it belongs to.
+fn callMetadataAfter(
     arena: Allocator,
     records: []const doc.Record,
     at: usize,
 ) !?std.json.Value {
-    if (at == 0 or records[at - 1].sigil != .thought) return null;
-    const content = records[at - 1].content orelse return null;
+    if (at + 1 >= records.len) return null;
+    const r = records[at + 1];
+    if (r.sigil != .thought or !std.mem.eql(u8, r.value, api.call_metadata_value)) return null;
+    const content = r.content orelse return null;
     var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        const payload = (try api.callMetadataOn(arena, line)) orelse continue;
-        const value = try std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{});
-        if (value != .object) return error.InvalidCallMetadata;
-        return value;
-    }
-    return null;
+    const payload = (try api.callMetadataOn(arena, lines.next() orelse "")) orelse return null;
+    const value = try std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{});
+    if (value != .object) return error.InvalidCallMetadata;
+    return value;
 }
 
 ///
@@ -160,7 +158,7 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
         switch (r.sigil) {
             .user => try message(s, "user", r.content orelse ""),
             .bot => try message(s, "assistant", r.content orelse ""),
-            .thought => if (try signed(arena, api.thoughtText(r))) |thought|
+            .thought => if (try signed(arena, r)) |thought|
                 try reasoning(s, try owedTo(arena, records, i, thought)),
             .call => {
                 const batch_id = ledger_format.callBatchId(r.value);
@@ -173,6 +171,7 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                     switch (records[end].sigil) {
                         .call => if (!std.mem.eql(u8, ledger_format.callBatchId(records[end].value), batch_id)) break,
                         .result, .scroll, .link, .ok, .failed => {},
+                        .thought => if (std.mem.eql(u8, records[end].value, api.call_metadata_value)) {},
                         else => break,
                     }
                 }
@@ -224,7 +223,7 @@ fn writeFunctionCall(arena: Allocator, s: *std.json.Stringify, records: []const 
     // A JSON string, as this api and chat completions both want.
     // A call that does not read is failed, and goes out with nothing.
     try s.write(toolbox.parseArgs(arena, .md, r.content orelse "") catch "{}");
-    if (try callMetadataBefore(arena, records, at)) |metadata| {
+    if (try callMetadataAfter(arena, records, at)) |metadata| {
         try s.objectField("provider_specific_fields");
         try s.write(metadata);
     }
@@ -382,30 +381,17 @@ const Thought = struct {
     encrypted: []const u8 = "",
 };
 
-fn signed(arena: Allocator, content: []const u8) !?Thought {
-    var text: std.ArrayList(u8) = .empty;
+fn signed(arena: Allocator, record: doc.Record) !?Thought {
+    if (!std.mem.eql(u8, record.value, api.signature_value)) return null;
+    const content = record.content orelse return null;
     var mark: []const u8 = "";
-    var said = false;
-
     var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        if (try api.signatureOn(arena, line)) |value| {
-            mark = value;
-            continue;
-        }
-        if (said) try text.append(arena, '\n');
-        said = true;
-        try text.appendSlice(arena, line);
-    }
-    // A thought this api never signed is one it will not take back.
-    if (mark.len == 0) return null;
+    while (lines.next()) |line| if (try api.signatureOn(arena, line)) |value| {
+        mark = value;
+    };
     const cut = std.mem.indexOfScalar(u8, mark, ',') orelse return null;
-    const parts: []const []const u8 = if (text.items.len == 0)
-        &.{}
-    else
-        try arena.dupe([]const u8, &.{text.items});
     return .{
-        .parts = parts,
+        .parts = &.{},
         .id = std.mem.trim(u8, mark[0..cut], " \t"),
         .encrypted = std.mem.trim(u8, mark[cut + 1 ..], " \t"),
     };
@@ -417,7 +403,7 @@ fn signed(arena: Allocator, content: []const u8) !?Thought {
 fn owedTo(arena: Allocator, records: []const doc.Record, at: usize, thought: Thought) !Thought {
     var from = at;
     while (from > 0 and records[from - 1].sigil == .thought and
-        (try signed(arena, api.thoughtText(records[from - 1]))) == null) from -= 1;
+        (try signed(arena, records[from - 1])) == null) from -= 1;
     if (from == at) return thought;
 
     var parts: std.ArrayList([]const u8) = .empty;
@@ -436,7 +422,7 @@ fn signature(
     enc: []const u8,
 ) !void {
     if (id.len == 0 and enc.len == 0) return;
-    try out.append(arena, .{ .sigil = .thought, .value = api.snip, .content = try sealed(arena, id, enc) });
+    try out.append(arena, .{ .sigil = .thought, .value = api.signature_value, .content = try sealed(arena, id, enc) });
 }
 
 /// A 🔏 as content: the item's id and its encrypted content, as one span.
@@ -977,7 +963,7 @@ const Building = struct {
                 // has ended — follows as a record of its own.
                 try b.nextPart(b.part + 1);
                 if (b.id.len > 0 or b.encrypted.len > 0)
-                    try b.sink.record(.thought, api.snip, try sealed(b.arena, b.id, b.encrypted));
+                    try b.sink.record(.thought, api.signature_value, try sealed(b.arena, b.id, b.encrypted));
             },
             .function_call => {
                 const raw = if (b.args.items.len == 0) "{}" else b.args.items;
@@ -1084,8 +1070,8 @@ test "call-scoped metadata round-trips separately from call identity and argumen
     const arena = a.allocator();
 
     const records = [_]doc.Record{
-        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen::call:`{\"vendor\":{\"opaque\":\"sig\"}}`" },
         .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
+        .{ .sigil = .thought, .value = api.call_metadata_value, .content = "`{\"vendor\":{\"opaque\":\"sig\"}}`" },
     };
     const v = try requestOf(arena, &records, .{ .model = "gemini/hydrogen" });
     const input = field(v, "input").array.items;
@@ -1127,7 +1113,7 @@ test "a thought goes out only when it is signed, with the id this api needs" {
 
     const records = [_]doc.Record{
         .{ .sigil = .thought, .value = "hmm" },
-        .{ .sigil = .thought, .value = api.snip, .content = ":lock_with_ink_pen:`rs_1,ENCRYPTED`" },
+        .{ .sigil = .thought, .value = api.signature_value, .content = "`rs_1,ENCRYPTED`" },
         .{ .sigil = .thought, .content = "came off another wire" },
         .{ .sigil = .bot, .content = "Hello." },
     };
@@ -1248,15 +1234,15 @@ test "a streamed reply reads as the items it was made of" {
     // The id and the encrypted content follow the thought they sign, in a 💭
     // asking to be kept aside: this api wants both back before it will
     // believe it, and nobody needs to read them.
-    try testing.expectEqualStrings(api.snip, collect.got.records.items[1].value);
-    try testing.expectEqualStrings(":lock_with_ink_pen:`rs_1,ENCRYPTED`", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings(api.signature_value, collect.got.records.items[1].value);
+    try testing.expectEqualStrings("`rs_1,ENCRYPTED`", collect.got.records.items[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
 
     // The compact summary and then the 🔏 when the item that carried it
     // ended. The 📲 did not: a call cannot be shown until it is whole.
     try testing.expectEqualStrings(
-        "thought:\nthought::lock_with_ink_pen:`rs_1,ENCRYPTED`\nbot:Let me look.",
+        "thought:\nthought:`rs_1,ENCRYPTED`\nbot:Let me look.",
         collect.seen.items,
     );
 
@@ -1320,7 +1306,7 @@ test "a summary part that says it ended is said once" {
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("**Verifying**", collect.got.records.items[0].value);
     try testing.expectEqualStrings("**Refining**", collect.got.records.items[1].value);
-    try testing.expectEqualStrings(api.snip, collect.got.records.items[2].value);
+    try testing.expectEqualStrings(api.signature_value, collect.got.records.items[2].value);
 }
 
 test "each summary part is a 💭, and they go back as one item" {
@@ -1359,7 +1345,7 @@ test "each summary part is a 💭, and they go back as one item" {
         try testing.expectEqualStrings("**Refining**", collect.got.records.items[1].value);
         try testing.expect(collect.got.records.items[0].content == null);
         try testing.expect(collect.got.records.items[1].content == null);
-        try testing.expectEqualStrings(api.snip, collect.got.records.items[2].value);
+        try testing.expectEqualStrings(api.signature_value, collect.got.records.items[2].value);
 
         // Encoded, the parts are one item's summary again, signed once.
         const request = try encode(arena, collect.got.records.items, .{ .model = "gpt-5.5" });
@@ -1388,7 +1374,7 @@ test "a whole reply reads the same as a streamed one" {
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("weighing it", collect.got.records.items[0].value);
     try testing.expect(collect.got.records.items[0].content == null);
-    try testing.expectEqualStrings(":lock_with_ink_pen:`rs_1,ENCRYPTED`", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings("`rs_1,ENCRYPTED`", collect.got.records.items[1].content.?);
     try testing.expectEqualStrings("Let me look.", collect.got.records.items[2].content.?);
     try testing.expectEqualStrings(
         \\{"text":"hi"}
@@ -1601,7 +1587,7 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("working it through", collect.got.records.items[0].value);
     try testing.expect(collect.got.records.items[0].content == null);
-    try testing.expectEqualStrings(":lock_with_ink_pen:`rs_1,ENC`", collect.got.records.items[1].content.?);
+    try testing.expectEqualStrings("`rs_1,ENC`", collect.got.records.items[1].content.?);
     try testing.expectEqual(sigil.Sigil.bot, collect.got.records.items[2].sigil);
     try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[2].value);
     try testing.expect(collect.got.records.items[2].content == null);
@@ -1821,7 +1807,7 @@ test "interleaved items drain separately on EOF and response termination" {
         const records = collect.got.records.items;
         // The interrupted reasoning item keeps its summary and opaque id.
         try testing.expectEqualStrings("thinking", records[0].value);
-        try testing.expectEqualStrings(api.snip, records[1].value);
+        try testing.expectEqualStrings(api.signature_value, records[1].value);
         try testing.expectEqualStrings("answer", records[2].content.?);
         try testing.expectEqual(@as(usize, if (i >= 3) 4 else 3), records.len);
     }
@@ -2009,7 +1995,7 @@ test "waiting reasoning preserves completed and open summary parts" {
     try testing.expectEqualStrings("first", records[0].content.?);
     try testing.expectEqualStrings("one", records[1].value);
     try testing.expectEqualStrings("two", records[2].value);
-    try testing.expectEqualStrings(":lock_with_ink_pen:`r1,SIGNED`", records[3].content.?);
+    try testing.expectEqualStrings("`r1,SIGNED`", records[3].content.?);
 }
 
 test "invalid Responses event JSON is an error rather than a lost fragment" {

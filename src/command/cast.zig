@@ -88,8 +88,8 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\                    wide for one line, use m8 ADDRESS <<'^^'.
         \\                    The response is what that command writes.
         \\
-        \\  --skip-snips      omit what a turn kept aside: a 💭snip and
-        \\                    the 🧠 that names where it went.
+        \\  --skip-snips      omit kept-aside thought records and the 🧠
+        \\                    references naming where they went.
         \\
         \\  --static          draw a still image, as tall as the ledger,
         \\                    with nothing moving. A final 🙋 is left
@@ -610,7 +610,7 @@ const Cast = struct {
 
     /// Whether the record is a turn's aside, or the 🧠 naming where one went.
     fn snip(c: *const Cast) bool {
-        return (c.sig == .thought and c.lines > 0 and std.mem.eql(u8, c.value, session.snip)) or
+        return (c.sig == .thought and c.lines > 0 and session.isSnipValue(c.value)) or
             (c.sig == .agent and session.namesSnip(c.value));
     }
 

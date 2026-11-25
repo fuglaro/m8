@@ -311,7 +311,7 @@ m8 say --no-send :games/zork | m8 encode | m8 cast --size 100x30 --speed 40l,�
   * A message with a `'` or a line break in it, or too wide
     for one line, is a heredoc: `m8 ADDRESS <<'^^'`.
   * What follows is what that command writes, so not the 🙋.
-* `--skip-snips` leaves out what a turn kept aside: a `💭snip`,
+* `--skip-snips` leaves out what a turn kept aside: thought records with a discriminator value and block,
   and the 🧠 naming where one went.
 * `--static` draws it all at once instead, as tall as it is,
   with nothing moving.

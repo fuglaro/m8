@@ -34,69 +34,49 @@ const link = @import("link.zig");
 
 pub const Error = error{UnknownCodec};
 
-/// The transient value a provider gives a 💭 whose content should be kept aside.
+/// Discriminators for thought records whose content is kept aside.
+pub const signature_value = @import("session.zig").signature;
+pub const call_metadata_value = @import("session.zig").call_metadata;
+pub const extended_thought_value = @import("session.zig").extended_thought;
+/// Filename token only; never a thought-record discriminator.
 pub const snip = @import("session.zig").snip;
 
-/// The text of a thought. A block is the full form; without one, the value is
-/// the compact one-line form. `snip` is special only when the block exists,
-/// so a blockless `💭snip` is ordinary thought text too.
+/// The text of a thought. Value-only and block-only records are thought text;
+/// the three discriminator values with a block are kept-aside forms.
 pub fn thoughtText(r: doc.Record) []const u8 {
     return r.content orelse r.value;
 }
 
-/// A 🔏 as content, in the spelling every file is written in: the sigil, then
-/// what the api signed as a code span, so it is read and shown as exactly
-/// what it is and never as markdown.
+/// A signature as a single code span. The record value identifies the aside;
+/// this block carries only the opaque provider payload.
 pub fn sealed(arena: Allocator, signature: []const u8) ![]const u8 {
     var w: std.Io.Writer.Allocating = .init(arena);
-    try w.writer.writeAll(Sigil.signature.text(.md));
     try markdown.writeSpan(&w.writer, signature);
     return w.written();
 }
 
-/// A call-scoped opaque metadata line. The tag is m8's discriminator; the JSON
-/// payload is carried verbatim and interpreted only by the codec that owns it.
+/// Provider-specific call metadata is a single JSON code span.
 pub fn sealedCall(arena: Allocator, payload: []const u8) ![]const u8 {
     var w: std.Io.Writer.Allocating = .init(arena);
-    try w.writer.writeAll(Sigil.signature.text(.md));
-    try w.writer.writeAll(":call:");
     try markdown.writeSpan(&w.writer, payload);
     return w.written();
 }
 
-/// The payload of a `🔏:call:` line, or null when this is another signature.
-pub fn callMetadataOn(arena: Allocator, line: []const u8) !?[]const u8 {
-    for ([_]doc.Mode{ .md, .m8 }) |mode| {
-        const hit = sigils.match(mode, line) orelse continue;
-        if (hit.sigil != .signature) continue;
-        const rest = std.mem.cutPrefix(u8, line[hit.len..], ":call:") orelse return null;
-        const got = try markdown.spans(arena, rest);
-        if (got.len != 1) return error.BadCallMetadata;
-        var w: std.Io.Writer.Allocating = .init(arena);
-        try markdown.writeSpan(&w.writer, got[0]);
-        if (!std.mem.eql(u8, w.written(), rest)) return error.BadCallMetadata;
-        return got[0];
-    }
-    return null;
+fn oneSpan(arena: Allocator, line: []const u8) !?[]const u8 {
+    const got = try markdown.spans(arena, line);
+    if (got.len != 1) return null;
+    var w: std.Io.Writer.Allocating = .init(arena);
+    try markdown.writeSpan(&w.writer, got[0]);
+    if (!std.mem.eql(u8, w.written(), line)) return null;
+    return got[0];
 }
 
-/// The signature a line carries, in either spelling, or null when the line is
-/// not a plain 🔏. One whose rest is not a code span is an error rather than text,
-/// or a thought would lose its signature without a word.
+pub fn callMetadataOn(arena: Allocator, line: []const u8) !?[]const u8 {
+    return oneSpan(arena, line);
+}
+
 pub fn signatureOn(arena: Allocator, line: []const u8) !?[]const u8 {
-    for ([_]doc.Mode{ .md, .m8 }) |mode| {
-        const hit = sigils.match(mode, line) orelse continue;
-        if (hit.sigil != .signature) continue;
-        const rest = line[hit.len..];
-        if (std.mem.startsWith(u8, rest, ":call:")) return null;
-        const got = try markdown.spans(arena, rest);
-        if (got.len != 1) return error.BadSignature;
-        var w: std.Io.Writer.Allocating = .init(arena);
-        try markdown.writeSpan(&w.writer, got[0]);
-        if (!std.mem.eql(u8, w.written(), rest)) return error.BadSignature;
-        return got[0];
-    }
-    return null;
+    return oneSpan(arena, line);
 }
 
 /// What the ledger says the request is, plus the one thing it cannot: whether
@@ -554,14 +534,14 @@ test "a thought uses its block, or its compact value" {
     }));
 }
 
-test "call metadata has an explicit lock-and-call discriminator" {
+test "codec payload helpers encode and read one code span" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
     const content = try sealedCall(arena, "{\"vendor\":{\"opaque\":\"sig\"}}");
     const line = std.mem.trim(u8, content, "\n");
     try testing.expectEqualStrings("{\"vendor\":{\"opaque\":\"sig\"}}", (try callMetadataOn(arena, line)).?);
-    try testing.expect((try signatureOn(arena, line)) == null);
+    try testing.expectEqualStrings("{\"vendor\":{\"opaque\":\"sig\"}}", (try signatureOn(arena, line)).?);
 }
 
 test "m8 encodes to itself" {

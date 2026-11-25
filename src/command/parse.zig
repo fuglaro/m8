@@ -55,7 +55,7 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  --snip-lines N  Keep at most N lines of each thought.
         \\
         \\N must be a positive integer. The first configured limit reached
-        \\wins. The remainder is kept as a 💭snip and recombined unchanged when
+        \\wins. The remainder is kept as a `:thought_balloon:` aside and recombined unchanged when
         \\sent again. Without either option, nothing is snipped. A limited
         \\thought is held until its block closes; other records continue
         \\streaming as they arrive.
@@ -130,20 +130,20 @@ fn run(ctx: Ctx) !u8 {
     for (reply.calls) |call| {
         if (live.opened) try ctx.out.writeByte('\n');
         live.opened = true;
-        if (call.metadata.len > 0) {
-            try doc.write(ctx.out, ctx.mode, .{
-                .sigil = .thought,
-                .value = codec.snip,
-                .content = try codec.sealedCall(ctx.arena, call.metadata),
-            });
-            try ctx.out.writeByte('\n');
-        }
         try doc.write(ctx.out, ctx.mode, .{
             .sigil = .call,
             .value = try ledger.callValue(ctx.arena, call.name, if (call.batch_id.len > 0) call.batch_id else batch_id, call.id),
             // Arguments that are not a JSON object are kept as they came.
             .content = toolbox.renderArgs(ctx.arena, ctx.mode, call.arguments) catch call.arguments,
         });
+        if (call.metadata.len > 0) {
+            try ctx.out.writeByte('\n');
+            try doc.write(ctx.out, ctx.mode, .{
+                .sigil = .thought,
+                .value = codec.call_metadata_value,
+                .content = try codec.sealedCall(ctx.arena, call.metadata),
+            });
+        }
     }
     return 0;
 }
@@ -169,7 +169,7 @@ fn positiveLimit(text: []const u8) !usize {
 }
 
 /// Buffers thought records while limits are active, then emits the readable
-/// prefix and the exact remainder as a 💭snip.
+/// prefix and the exact remainder as a `:thought_balloon:` aside.
 const SnippingSink = struct {
     arena: std.mem.Allocator,
     downstream: codec.Sink,
@@ -190,7 +190,7 @@ const SnippingSink = struct {
     fn openFn(ctx: *anyopaque, s: sigil.Sigil, value: []const u8) anyerror!void {
         const self: *SnippingSink = @ptrCast(@alignCast(ctx));
         if (self.active or self.passing) return error.NestedRecord;
-        const candidate = self.pending_tail != null and s == .thought and std.mem.eql(u8, value, "snip");
+        const candidate = self.pending_tail != null and s == .thought and std.mem.eql(u8, value, codec.extended_thought_value);
         if (self.pending_tail != null and !candidate) try self.flushPendingTail();
         if (s != .thought) {
             try self.downstream.begin(s, value);
@@ -207,9 +207,12 @@ const SnippingSink = struct {
     fn writeFn(ctx: *anyopaque, bytes: []const u8) anyerror!void {
         const self: *SnippingSink = @ptrCast(@alignCast(ctx));
         if (!self.active) return self.downstream.text(bytes);
-        if (!self.candidate and std.mem.eql(u8, self.value, "snip")) {
-            // A blockful 💭snip (for example, a signature) is already kept
-            // aside. A blockless 💭snip is ordinary compact thought text.
+        if (!self.candidate and (std.mem.eql(u8, self.value, codec.signature_value) or
+            std.mem.eql(u8, self.value, codec.call_metadata_value) or
+            std.mem.eql(u8, self.value, codec.extended_thought_value)))
+        {
+            // Existing kept-aside forms are codec payloads; preserve them
+            // verbatim rather than applying text snipping to their blocks.
             try self.downstream.begin(.thought, self.value);
             try self.downstream.text(bytes);
             self.active = false;
@@ -239,12 +242,7 @@ const SnippingSink = struct {
         const self: *SnippingSink = @ptrCast(@alignCast(ctx));
         if (self.active) {
             if (self.candidate) {
-                if (try containsSignature(self.arena, self.content.items)) {
-                    try self.emitCombinedSnip();
-                } else {
-                    try self.flushPendingTail();
-                    try self.downstream.record(.thought, self.value, self.content.items);
-                }
+                try self.emitCombinedSnip();
             } else if (self.snipped) {
                 if (self.content.items.len > 0) self.pending_tail = self.content.items;
             } else if (self.has_content) {
@@ -274,7 +272,7 @@ const SnippingSink = struct {
 
     fn flushPendingTail(self: *SnippingSink) !void {
         if (self.pending_tail) |tail| {
-            try self.downstream.record(.thought, "snip", tail);
+            try self.downstream.record(.thought, codec.extended_thought_value, tail);
             self.pending_tail = null;
         }
     }
@@ -285,7 +283,7 @@ const SnippingSink = struct {
         try combined.appendSlice(self.arena, tail);
         if (tail.len > 0 and tail[tail.len - 1] != '\n') try combined.append(self.arena, '\n');
         try combined.appendSlice(self.arena, self.content.items);
-        try self.downstream.record(.thought, "snip", combined.items);
+        try self.downstream.record(.thought, codec.extended_thought_value, combined.items);
         self.pending_tail = null;
     }
 
@@ -299,12 +297,6 @@ const SnippingSink = struct {
         }
     }
 };
-
-fn containsSignature(arena: std.mem.Allocator, content: []const u8) !bool {
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| if (try codec.signatureOn(arena, line)) |_| return true;
-    return false;
-}
 
 /// Character counting follows UTF-8 character boundaries; line limits keep the
 /// separating newline with the snipped continuation.
@@ -361,7 +353,10 @@ const Live = struct {
         const self: *Live = @ptrCast(@alignCast(ctx));
         // Kept aside is kept out of sight on a terminal. A pipe carries all
         // of it, because whatever is next may be keeping the turn.
-        if (self.mode == .m8 and self.pending == .thought and std.mem.eql(u8, self.value, "snip")) return;
+        if (self.mode == .m8 and self.pending == .thought and
+            (std.mem.eql(u8, self.value, codec.signature_value) or
+                std.mem.eql(u8, self.value, codec.call_metadata_value) or
+                std.mem.eql(u8, self.value, codec.extended_thought_value))) return;
         if (self.body == null) {
             if (self.opened) try self.out.writeByte('\n');
             self.body = try doc.ContentWriter.begin(
@@ -426,7 +421,7 @@ test "snipping streams the prefix at its limit and buffers only the remainder" {
     try sink.end();
     try snipping.finish();
     try std.testing.expectEqualStrings(
-        "* :thought_balloon::abc\n\n* :thought_balloon::snip\n  > def\n",
+        "* :thought_balloon::abc\n\n* :thought_balloon:::thought_balloon:\n  > def\n",
         out.written(),
     );
 }
@@ -437,7 +432,7 @@ test "parse snips the thought remainder under the exact snip marker" {
     var input: std.Io.Reader = .fixed("* :thought_balloon::\n  > abcdef\n");
     try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{ "m8", "--snip-chars", "3" }, &input)));
     try std.testing.expectEqualStrings(
-        "* :thought_balloon::abc\n\n* :thought_balloon::snip\n  > def\n",
+        "* :thought_balloon::abc\n\n* :thought_balloon:::thought_balloon:\n  > def\n",
         invocation.out.written(),
     );
     var diag: doc.Diagnostic = .{};
@@ -456,14 +451,15 @@ test "snip continuation recombines exactly before the Anthropic signature" {
     var invocation = try Invocation.init();
     defer invocation.deinit();
     var input: std.Io.Reader = .fixed(
-        "* :thought_balloon::\n  > abcdef\n\n* :thought_balloon::snip\n  > :lock_with_ink_pen:`sig`\n",
+        "* :thought_balloon::\n  > abcdef\n\n* :thought_balloon:::lock_with_ink_pen:\n  > `sig`\n",
     );
     try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{ "m8", "--snip-chars", "3" }, &input)));
     var diag: doc.Diagnostic = .{};
     const records = try doc.parse(invocation.arena.allocator(), invocation.out.written(), &diag);
-    try std.testing.expectEqual(@as(usize, 2), records.len);
-    try std.testing.expectEqualStrings("snip", records[1].value);
-    try std.testing.expect(std.mem.indexOf(u8, records[1].content.?, "def\n:lock_with_ink_pen:`sig`") != null);
+    try std.testing.expectEqual(@as(usize, 3), records.len);
+    try std.testing.expectEqualStrings(codec.extended_thought_value, records[1].value);
+    try std.testing.expectEqualStrings("def", records[1].content.?);
+    try std.testing.expectEqualStrings(codec.signature_value, records[2].value);
     const request = try codec.anthropic_messages.encode(invocation.arena.allocator(), records, .{ .model = "test" });
     try std.testing.expect(std.mem.indexOf(u8, request, "\"thinking\":\"abcdef\",\"signature\":\"sig\"") != null);
 }
@@ -474,7 +470,7 @@ test "parse applies character snipping to compact one-line thoughts" {
     var input: std.Io.Reader = .fixed("* :thought_balloon::abcdef\n");
     try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{ "m8", "--snip-chars", "3" }, &input)));
     try std.testing.expectEqualStrings(
-        "* :thought_balloon::abc\n\n* :thought_balloon::snip\n  > def\n",
+        "* :thought_balloon::abc\n\n* :thought_balloon:::thought_balloon:\n  > def\n",
         invocation.out.written(),
     );
 }
