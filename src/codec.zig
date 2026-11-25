@@ -173,6 +173,8 @@ pub const Sink = struct {
 pub const Call = struct {
     id: []const u8,
     name: []const u8,
+    /// The ledger's batch id, empty when the source has none.
+    batch_id: []const u8 = "",
     /// The arguments as the model wrote them, still JSON.
     arguments: []const u8,
     /// Opaque provider metadata attached to this call, as a JSON object.

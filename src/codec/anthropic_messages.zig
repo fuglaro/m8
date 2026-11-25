@@ -34,6 +34,7 @@ const sigil = @import("../m8/sigil.zig");
 const modelform = @import("../m8/model.zig");
 const toolbox = @import("../toolbox.zig");
 const api = @import("../codec.zig");
+const ledger_format = @import("../ledger.zig");
 
 pub const codec_name = "anthropic-messages";
 
@@ -85,11 +86,6 @@ pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) 
 
     try writeSystem(arena, &s, records);
 
-    try s.objectField("messages");
-    try s.beginArray();
-    try writeTurns(arena, &s, records);
-    try s.endArray();
-
     if (target.tools.len > 0) {
         try s.objectField("tools");
         try s.beginArray();
@@ -109,6 +105,12 @@ pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) 
         }
         try s.endArray();
     }
+
+    try s.objectField("messages");
+    try s.beginArray();
+    try writeTurns(arena, &s, records);
+    try s.endArray();
+
     try s.endObject();
     return buf.written();
 }
@@ -231,17 +233,27 @@ fn run(
     claimed: []bool,
 ) !usize {
     var end = start;
-    var answered = false;
-    while (end < records.len) : (end += 1) {
-        switch (records[end].sigil) {
-            .call => {
-                // Calls before the first answer are one parallel batch. Once
-                // an answer has begun, a later call starts another assistant
-                // turn even when neither round said any text.
-                if (answered) break;
-            },
-            .result, .scroll, .link, .ok, .failed => answered = true,
-            else => break,
+    const batch_id = ledger_format.callBatchId(records[start].value);
+    if (batch_id.len > 0) {
+        // Tool results are written as they land, so calls in one assistant
+        // message may be interleaved with their results in the ledger.
+        while (end < records.len) : (end += 1) {
+            switch (records[end].sigil) {
+                .call => if (!std.mem.eql(u8, ledger_format.callBatchId(records[end].value), batch_id)) break,
+                .result, .scroll, .link, .ok, .failed => {},
+                else => break,
+            }
+        }
+    } else {
+        var answered = false;
+        while (end < records.len) : (end += 1) {
+            switch (records[end].sigil) {
+                .call => {
+                    if (answered) break;
+                },
+                .result, .scroll, .link, .ok, .failed => answered = true,
+                else => break,
+            }
         }
     }
 
@@ -503,7 +515,9 @@ const sealed = api.sealed;
 
 fn callId(value: []const u8) []const u8 {
     const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    return std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const batch = std.mem.indexOfScalar(u8, rest, ':') orelse return rest;
+    return std.mem.trim(u8, rest[batch + 1 ..], " \t");
 }
 
 fn callName(value: []const u8) []const u8 {
@@ -838,9 +852,9 @@ test "records group into messages, and an answer follows the call that asked" {
     const records = [_]doc.Record{
         .{ .sigil = .user, .content = "Say hi." },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
-        .{ .sigil = .call, .value = "say,c2", .content = "* text `\"bye\"`" },
+        .{ .sigil = .call, .value = "say,batch12345678:c1", .content = "* text `\"hi\"`" },
         .{ .sigil = .result, .value = "c1", .content = "hi" },
+        .{ .sigil = .call, .value = "say,batch12345678:c2", .content = "* text `\"bye\"`" },
         .{ .sigil = .failed, .value = "c2", .content = "nope" },
         .{ .sigil = .bot, .content = "Done." },
     };
@@ -885,9 +899,9 @@ test "textless sequential tool rounds stay separate and preserve earlier message
     const arena = a.allocator();
 
     const first_round = [_]doc.Record{
-        .{ .sigil = .call, .value = "look,c1", .content = "{}" },
-        .{ .sigil = .call, .value = "look,c2", .content = "{}" },
+        .{ .sigil = .call, .value = "look,batchparallel1:c1", .content = "{}" },
         .{ .sigil = .result, .value = "c1", .content = "one" },
+        .{ .sigil = .call, .value = "look,batchparallel1:c2", .content = "{}" },
         .{ .sigil = .result, .value = "c2", .content = "two" },
     };
     const prior = try requestOf(arena, &first_round, .{ .model = "claude-opus-5" });

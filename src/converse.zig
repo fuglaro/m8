@@ -337,9 +337,10 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             }
             if (answered.calls.len == 0) break;
             const calls = answered.calls;
+            const batch_id = if (calls.len > 0) try ledger.newCallBatchId(arena, io) else "";
 
             for (calls, 0..) |c, n| {
-                const asked = try called(arena, c);
+                const asked = try called(arena, c, batch_id);
                 // Show the call before running it: on a terminal that is the only
                 // sign anything is happening while a tool takes its time. And
                 // keep it: a call is the truth the moment it is made, and one
@@ -372,7 +373,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 // down first. They are owed, and whoever picks this up with the
                 // person's answer runs them once the one that asked is through.
                 if (how == .asked) for (calls[n + 1 ..]) |later| {
-                    const waits = try called(arena, later);
+                    const waits = try called(arena, later, batch_id);
                     try show(arena, out, mode, &shown, waits);
                     try records.append(arena, waits);
                     try turn.append(arena, waits);
@@ -401,10 +402,10 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
 }
 
 /// The 📲 a call is written down as.
-fn called(arena: Allocator, c: codec.Call) !doc.Record {
+fn called(arena: Allocator, c: codec.Call, batch_id: []const u8) !doc.Record {
     return .{
         .sigil = .call,
-        .value = try std.fmt.allocPrint(arena, "{s},{s}", .{ c.name, c.id }),
+        .value = try ledger.callValue(arena, c.name, if (c.batch_id.len > 0) c.batch_id else batch_id, c.id),
         // Kept in the spelling every file is written in; the reader is handed
         // whichever one they are being written. Arguments that are not a JSON
         // object are kept as the model wrote them, and `answer` fails them.
@@ -1518,7 +1519,7 @@ test "called renders JSON arguments without a tool schema" {
     defer a.deinit();
     const arena = a.allocator();
     const args = "{\"text\":\"42\",\"count\":42,\"empty\":\"\",\"nothing\":null,\"extra\":true}";
-    const record = try called(arena, .{ .id = "c1", .name = "measure", .arguments = args });
+    const record = try called(arena, .{ .id = "c1", .name = "measure", .arguments = args }, "");
     try testing.expectEqualStrings(args, try toolbox.parseArgs(arena, .md, record.content.?));
 }
 
@@ -1546,7 +1547,7 @@ test "a call that does not read is kept as written and failed" {
     // Cut off mid-JSON, a JSON array, and bullets whose span is not JSON.
     for ([_][]const u8{ "{\"path\":\"HAIKU", "[1]", "* path `HAIKU.md`" }) |args| {
         const c: codec.Call = .{ .id = "c1", .name = "edit", .arguments = args };
-        try testing.expectEqualStrings(args, (try called(arena, c)).content.?);
+        try testing.expectEqualStrings(args, (try called(arena, c, "")).content.?);
         var how: Went = .settled;
         const records = try answer(ctx, "", "", "", .{}, &tools, &tools, c, &.{}, &how, null);
         try testing.expectEqual(sigil.Sigil.failed, records[0].sigil);

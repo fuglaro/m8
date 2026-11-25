@@ -308,7 +308,7 @@ fn walk(
     // so same-name overlay layers can wrap without making cycle checks linear.
     var paths: [2]std.StringHashMapUnmanaged(void) = .{ .empty, .empty };
     try stack.append(arena, root);
-    if (root.name.len > 0) try paths[@intFromEnum(root.part)].put(arena, try pathKey(arena, root.name, root.source_root), {});
+    if (root.name.len > 0) try paths[@backingInt(root.part)].put(arena, try pathKey(arena, root.name, root.source_root), {});
 
     var origin: []const u8 = "";
     while (stack.items.len > 0) {
@@ -327,7 +327,7 @@ fn walk(
                 top.name
             else
                 top.origin;
-            if (top.name.len > 0) _ = paths[@intFromEnum(top.part)].remove(try pathKey(arena, top.name, top.source_root));
+            if (top.name.len > 0) _ = paths[@backingInt(top.part)].remove(try pathKey(arena, top.name, top.source_root));
             stack.items.len -= 1;
 
             if (stack.items.len == 0) {
@@ -395,7 +395,7 @@ fn walk(
         const next_root = if (definition) |d| d.root else "";
 
         const identity = try pathKey(arena, r.value, next_root);
-        if (paths[@intFromEnum(want)].contains(identity)) return if (session.isGenerated(r.value)) Error.LineageLoops else Error.IncludeLoops;
+        if (paths[@backingInt(want)].contains(identity)) return if (session.isGenerated(r.value)) Error.LineageLoops else Error.IncludeLoops;
         var diag: doc.Diagnostic = .{};
         const parsed = try doc.parse(arena, src, &diag);
         const half = (try Split.of(parsed)).half(want);
@@ -411,7 +411,7 @@ fn walk(
 
         // Nothing above is read again after this: appending may move the
         // frames, and `top` is a pointer into them.
-        try paths[@intFromEnum(want)].put(arena, identity, {});
+        try paths[@backingInt(want)].put(arena, identity, {});
         try stack.append(arena, next);
     }
 
@@ -482,10 +482,37 @@ pub fn runsOn(arena: Allocator, records: []const doc.Record) !?model.Model {
     return found;
 }
 
-/// The call id a 📲 carries. The value is `name,id`.
+/// A random 72-bit id for one assistant message's tool-call batch.
+pub fn newCallBatchId(arena: Allocator, io: std.Io) ![]const u8 {
+    var random: [9]u8 = undefined;
+    io.random(&random);
+    const encoder = std.base64.url_safe_no_pad.Encoder;
+    const encoded = try arena.alloc(u8, encoder.calcSize(random.len));
+    return encoder.encode(encoded, &random);
+}
+
+/// The value a 📲 carries: `name,batch-id:call-id`. The batch id is
+/// optional for compatibility with existing ledgers.
+pub fn callValue(arena: Allocator, name: []const u8, batch_id: []const u8, id: []const u8) ![]const u8 {
+    if (batch_id.len == 0) return std.fmt.allocPrint(arena, "{s},{s}", .{ name, id });
+    return std.fmt.allocPrint(arena, "{s},{s}:{s}", .{ name, batch_id, id });
+}
+
+/// The batch id a 📲 carries, or empty for a legacy call.
+pub fn callBatchId(value: []const u8) []const u8 {
+    const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
+    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const colon = std.mem.indexOfScalar(u8, rest, ':') orelse return "";
+    return rest[0..colon];
+}
+
+/// The call id a 📲 carries. The value is `name,batch-id:call-id` or the
+/// legacy `name,id` form.
 pub fn callId(value: []const u8) []const u8 {
     const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    return std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const colon = std.mem.indexOfScalar(u8, rest, ':') orelse return rest;
+    return std.mem.trim(u8, rest[colon + 1 ..], " \t");
 }
 
 /// The tool name a 📲 carries.
@@ -766,6 +793,22 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     // A snip that is gone is said, not quietly left out.
     try f.agent(arena, "test/mathy/+/lost.md", "* :brain::test/mathy\n\n* :brain::test/mathy/+/snip-nowherenea\n");
     try testing.expectError(Error.UnknownAgent, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy/+/lost"));
+}
+
+test "call values round-trip optional batch ids" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const value = try callValue(arena, "say", "AbC_-1234567", "c1");
+    try testing.expectEqualStrings("say,AbC_-1234567:c1", value);
+    try testing.expectEqualStrings("AbC_-1234567", callBatchId(value));
+    try testing.expectEqualStrings("c1", callId(value));
+    try testing.expectEqualStrings("say", callName(value));
+
+    try testing.expectEqualStrings("say,c2", try callValue(arena, "say", "", "c2"));
+    try testing.expectEqualStrings("", callBatchId("say,c2"));
+    try testing.expectEqualStrings("c2", callId("say,c2"));
 }
 
 test "tool calls stay, and only an unanswered one is still owed" {

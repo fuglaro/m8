@@ -18,6 +18,7 @@ const codec = @import("../codec.zig");
 const doc = @import("../m8/doc.zig");
 const sigil = @import("../m8/sigil.zig");
 const toolbox = @import("../toolbox.zig");
+const ledger = @import("../ledger.zig");
 const api = @import("../api.zig");
 const Ctx = api.Ctx;
 
@@ -125,6 +126,7 @@ fn run(ctx: Ctx) !u8 {
         try ctx.err.flush();
     }
 
+    const batch_id = if (reply.calls.len > 0) try ledger.newCallBatchId(ctx.arena, ctx.io) else "";
     for (reply.calls) |call| {
         if (live.opened) try ctx.out.writeByte('\n');
         live.opened = true;
@@ -138,7 +140,7 @@ fn run(ctx: Ctx) !u8 {
         }
         try doc.write(ctx.out, ctx.mode, .{
             .sigil = .call,
-            .value = try std.fmt.allocPrint(ctx.arena, "{s},{s}", .{ call.name, call.id }),
+            .value = try ledger.callValue(ctx.arena, call.name, if (call.batch_id.len > 0) call.batch_id else batch_id, call.id),
             // Arguments that are not a JSON object are kept as they came.
             .content = toolbox.renderArgs(ctx.arena, ctx.mode, call.arguments) catch call.arguments,
         });
@@ -550,7 +552,11 @@ test "parse streamed tool arguments become one call without an empty assistant r
         \\data: [DONE]
     );
     try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"openai-completions"}, &input)));
-    try std.testing.expectEqualStrings("* :calling::say,c1\n  > * text `\"hi\"`\n", invocation.out.written());
+    const output = invocation.out.written();
+    try std.testing.expect(std.mem.startsWith(u8, output, "* :calling::say,"));
+    const batch_end = std.mem.indexOfScalarPos(u8, output, "* :calling::say,".len, ':').?;
+    try std.testing.expectEqual(@as(usize, 12), batch_end - "* :calling::say,".len);
+    try std.testing.expectEqualStrings(":c1\n  > * text `\"hi\"`\n", output[batch_end..]);
     try std.testing.expectEqualStrings("", invocation.err.written());
 }
 
@@ -562,7 +568,13 @@ test "parse preserves non-object tool arguments after assistant text" {
         \\{"choices":[{"message":{"content":"Calling now","tool_calls":[{"id":"c2","function":{"name":"say","arguments":"not JSON"}}]}}]}
     );
     try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"openai-completions"}, &input)));
-    try std.testing.expectEqualStrings("* :robot::\n  > Calling now\n\n* :calling::say,c2\n  > not JSON\n", invocation.out.written());
+    const output = invocation.out.written();
+    try std.testing.expect(std.mem.startsWith(u8, output, "* :robot::\n  > Calling now\n\n* :calling::say,"));
+    const call_start = std.mem.indexOf(u8, output, "* :calling::say,").?;
+    const batch_start = call_start + "* :calling::say,".len;
+    const batch_end = std.mem.indexOfScalarPos(u8, output, batch_start, ':').?;
+    try std.testing.expectEqual(@as(usize, 12), batch_end - batch_start);
+    try std.testing.expectEqualStrings(":c2\n  > not JSON\n", output[batch_end..]);
     try std.testing.expectEqualStrings("", invocation.err.written());
 }
 

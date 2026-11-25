@@ -1,12 +1,12 @@
 //! The OpenAI responses api.
 //!
-//! The one wire format whose shape a ledger already has. Chat completions
+//! The one wire format whose shape a ledger mostly has. Chat completions
 //! wants a leading system message and a turn per role; messages wants runs of
-//! blocks under alternating roles. This wants a flat list of items in the
-//! order they happened, which is what a ledger is — so there is no reordering
-//! here and no grouping, only a translation of one record at a time. The
-//! system prompt is hoisted, because it is a field of its own rather than an
-//! item, and that is the whole of the projection.
+//! blocks under alternating roles. This wants a flat list of items, close to
+//! ledger order. Tool-call batches are the exception: the ledger records each
+//! call's result as it lands, so calls with one batch id are brought together
+//! before their outputs. The system prompt is hoisted, because it is a field
+//! of its own rather than an item.
 //!
 //! What it carries that chat completions cannot:
 //!
@@ -46,6 +46,7 @@ const sigil = @import("../m8/sigil.zig");
 const modelform = @import("../m8/model.zig");
 const toolbox = @import("../toolbox.zig");
 const api = @import("../codec.zig");
+const ledger_format = @import("../ledger.zig");
 
 pub const codec_name = "openai-responses";
 
@@ -79,11 +80,6 @@ pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) 
 
     try writeInstructions(arena, &s, records);
 
-    try s.objectField("input");
-    try s.beginArray();
-    try writeInput(arena, &s, records);
-    try s.endArray();
-
     if (target.tools.len > 0) {
         try s.objectField("tools");
         try s.beginArray();
@@ -105,6 +101,12 @@ pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) 
         }
         try s.endArray();
     }
+
+    try s.objectField("input");
+    try s.beginArray();
+    try writeInput(arena, &s, records);
+    try s.endArray();
+
     try s.endObject();
     return buf.written();
 }
@@ -152,47 +154,103 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
     const claimed = try arena.alloc(bool, records.len);
     @memset(claimed, false);
 
-    for (records, 0..) |r, i| {
+    var i: usize = 0;
+    while (i < records.len) : (i += 1) {
+        const r = records[i];
         switch (r.sigil) {
             .user => try message(s, "user", r.content orelse ""),
             .bot => try message(s, "assistant", r.content orelse ""),
             .thought => if (try signed(arena, api.thoughtText(r))) |thought|
                 try reasoning(s, try owedTo(arena, records, i, thought)),
             .call => {
-                try s.beginObject();
-                try s.objectField("type");
-                try s.write("function_call");
-                try s.objectField("call_id");
-                try s.write(callId(r.value));
-                try s.objectField("name");
-                try s.write(callName(r.value));
-                try s.objectField("arguments");
-                // A JSON string, as this api and chat completions both want.
-                // A call that does not read was failed, and goes out with
-                // nothing.
-                try s.write(toolbox.parseArgs(arena, .md, r.content orelse "") catch "{}");
-                if (try callMetadataBefore(arena, records, i)) |metadata| {
-                    try s.objectField("provider_specific_fields");
-                    try s.write(metadata);
+                const batch_id = ledger_format.callBatchId(r.value);
+                if (batch_id.len == 0) {
+                    try writeFunctionCall(arena, s, records, i);
+                    continue;
                 }
-                try s.endObject();
+                var end = i;
+                while (end < records.len) : (end += 1) {
+                    switch (records[end].sigil) {
+                        .call => if (!std.mem.eql(u8, ledger_format.callBatchId(records[end].value), batch_id)) break,
+                        .result, .scroll, .link, .ok, .failed => {},
+                        else => break,
+                    }
+                }
+                // Responses has a flat item list rather than tool_calls[], but
+                // keep the batch shape: all calls first, then their outputs.
+                for (records[i..end], i..) |item, at| {
+                    if (item.sigil == .call) try writeFunctionCall(arena, s, records, at);
+                }
+                for (records[i..end]) |item| {
+                    if (item.sigil != .call) continue;
+                    const id = callId(item.value);
+                    if (!hasAnswer(records, claimed, i, id)) continue;
+                    const answer = try answerTo(arena, records, claimed, i, id);
+                    try writeFunctionOutput(s, id, answer);
+                }
+                for (records[i..end], i..) |item, at| {
+                    switch (item.sigil) {
+                        .result, .scroll, .link, .ok, .failed => {},
+                        else => continue,
+                    }
+                    if (claimed[at]) continue;
+                    const id = std.mem.trim(u8, item.value, " \t");
+                    const answer = try answerTo(arena, records, claimed, at, id);
+                    try writeFunctionOutput(s, id, answer);
+                }
+                i = end - 1;
             },
             .result, .scroll, .link, .ok, .failed => {
                 if (claimed[i]) continue;
                 const id = std.mem.trim(u8, r.value, " \t");
-                const a = try answerTo(arena, records, claimed, i, id);
-                try s.beginObject();
-                try s.objectField("type");
-                try s.write("function_call_output");
-                try s.objectField("call_id");
-                try s.write(id);
-                try s.objectField("output");
-                try writeOutput(s, a.said, a.links);
-                try s.endObject();
+                const answer = try answerTo(arena, records, claimed, i, id);
+                try writeFunctionOutput(s, id, answer);
             },
             else => {},
         }
     }
+}
+
+fn writeFunctionCall(arena: Allocator, s: *std.json.Stringify, records: []const doc.Record, at: usize) !void {
+    const r = records[at];
+    try s.beginObject();
+    try s.objectField("type");
+    try s.write("function_call");
+    try s.objectField("call_id");
+    try s.write(callId(r.value));
+    try s.objectField("name");
+    try s.write(callName(r.value));
+    try s.objectField("arguments");
+    // A JSON string, as this api and chat completions both want.
+    // A call that does not read is failed, and goes out with nothing.
+    try s.write(toolbox.parseArgs(arena, .md, r.content orelse "") catch "{}");
+    if (try callMetadataBefore(arena, records, at)) |metadata| {
+        try s.objectField("provider_specific_fields");
+        try s.write(metadata);
+    }
+    try s.endObject();
+}
+
+fn writeFunctionOutput(s: *std.json.Stringify, id: []const u8, answer: Answer) !void {
+    try s.beginObject();
+    try s.objectField("type");
+    try s.write("function_call_output");
+    try s.objectField("call_id");
+    try s.write(id);
+    try s.objectField("output");
+    try writeOutput(s, answer.said, answer.links);
+    try s.endObject();
+}
+
+fn hasAnswer(records: []const doc.Record, claimed: []bool, from: usize, id: []const u8) bool {
+    for (records[from..], from..) |r, idx| {
+        switch (r.sigil) {
+            .result, .scroll, .link, .ok, .failed => {},
+            else => continue,
+        }
+        if (!claimed[idx] and std.mem.eql(u8, std.mem.trim(u8, r.value, " \t"), id)) return true;
+    }
+    return false;
 }
 
 /// Everything answering `id` from `from` onward, joined, and marked so it is
@@ -388,7 +446,9 @@ fn sealed(arena: Allocator, id: []const u8, enc: []const u8) ![]const u8 {
 
 fn callId(value: []const u8) []const u8 {
     const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    return std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const batch = std.mem.indexOfScalar(u8, rest, ':') orelse return rest;
+    return std.mem.trim(u8, rest[batch + 1 ..], " \t");
 }
 
 fn callName(value: []const u8) []const u8 {
@@ -987,29 +1047,35 @@ test "the system prompt is a field, and the rest is the ledger in its own order"
         .{ .sigil = .system, .content = "Be brief." },
         .{ .sigil = .system, .content = "Be kind." },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,fc_1", .content = "* text `\"hi\"`" },
+        .{ .sigil = .call, .value = "say,batch12345678:fc_1", .content = "* text `\"hi\"`" },
         .{ .sigil = .result, .value = "fc_1", .content = "hi" },
+        .{ .sigil = .call, .value = "say,batch12345678:fc_2", .content = "* text `\"bye\"`" },
+        .{ .sigil = .result, .value = "fc_2", .content = "bye" },
         .{ .sigil = .bot, .content = "Done." },
     };
     const v = try requestOf(arena, &records, .{ .model = "gpt-5.5" });
 
     try testing.expectEqualStrings("Be brief.\nBe kind.", field(v, "instructions").string);
 
-    // One item per record, in the order they happened: no grouping, no
-    // alternation, nothing hoisted but the 🧭. This is the whole projection.
+    // Ordinary records stay in order; calls in one batch are grouped ahead
+    // of their outputs so the parallel turn survives the projection.
     const input = field(v, "input").array.items;
-    try testing.expectEqual(@as(usize, 5), input.len);
+    try testing.expectEqual(@as(usize, 7), input.len);
     try testing.expectEqualStrings("user", field(input[0], "role").string);
     try testing.expectEqualStrings("assistant", field(input[1], "role").string);
     try testing.expectEqualStrings("function_call", field(input[2], "type").string);
     try testing.expectEqualStrings("fc_1", field(input[2], "call_id").string);
+    try testing.expectEqualStrings("function_call", field(input[3], "type").string);
+    try testing.expectEqualStrings("fc_2", field(input[3], "call_id").string);
     // Arguments are a JSON string here, as they are in chat completions.
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , field(input[2], "arguments").string);
-    try testing.expectEqualStrings("function_call_output", field(input[3], "type").string);
-    try testing.expectEqualStrings("hi", field(input[3], "output").string);
-    try testing.expectEqualStrings("assistant", field(input[4], "role").string);
+    try testing.expectEqualStrings("function_call_output", field(input[4], "type").string);
+    try testing.expectEqualStrings("hi", field(input[4], "output").string);
+    try testing.expectEqualStrings("function_call_output", field(input[5], "type").string);
+    try testing.expectEqualStrings("bye", field(input[5], "output").string);
+    try testing.expectEqualStrings("assistant", field(input[6], "role").string);
 }
 
 test "call-scoped metadata round-trips separately from call identity and arguments" {

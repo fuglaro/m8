@@ -70,6 +70,7 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
         if (rec.sigil == .call) try calls.append(arena, .{
             .id = ledger.callId(rec.value),
             .name = ledger.callName(rec.value),
+            .batch_id = ledger.callBatchId(rec.value),
             // A call that does not read is handed on as written, for the
             // harness to fail.
             .arguments = toolbox.parseArgs(arena, m, rec.content orelse "") catch rec.content orelse "",

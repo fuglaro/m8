@@ -23,6 +23,7 @@ const sigil = @import("../m8/sigil.zig");
 const modelform = @import("../m8/model.zig");
 const toolbox = @import("../toolbox.zig");
 const api = @import("../codec.zig");
+const ledger_format = @import("../ledger.zig");
 
 pub const codec_name = "openai-completions";
 
@@ -55,18 +56,19 @@ pub fn encode(arena: Allocator, ledger: []const doc.Record, target: api.Target) 
         try s.write(p.value_ptr.*);
     }
 
-    try s.objectField("messages");
-    try s.beginArray();
-    try writeSystem(arena, &s, records);
-    try writeTurns(arena, &s, records);
-    try s.endArray();
-
     if (target.tools.len > 0) {
         try s.objectField("tools");
         try s.beginArray();
         for (target.tools) |t| try toolbox.writeSchema(&s, t);
         try s.endArray();
     }
+
+    try s.objectField("messages");
+    try s.beginArray();
+    try writeSystem(arena, &s, records);
+    try writeTurns(arena, &s, records);
+    try s.endArray();
+
     try s.endObject();
     return buf.written();
 }
@@ -88,6 +90,25 @@ fn writeSystem(arena: Allocator, s: *std.json.Stringify, records: []const doc.Re
     try s.objectField("content");
     try s.write(text.items);
     try s.endObject();
+}
+
+/// `🔏:call:` belongs to the immediately following call. The payload is
+/// provider metadata, independent of the call's identity and arguments.
+fn callMetadataBefore(
+    arena: Allocator,
+    records: []const doc.Record,
+    at: usize,
+) !?std.json.Value {
+    if (at == 0 or records[at - 1].sigil != .thought) return null;
+    const content = records[at - 1].content orelse return null;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const payload = (try api.callMetadataOn(arena, line)) orelse continue;
+        const value = try std.json.parseFromSliceLeaky(std.json.Value, arena, payload, .{});
+        if (value != .object) return error.InvalidCallMetadata;
+        return value;
+    }
+    return null;
 }
 
 fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Record) !void {
@@ -141,17 +162,30 @@ fn run(
     claimed: []bool,
 ) !usize {
     var end = start;
-    var answered = false;
-    while (end < records.len) : (end += 1) {
-        switch (records[end].sigil) {
-            .call => {
-                // Calls before the first answer are one parallel batch. Once
-                // an answer has begun, a later call starts another assistant
-                // turn even when neither round said any text.
-                if (answered) break;
-            },
-            .result, .scroll, .link, .ok, .failed => answered = true,
-            else => break,
+    const batch_id = ledger_format.callBatchId(records[start].value);
+    if (batch_id.len > 0) {
+        // The ledger records each tool's result as it lands, so a parallel
+        // batch can be interleaved: call A, result A, call B, result B. The
+        // batch id, not adjacency, says which calls share one assistant turn.
+        while (end < records.len) : (end += 1) {
+            switch (records[end].sigil) {
+                .call => if (!std.mem.eql(u8, ledger_format.callBatchId(records[end].value), batch_id)) break,
+                .result, .scroll, .link, .ok, .failed => {},
+                else => break,
+            }
+        }
+    } else {
+        var answered = false;
+        while (end < records.len) : (end += 1) {
+            switch (records[end].sigil) {
+                .call => {
+                    // Legacy calls have no explicit batch id. Keep the old
+                    // inference for those: calls before an answer are parallel.
+                    if (answered) break;
+                },
+                .result, .scroll, .link, .ok, .failed => answered = true,
+                else => break,
+            }
         }
     }
 
@@ -162,13 +196,17 @@ fn run(
     try s.write(said);
     try s.objectField("tool_calls");
     try s.beginArray();
-    for (records[start..end]) |r| {
+    for (records[start..end], start..) |r, record_index| {
         if (r.sigil != .call) continue;
         try s.beginObject();
         try s.objectField("id");
         try s.write(callId(r.value));
         try s.objectField("type");
         try s.write("function");
+        if (try callMetadataBefore(arena, records, record_index)) |metadata| {
+            try s.objectField("provider_specific_fields");
+            try s.write(metadata);
+        }
         try s.objectField("function");
         try s.beginObject();
         try s.objectField("name");
@@ -319,7 +357,9 @@ fn simple(s: *std.json.Stringify, role: []const u8, content: []const u8, call_id
 
 fn callId(value: []const u8) []const u8 {
     const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    return std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
+    const batch = std.mem.indexOfScalar(u8, rest, ':') orelse return rest;
+    return std.mem.trim(u8, rest[batch + 1 ..], " \t");
 }
 
 fn callName(value: []const u8) []const u8 {
@@ -515,6 +555,7 @@ const Building = struct {
     id: ?[]const u8 = null,
     name: std.ArrayList(u8) = .empty,
     arguments: std.ArrayList(u8) = .empty,
+    metadata: []const u8 = "",
 };
 
 fn finish(arena: Allocator, building: []const Building) ![]const api.Call {
@@ -523,6 +564,7 @@ fn finish(arena: Allocator, building: []const Building) ![]const api.Call {
         .id = b.id orelse "",
         .name = b.name.items,
         .arguments = if (b.arguments.items.len == 0) "{}" else b.arguments.items,
+        .metadata = b.metadata,
     });
     return out.items;
 }
@@ -544,6 +586,9 @@ fn gatherOne(arena: Allocator, calls: *std.ArrayList(Building), item: std.json.V
     while (calls.items.len <= index) try calls.append(arena, .{});
     const into = &calls.items[index];
 
+    if (item.object.get("provider_specific_fields")) |fields|
+        into.metadata = try jsonText(arena, fields);
+
     if (item.object.get("id")) |x| if (x == .string) {
         if (into.id) |bound| {
             if (!std.mem.eql(u8, bound, x.string)) return error.ToolCallIdMismatch;
@@ -564,6 +609,13 @@ fn gatherOne(arena: Allocator, calls: *std.ArrayList(Building), item: std.json.V
     if (f.object.get("arguments")) |x| {
         if (x == .string) try into.arguments.appendSlice(arena, x.string);
     }
+}
+
+fn jsonText(arena: Allocator, value: std.json.Value) ![]const u8 {
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    var s: std.json.Stringify = .{ .writer = &buf.writer };
+    try s.write(value);
+    return buf.written();
 }
 
 fn deltaOf(v: std.json.Value) ?std.json.Value {
@@ -639,9 +691,9 @@ test "calls gather onto the turn that made them, ahead of their answers" {
     const records = [_]doc.Record{
         .{ .sigil = .agent, .value = "local/tiny" },
         .{ .sigil = .bot, .content = "Let me look." },
-        .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
-        .{ .sigil = .call, .value = "say,c2", .content = "* text `\"bye\"`" },
+        .{ .sigil = .call, .value = "say,batch12345678:c1", .content = "* text `\"hi\"`" },
         .{ .sigil = .result, .value = "c1", .content = "hi" },
+        .{ .sigil = .call, .value = "say,batch12345678:c2", .content = "* text `\"bye\"`" },
         .{ .sigil = .failed, .value = "c2", .content = "nope" },
         .{ .sigil = .bot, .content = "Done." },
     };
@@ -675,10 +727,10 @@ test "textless sequential tool rounds stay separate and preserve earlier message
     const arena = a.allocator();
 
     const first_round = [_]doc.Record{
-        .{ .sigil = .call, .value = "look,c1", .content = "{}" },
-        .{ .sigil = .call, .value = "look,c2", .content = "{}" },
+        .{ .sigil = .call, .value = "look,batchparallel1:c1", .content = "{}" },
         .{ .sigil = .result, .value = "c1", .content = "one" },
         .{ .sigil = .ok, .value = "c1" },
+        .{ .sigil = .call, .value = "look,batchparallel1:c2", .content = "{}" },
         .{ .sigil = .result, .value = "c2", .content = "two" },
         .{ .sigil = .ok, .value = "c2" },
     };
@@ -1091,4 +1143,44 @@ test "a call that does not read goes out with no arguments" {
     const request = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
     const calls = field(field(request, "messages").array.items[0], "tool_calls").array.items;
     try testing.expectEqualStrings("{}", field(field(calls[0], "function"), "arguments").string);
+}
+
+test "Google call signatures round-trip through Chat Completions" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const signature = "opaque-signature";
+    const streamed =
+        \\data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","provider_specific_fields":{"thought_signature":"opaque-signature"},"function":{"name":"list","arguments":"{\"path\":\"./\"}"}}]},"finish_reason":"tool_calls"}]}
+        \\
+        \\data: [DONE]
+        \\
+    ;
+    const at_once =
+        \\{"choices":[{"message":{"content":null,"tool_calls":[{"id":"c1","type":"function","provider_specific_fields":{"thought_signature":"opaque-signature"},"function":{"name":"list","arguments":"{\"path\":\"./\"}"}}]},"finish_reason":"tool_calls"}]}
+    ;
+
+    for ([_][]const u8{ streamed, at_once }) |body| {
+        var r = readerOver(body);
+        var collect: Collect = .{ .arena = arena };
+        const reply = try parse(arena, &r, collect.sink());
+        try testing.expectEqual(@as(usize, 1), reply.calls.len);
+        const metadata = try std.json.parseFromSliceLeaky(std.json.Value, arena, reply.calls[0].metadata, .{});
+        try testing.expectEqualStrings(signature, field(metadata, "thought_signature").string);
+
+        const records = [_]doc.Record{
+            .{ .sigil = .thought, .value = api.snip, .content = try api.sealedCall(arena, reply.calls[0].metadata) },
+            .{ .sigil = .call, .value = "list,c1", .content = "" },
+            .{ .sigil = .call, .value = "list,c2", .content = "" },
+        };
+        const request = try encode(arena, &records, .{ .model = "gemini/test" });
+        const v = try std.json.parseFromSliceLeaky(std.json.Value, arena, request, .{});
+        const messages = field(v, "messages").array.items;
+        try testing.expectEqual(@as(usize, 1), messages.len);
+        const calls = field(messages[0], "tool_calls").array.items;
+        try testing.expectEqual(@as(usize, 2), calls.len);
+        const sent = field(calls[0], "provider_specific_fields");
+        try testing.expectEqualStrings(signature, field(sent, "thought_signature").string);
+        try testing.expect(calls[1].object.get("provider_specific_fields") == null);
+    }
 }
