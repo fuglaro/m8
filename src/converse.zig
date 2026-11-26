@@ -337,10 +337,8 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
             }
             if (answered.calls.len == 0) break;
             const calls = answered.calls;
-            const batch_id = if (calls.len > 0) try ledger.newCallBatchId(arena, io) else "";
-
             for (calls, 0..) |c, n| {
-                const asked = try called(arena, c, batch_id);
+                const asked = try called(arena, c);
                 // Show the call before running it: on a terminal that is the only
                 // sign anything is happening while a tool takes its time. And
                 // keep it: a call is the truth the moment it is made, and one
@@ -351,6 +349,22 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 try status.call(arena, c);
                 try records.append(arena, asked);
                 try turn.append(arena, asked);
+                var asides: [2]doc.Record = undefined;
+                var aside_count: usize = 0;
+                if (c.aside_value.len > 0) {
+                    asides[aside_count] = .{ .sigil = .thought, .value = c.aside_value, .content = c.aside_content };
+                    aside_count += 1;
+                }
+                if (c.metadata.len > 0) {
+                    asides[aside_count] = .{ .sigil = .thought, .value = session.call_metadata, .content = try codec.sealedCall(arena, c.metadata) };
+                    aside_count += 1;
+                }
+                if (aside_count > 0) {
+                    const aside_records = asides[0..aside_count];
+                    const kept = try keptAsides(arena, io, dirs, opts.keep, out, mode, &shown, aside_records);
+                    try records.appendSlice(arena, aside_records);
+                    try turn.appendSlice(arena, kept);
+                }
 
                 // Made, and never started.
                 if (interrupted.load(.monotonic)) {
@@ -373,7 +387,7 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
                 // down first. They are owed, and whoever picks this up with the
                 // person's answer runs them once the one that asked is through.
                 if (how == .asked) for (calls[n + 1 ..]) |later| {
-                    const waits = try called(arena, later, batch_id);
+                    const waits = try called(arena, later);
                     try show(arena, out, mode, &shown, waits);
                     try records.append(arena, waits);
                     try turn.append(arena, waits);
@@ -402,10 +416,10 @@ pub fn run(handed: Ctx, opts: Options) ![]const doc.Record {
 }
 
 /// The 📲 a call is written down as.
-fn called(arena: Allocator, c: codec.Call, batch_id: []const u8) !doc.Record {
+fn called(arena: Allocator, c: codec.Call) !doc.Record {
     return .{
         .sigil = .call,
-        .value = try ledger.callValue(arena, c.name, if (c.batch_id.len > 0) c.batch_id else batch_id, c.id),
+        .value = try ledger.callValue(arena, c.name, c.id),
         // Kept in the spelling every file is written in; the reader is handed
         // whichever one they are being written. Arguments that are not a JSON
         // object are kept as the model wrote them, and `answer` fails them.
@@ -771,11 +785,53 @@ const Shown = struct {
             .thought => l == .thought,
             // An agent receipt is a continuation, never a new paragraph.
             .agent => true,
-            .result, .scroll, .link, .ok, .failed => l == .call or l == .result or l == .scroll or l == .link,
+            .result, .scroll, .link, .ok, .failed => l == .call or l == .agent or l == .result or l == .scroll or l == .link,
             else => false,
         };
     }
 };
+
+/// Replace a group of kept-aside records by one snip reference when there is
+/// a folder to keep them in. A group stays together in one snip file.
+fn snippedRecords(
+    arena: Allocator,
+    io: std.Io,
+    dirs: config.Dirs,
+    folder: ?[]const u8,
+    records: []const doc.Record,
+) ![]const doc.Record {
+    const home = folder orelse return records;
+    for (records) |record| if (!session.isSnip(record)) return records;
+    const name = try session.keepSnips(arena, io, dirs, home, records);
+    const reference = try arena.alloc(doc.Record, 1);
+    reference[0] = .{ .sigil = .agent, .value = name };
+    return reference;
+}
+
+/// Preserve adjacent call asides for providers and traces, showing one snip
+/// reference for the group when the conversation is being kept.
+fn keptAsides(
+    arena: Allocator,
+    io: std.Io,
+    dirs: config.Dirs,
+    keeper: ?Keeper,
+    out: *std.Io.Writer,
+    mode: doc.Mode,
+    shown: *Shown,
+    asides: []const doc.Record,
+) ![]const doc.Record {
+    const kept = try snippedRecords(arena, io, dirs, if (keeper) |k| k.home else null, asides);
+    if (kept.len == 1 and kept[0].sigil == .agent) {
+        try shown.begin(out, .agent);
+        try doc.writeLooking(out, mode, shown.look, kept[0]);
+        for (asides) |aside| try shown.traceRecord(arena, aside);
+    } else if (mode == .m8) {
+        for (asides) |aside| try shown.traceRecord(arena, aside);
+    } else {
+        for (asides) |aside| try show(arena, out, mode, shown, aside);
+    }
+    return kept;
+}
 
 /// Write a record, with the blank line that separates it from the last one.
 fn show(
@@ -785,6 +841,10 @@ fn show(
     shown: *Shown,
     r: doc.Record,
 ) !void {
+    if (mode == .m8 and session.isSnip(r)) {
+        try shown.traceRecord(arena, r);
+        return;
+    }
     try shown.begin(out, r.sigil);
     try doc.writeLooking(out, mode, shown.look, try ledger.rendered(arena, mode, r));
     try shown.traceRecord(arena, r);
@@ -800,6 +860,28 @@ test "trace writes records as markdown independently of display mode" {
     try show(arena, &display.writer, .m8, &shown, .{ .sigil = .bot, .value = "answer", .content = "first\nsecond" });
     try std.testing.expect(std.mem.startsWith(u8, display.written(), "▐ 🤖:answer\n"));
     try std.testing.expectEqualStrings("* :robot::answer\n  > first\n  > second\n", trace.written());
+}
+
+test "tool-call agent receipts stay snug against the result" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var display: std.Io.Writer.Allocating = .init(arena);
+    var shown: Shown = .{};
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .call, .value = "look,call_1" });
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .agent, .value = "local/model" });
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .result, .value = "call_1", .content = "found it" });
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .call, .value = "look,call_2" });
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .agent, .value = "local/model" });
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .ok, .value = "call_2" });
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .call, .value = "look,call_3" });
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .agent, .value = "local/model" });
+    try show(arena, &display.writer, .md, &shown, .{ .sigil = .failed, .value = "call_3", .content = "nope" });
+
+    try std.testing.expectEqualStrings(
+        "* :calling::look,call_1\n* :brain::local/model\n* :receipt::call_1\n  >     found it\n\n* :calling::look,call_2\n* :brain::local/model\n* :green_circle::call_2\n\n* :calling::look,call_3\n* :brain::local/model\n* :no_entry_sign::call_3\n  >     nope\n",
+        display.written(),
+    );
 }
 
 /// What a run says it is doing, for whoever is watching it work rather than
@@ -990,10 +1072,14 @@ const LiveReply = struct {
         const self: *LiveReply = @ptrCast(@alignCast(ctx));
         try self.status.thoughtOver();
         if (try self.said.close()) |r| {
-            const k: doc.Record = if (self.snips != null and session.isSnip(r)) .{
-                .sigil = .agent,
-                .value = try session.keepSnip(self.arena, self.io, self.dirs, self.snips.?, r.value, r.content.?),
-            } else r;
+            const kept = try snippedRecords(
+                self.arena,
+                self.io,
+                self.dirs,
+                self.snips,
+                &.{r},
+            );
+            const k = kept[0];
             try self.kept.append(self.arena, k);
             if (self.body) |*b| {
                 try b.finish();
@@ -1519,7 +1605,7 @@ test "called renders JSON arguments without a tool schema" {
     defer a.deinit();
     const arena = a.allocator();
     const args = "{\"text\":\"42\",\"count\":42,\"empty\":\"\",\"nothing\":null,\"extra\":true}";
-    const record = try called(arena, .{ .id = "c1", .name = "measure", .arguments = args }, "");
+    const record = try called(arena, .{ .id = "c1", .name = "measure", .arguments = args });
     try testing.expectEqualStrings(args, try toolbox.parseArgs(arena, .md, record.content.?));
 }
 
@@ -1547,7 +1633,7 @@ test "a call that does not read is kept as written and failed" {
     // Cut off mid-JSON, a JSON array, and bullets whose span is not JSON.
     for ([_][]const u8{ "{\"path\":\"HAIKU", "[1]", "* path `HAIKU.md`" }) |args| {
         const c: codec.Call = .{ .id = "c1", .name = "edit", .arguments = args };
-        try testing.expectEqualStrings(args, (try called(arena, c, "")).content.?);
+        try testing.expectEqualStrings(args, (try called(arena, c)).content.?);
         var how: Went = .settled;
         const records = try answer(ctx, "", "", "", .{}, &tools, &tools, c, &.{}, &how, null);
         try testing.expectEqual(sigil.Sigil.failed, records[0].sigil);
@@ -1611,4 +1697,25 @@ test "malformed tool output is kept literally with stderr on the failure" {
     try std.testing.expectEqualStrings("raw\nbytes\n", answer_records[0].content.?);
     try std.testing.expectEqual(sigil.Sigil.failed, answer_records[1].sigil);
     try std.testing.expectEqualStrings("first diagnostic\nsecond diagnostic\n(malformed response)", answer_records[1].content.?);
+}
+test "kept-aside payloads stay in markdown output but are hidden in the m8 display" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const aside: doc.Record = .{
+        .sigil = .thought,
+        .value = ":call:batch:1",
+        .content = "`opaque provider payload`",
+    };
+    var display: std.Io.Writer.Allocating = .init(arena);
+    var trace: std.Io.Writer.Allocating = .init(arena);
+    var shown: Shown = .{ .trace = &trace.writer };
+    try show(arena, &display.writer, .m8, &shown, aside);
+    try std.testing.expectEqualStrings("", display.written());
+    try std.testing.expect(std.mem.indexOf(u8, trace.written(), "opaque provider payload") != null);
+
+    var markdown: std.Io.Writer.Allocating = .init(arena);
+    var markdown_shown: Shown = .{};
+    try show(arena, &markdown.writer, .md, &markdown_shown, aside);
+    try std.testing.expect(std.mem.indexOf(u8, markdown.written(), "opaque provider payload") != null);
 }

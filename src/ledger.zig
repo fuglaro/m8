@@ -482,37 +482,15 @@ pub fn runsOn(arena: Allocator, records: []const doc.Record) !?model.Model {
     return found;
 }
 
-/// A random 72-bit id for one assistant message's tool-call batch.
-pub fn newCallBatchId(arena: Allocator, io: std.Io) ![]const u8 {
-    var random: [9]u8 = undefined;
-    io.random(&random);
-    const encoder = std.base64.url_safe_no_pad.Encoder;
-    const encoded = try arena.alloc(u8, encoder.calcSize(random.len));
-    return encoder.encode(encoded, &random);
+/// The value a 📲 carries: `name,call-id`. The call identity is opaque to the framework.
+pub fn callValue(arena: Allocator, name: []const u8, id: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s},{s}", .{ name, id });
 }
 
-/// The value a 📲 carries: `name,batch-id:call-id`. The batch id is
-/// optional for compatibility with existing ledgers.
-pub fn callValue(arena: Allocator, name: []const u8, batch_id: []const u8, id: []const u8) ![]const u8 {
-    if (batch_id.len == 0) return std.fmt.allocPrint(arena, "{s},{s}", .{ name, id });
-    return std.fmt.allocPrint(arena, "{s},{s}:{s}", .{ name, batch_id, id });
-}
-
-/// The batch id a 📲 carries, or empty for a legacy call.
-pub fn callBatchId(value: []const u8) []const u8 {
-    const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
-    const colon = std.mem.indexOfScalar(u8, rest, ':') orelse return "";
-    return rest[0..colon];
-}
-
-/// The call id a 📲 carries. The value is `name,batch-id:call-id` or the
-/// legacy `name,id` form.
+/// The call id a 📲 carries, without interpreting it.
 pub fn callId(value: []const u8) []const u8 {
     const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
-    const colon = std.mem.indexOfScalar(u8, rest, ':') orelse return rest;
-    return std.mem.trim(u8, rest[colon + 1 ..], " \t");
+    return std.mem.trim(u8, value[cut + 1 ..], " \t");
 }
 
 /// The tool name a 📲 carries.
@@ -795,19 +773,17 @@ test "a thought kept aside is a snip on disk and whole again when read" {
     try testing.expectError(Error.UnknownAgent, expand(arena, f.io, config.Dirs{ .roots = &dirs }, "test/mathy/+/lost"));
 }
 
-test "call values round-trip optional batch ids" {
+test "call values preserve opaque call ids" {
     var a: std.heap.ArenaAllocator = .init(testing.allocator);
     defer a.deinit();
     const arena = a.allocator();
 
-    const value = try callValue(arena, "say", "AbC_-1234567", "c1");
-    try testing.expectEqualStrings("say,AbC_-1234567:c1", value);
-    try testing.expectEqualStrings("AbC_-1234567", callBatchId(value));
-    try testing.expectEqualStrings("c1", callId(value));
+    const value = try callValue(arena, "say", "batch:provider/id");
+    try testing.expectEqualStrings("say,batch:provider/id", value);
+    try testing.expectEqualStrings("batch:provider/id", callId(value));
     try testing.expectEqualStrings("say", callName(value));
 
-    try testing.expectEqualStrings("say,c2", try callValue(arena, "say", "", "c2"));
-    try testing.expectEqualStrings("", callBatchId("say,c2"));
+    try testing.expectEqualStrings("say,c2", try callValue(arena, "say", "c2"));
     try testing.expectEqualStrings("c2", callId("say,c2"));
 }
 

@@ -37,7 +37,7 @@ fn encode(arena: Allocator, records: []const doc.Record, target: api.Target) ![]
 /// that takes as long as the model does. The whole document is kept as
 /// well, so the calls can be read from it at the end: two passes over the
 /// same bytes, which is the price of a call being whole only once it ends.
-fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
+fn parse(arena: Allocator, _: std.Io, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
     var all: std.ArrayList(u8) = .empty;
     var lines: Lines = .{ .arena = arena, .sink = sink };
 
@@ -66,17 +66,36 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
     var calls: std.ArrayList(api.Call) = .empty;
     var diag: doc.Diagnostic = .{};
     const m = doc.detect(all.items) orelse .md;
-    for (try doc.parse(arena, all.items, &diag)) |rec| {
-        if (rec.sigil == .call) try calls.append(arena, .{
+    const records = try doc.parse(arena, all.items, &diag);
+    for (records, 0..) |rec, at| {
+        if (rec.sigil != .call) continue;
+        var call: api.Call = .{
             .id = ledger.callId(rec.value),
             .name = ledger.callName(rec.value),
-            .batch_id = ledger.callBatchId(rec.value),
             // A call that does not read is handed on as written, for the
             // harness to fail.
             .arguments = toolbox.parseArgs(arena, m, rec.content orelse "") catch rec.content orelse "",
-        });
+        };
+        var aside_at = at + 1;
+        while (aside_at < records.len and records[aside_at].sigil == .thought) : (aside_at += 1) {
+            const aside = records[aside_at];
+            if (std.mem.eql(u8, aside.value, api.call_metadata_value)) {
+                const content = aside.content orelse continue;
+                var lines_it = std.mem.splitScalar(u8, content, '\n');
+                if (try api.callMetadataOn(arena, lines_it.next() orelse "")) |payload|
+                    call.metadata = payload;
+            } else if (std.mem.eql(u8, aside.value, try callAsideValue(arena, call.id))) {
+                call.aside_value = aside.value;
+                call.aside_content = aside.content orelse "";
+            } else break;
+        }
+        try calls.append(arena, call);
     }
     return .{ .calls = calls.items };
+}
+
+fn callAsideValue(arena: Allocator, id: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, ":call:{s}", .{id});
 }
 
 /// The reply a line at a time, however the bytes were cut on the way in.
@@ -84,6 +103,9 @@ const Lines = struct {
     arena: Allocator,
     sink: api.Sink,
     mode: ?doc.Mode = null,
+    /// A call whose immediately following kept-aside records must not be
+    /// streamed as independent thoughts; they belong to its returned Call.
+    last_call_id: ?[]const u8 = null,
     /// A record is being said, and how many of its lines have been.
     open: bool = false,
     said: usize = 0,
@@ -138,11 +160,23 @@ const Lines = struct {
         if (std.mem.startsWith(u8, line, doc.header(m))) {
             if (self.open) try self.sink.end();
             self.open = false;
-            if (doc.headed(m, line)) |hit| if (shows(hit.sigil)) {
-                // The line is let go of, and what opens a record is kept.
-                try self.sink.begin(hit.sigil, try self.arena.dupe(u8, std.mem.trim(u8, hit.value, " \t")));
-                self.open = true;
-            };
+            if (doc.headed(m, line)) |hit| {
+                const value = std.mem.trim(u8, hit.value, " \t");
+                const call_aside = hit.sigil == .thought and self.last_call_id != null and
+                    (std.mem.eql(u8, value, api.call_metadata_value) or
+                        std.mem.eql(u8, value, try callAsideValue(self.arena, self.last_call_id.?)));
+                if (hit.sigil == .call) {
+                    self.last_call_id = try self.arena.dupe(u8, ledger.callId(value));
+                } else if (!call_aside) {
+                    self.last_call_id = null;
+                }
+                if (shows(hit.sigil) and !call_aside) {
+                    // Call-owned asides are returned with the call, not streamed
+                    // ahead of it as independent thoughts.
+                    try self.sink.begin(hit.sigil, try self.arena.dupe(u8, value));
+                    self.open = true;
+                }
+            }
             self.said = 0;
             return;
         }
@@ -233,7 +267,7 @@ test "a blockless thought keeps its value, including snip" {
 
     var r: std.Io.Reader = .fixed("* :thought_balloon::snip\n");
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
 
     try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
     try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[0].sigil);
@@ -257,7 +291,7 @@ test "kept-aside payloads pass through without framework interpretation" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings(":lock_with_ink_pen:", collect.got.records.items[0].value);
     try testing.expectEqualStrings("signature, not a code span", collect.got.records.items[0].content.?);
@@ -285,7 +319,7 @@ test "a reply in the language streams as it is written" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
 
     // Every record comes back, in the order it was written.
     try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
@@ -315,6 +349,27 @@ test "a call in the language that does not read is handed on as written" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqualStrings("* path `HAIKU.md`", reply.calls[0].arguments);
+}
+test "call-owned asides stay attached to the returned call, not before it" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const original = "call_original__thought__opaque";
+    const aside = try api.sealedCall(arena, original);
+    const body = try std.fmt.allocPrint(
+        arena,
+        "* :calling::bash,batch:1\n  > * command `\\\"echo foo\\\"`\n\n* :thought_balloon:::call:batch:1\n  > {s}\n",
+        .{aside},
+    );
+    var r: std.Io.Reader = .fixed(body);
+    var collect: Collect = .{ .arena = arena };
+    const reply = try parse(arena, testing.io, &r, collect.sink());
+
+    try testing.expectEqualStrings("", collect.seen.items);
+    try testing.expectEqual(@as(usize, 1), reply.calls.len);
+    try testing.expectEqualStrings("batch:1", reply.calls[0].id);
+    try testing.expectEqualStrings(try callAsideValue(arena, "batch:1"), reply.calls[0].aside_value);
+    try testing.expectEqualStrings(aside, reply.calls[0].aside_content);
 }

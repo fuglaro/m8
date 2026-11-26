@@ -35,6 +35,7 @@ const modelform = @import("../m8/model.zig");
 const toolbox = @import("../toolbox.zig");
 const api = @import("../codec.zig");
 const ledger_format = @import("../ledger.zig");
+const openai_call_id = @import("openai_call_id.zig");
 
 pub const codec_name = "anthropic-messages";
 
@@ -192,6 +193,10 @@ fn writeTurns(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                 i += 1;
             },
             .thought => {
+                if (std.mem.startsWith(u8, r.value, ":call:") or std.mem.eql(u8, r.value, api.call_metadata_value)) {
+                    i += 1;
+                    continue;
+                }
                 if (try signed(arena, r)) |thought| {
                     try turn.speak(.assistant);
                     try writeThinking(s, try owedTo(arena, records, i, thought));
@@ -233,14 +238,17 @@ fn run(
     claimed: []bool,
 ) !usize {
     var end = start;
-    const batch_id = ledger_format.callBatchId(records[start].value);
-    if (batch_id.len > 0) {
-        // Tool results are written as they land, so calls in one assistant
-        // message may be interleaved with their results in the ledger.
+    const group = openai_call_id.batchId(ledger_format.callId(records[start].value));
+    if (group) |batch| {
         while (end < records.len) : (end += 1) {
             switch (records[end].sigil) {
-                .call => if (!std.mem.eql(u8, ledger_format.callBatchId(records[end].value), batch_id)) break,
+                .call => {
+                    const other = openai_call_id.batchId(ledger_format.callId(records[end].value));
+                    if (other == null or !std.mem.eql(u8, other.?, batch)) break;
+                },
                 .result, .scroll, .link, .ok, .failed => {},
+                .thought => if (!std.mem.startsWith(u8, records[end].value, ":call:") and
+                    !std.mem.eql(u8, records[end].value, api.call_metadata_value)) break,
                 else => break,
             }
         }
@@ -248,23 +256,23 @@ fn run(
         var answered = false;
         while (end < records.len) : (end += 1) {
             switch (records[end].sigil) {
-                .call => {
-                    if (answered) break;
-                },
+                .call => if (answered) break,
                 .result, .scroll, .link, .ok, .failed => answered = true,
+                .thought => if (!std.mem.startsWith(u8, records[end].value, ":call:") and
+                    !std.mem.eql(u8, records[end].value, api.call_metadata_value)) break,
                 else => break,
             }
         }
     }
 
-    for (records[start..end]) |r| {
+    for (records[start..end], start..) |r, at| {
         if (r.sigil != .call) continue;
         try turn.speak(.assistant);
         try turn.s.beginObject();
         try turn.s.objectField("type");
         try turn.s.write("tool_use");
         try turn.s.objectField("id");
-        try turn.s.write(callId(r.value));
+        try turn.s.write(try providerCallId(arena, records, at));
         try turn.s.objectField("name");
         try turn.s.write(callName(r.value));
         try turn.s.objectField("input");
@@ -274,12 +282,12 @@ fn run(
         try turn.s.endObject();
     }
 
-    for (records[start..end]) |r| {
+    for (records[start..end], start..) |r, at| {
         if (r.sigil != .call) continue;
-        const id = callId(r.value);
+        const id = ledger_format.callId(r.value);
         if (try answerTo(arena, records, claimed, start, id)) |a| {
             try turn.speak(.user);
-            try writeResult(turn.s, id, a);
+            try writeResult(turn.s, try providerCallId(arena, records, at), a);
         }
     }
 
@@ -507,10 +515,20 @@ fn thinking(
 const sealed = api.sealed;
 
 fn callId(value: []const u8) []const u8 {
-    const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
-    const batch = std.mem.indexOfScalar(u8, rest, ':') orelse return rest;
-    return std.mem.trim(u8, rest[batch + 1 ..], " \t");
+    return ledger_format.callId(value);
+}
+
+fn providerCallId(arena: Allocator, records: []const doc.Record, at: usize) ![]const u8 {
+    const internal = ledger_format.callId(records[at].value);
+    if (at + 1 < records.len and records[at + 1].sigil == .thought and
+        std.mem.eql(u8, records[at + 1].value, try openai_call_id.asideValue(arena, internal)))
+    {
+        if (records[at + 1].content) |content| {
+            var lines = std.mem.splitScalar(u8, content, '\n');
+            if (try api.callMetadataOn(arena, lines.next() orelse "")) |original| return original;
+        }
+    }
+    return try openai_call_id.providerId(arena, internal);
 }
 
 fn callName(value: []const u8) []const u8 {
@@ -527,7 +545,7 @@ fn callName(value: []const u8) []const u8 {
 /// object instead of a stream of events. Both are read here, told apart by
 /// what actually arrived — the same move `doc.detect` makes on stdin: decide
 /// from the first line, then commit.
-fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
+fn parse(arena: Allocator, _: std.Io, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
     while (true) {
         const raw = (try api.nextLine(arena, r)) orelse return .{};
         const line = std.mem.trimEnd(u8, raw, "\r\n");
@@ -1029,7 +1047,7 @@ test "a streamed reply reads as the blocks it was made of" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[0].sigil);
@@ -1072,7 +1090,7 @@ test "a whole reply reads the same as a streamed one" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("weighing it", collect.got.records.items[0].content.?);
@@ -1118,7 +1136,7 @@ test "a message cut off says so last, in this api's own word" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
     try testing.expectEqual(@as(usize, 1), reply.calls.len);
     try testing.expectEqualStrings("(cut off at max_tokens)", collect.got.records.items[1].value);
@@ -1140,7 +1158,7 @@ test "a message cut off says so last, in this api's own word" {
         , .{c[0]});
         var wr: std.Io.Reader = .fixed(whole_body);
         var wc: Collect = .{ .arena = arena };
-        _ = try parse(arena, &wr, wc.sink());
+        _ = try parse(arena, testing.io, &wr, wc.sink());
         if (c[1]) |want| {
             try testing.expectEqual(@as(usize, 1), wc.got.records.items.len);
             try testing.expectEqualStrings(want, wc.got.records.items[0].value);
@@ -1169,7 +1187,7 @@ test "a refusal names its policy, ahead of the reason's own word" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r: std.Io.Reader = .fixed(body);
         var collect: Collect = .{ .arena = arena };
-        _ = try parse(arena, &r, collect.sink());
+        _ = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
         try testing.expectEqualStrings("(declined by bio refusal)", collect.got.records.items[0].value);
     }
@@ -1187,7 +1205,7 @@ test "an error is what the api said, and the reply says so" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
     const said = collect.got.records.items;
     try testing.expectEqual(@as(usize, 1), said.len);
     try testing.expectEqualStrings("(Overloaded - failed with overloaded_error)", said[0].value);
@@ -1198,7 +1216,7 @@ test "an error is what the api said, and the reply says so" {
         \\{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}
     );
     var again: Collect = .{ .arena = arena };
-    _ = try parse(arena, &whole_r, again.sink());
+    _ = try parse(arena, testing.io, &whole_r, again.sink());
     try testing.expectEqualStrings(
         "(invalid x-api-key - failed with authentication_error)",
         again.got.records.items[0].value,
@@ -1214,7 +1232,7 @@ test "a finished message parses without built-in aside stats" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqualStrings("", reply.aside);
     try testing.expectEqualStrings("hello", collect.got.records.items[0].content.?);
 }

@@ -24,6 +24,7 @@ const modelform = @import("../m8/model.zig");
 const toolbox = @import("../toolbox.zig");
 const api = @import("../codec.zig");
 const ledger_format = @import("../ledger.zig");
+const call_identity = @import("openai_call_id.zig");
 
 pub const codec_name = "openai-completions";
 
@@ -94,8 +95,11 @@ fn writeSystem(arena: Allocator, s: *std.json.Stringify, records: []const doc.Re
 
 /// Call metadata is the thought record immediately after its call.
 fn callMetadataAfter(arena: Allocator, records: []const doc.Record, at: usize) !?std.json.Value {
-    if (at + 1 >= records.len) return null;
-    const r = records[at + 1];
+    var next = at + 1;
+    if (next < records.len and records[next].sigil == .thought and std.mem.startsWith(u8, records[next].value, ":call:") and
+        !std.mem.eql(u8, records[next].value, api.call_metadata_value)) next += 1;
+    if (next >= records.len) return null;
+    const r = records[next];
     if (r.sigil != .thought or !std.mem.eql(u8, r.value, api.call_metadata_value)) return null;
     const content = r.content orelse return null;
     const payload = (try api.callMetadataOn(arena, content)) orelse return null;
@@ -155,16 +159,17 @@ fn run(
     claimed: []bool,
 ) !usize {
     var end = start;
-    const batch_id = ledger_format.callBatchId(records[start].value);
-    if (batch_id.len > 0) {
-        // The ledger records each tool's result as it lands, so a parallel
-        // batch can be interleaved: call A, result A, call B, result B. The
-        // batch id, not adjacency, says which calls share one assistant turn.
+    const batch = call_identity.batchId(ledger_format.callId(records[start].value));
+    if (batch) |group| {
         while (end < records.len) : (end += 1) {
             switch (records[end].sigil) {
-                .call => if (!std.mem.eql(u8, ledger_format.callBatchId(records[end].value), batch_id)) break,
+                .call => {
+                    const other = call_identity.batchId(ledger_format.callId(records[end].value));
+                    if (other == null or !std.mem.eql(u8, other.?, group)) break;
+                },
                 .result, .scroll, .link, .ok, .failed => {},
-                .thought => if (std.mem.eql(u8, records[end].value, api.call_metadata_value)) {},
+                .thought => if (!std.mem.eql(u8, records[end].value, api.call_metadata_value) and
+                    !std.mem.startsWith(u8, records[end].value, ":call:")) break,
                 else => break,
             }
         }
@@ -172,11 +177,7 @@ fn run(
         var answered = false;
         while (end < records.len) : (end += 1) {
             switch (records[end].sigil) {
-                .call => {
-                    // Legacy calls have no explicit batch id. Keep the old
-                    // inference for those: calls before an answer are parallel.
-                    if (answered) break;
-                },
+                .call => if (answered) break,
                 .result, .scroll, .link, .ok, .failed => answered = true,
                 .thought => if (!std.mem.eql(u8, records[end].value, api.call_metadata_value)) break,
                 else => break,
@@ -195,7 +196,7 @@ fn run(
         if (r.sigil != .call) continue;
         try s.beginObject();
         try s.objectField("id");
-        try s.write(callId(r.value));
+        try s.write(try providerCallId(arena, r.value, records, record_index));
         try s.objectField("type");
         try s.write("function");
         if (try callMetadataAfter(arena, records, record_index)) |metadata| {
@@ -219,11 +220,12 @@ fn run(
     // in a message of the person's after every answer, which is as near to
     // the answer as this api lets them stand.
     var shown: std.ArrayList([]const u8) = .empty;
-    for (records[start..end]) |r| {
+    for (records[start..end], start..) |r, record_index| {
         if (r.sigil != .call) continue;
-        const back = (try answerTo(arena, records, claimed, start, callId(r.value))) orelse continue;
+        const internal_id = ledger_format.callId(r.value);
+        const back = (try answerTo(arena, records, claimed, start, internal_id)) orelse continue;
         try shown.appendSlice(arena, back.links);
-        try simple(s, "tool", back.said, callId(r.value));
+        try simple(s, "tool", back.said, try providerCallId(arena, r.value, records, record_index));
     }
     if (shown.items.len > 0) try showFiles(s, shown.items);
 
@@ -350,11 +352,19 @@ fn simple(s: *std.json.Stringify, role: []const u8, content: []const u8, call_id
     try s.endObject();
 }
 
-fn callId(value: []const u8) []const u8 {
-    const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
-    const batch = std.mem.indexOfScalar(u8, rest, ':') orelse return rest;
-    return std.mem.trim(u8, rest[batch + 1 ..], " \t");
+fn providerCallId(arena: Allocator, value: []const u8, records: []const doc.Record, at: usize) ![]const u8 {
+    const aside_index = at + 1;
+    const internal = ledger_format.callId(value);
+    const aside_value = try call_identity.asideValue(arena, internal);
+    if (aside_index < records.len and records[aside_index].sigil == .thought and
+        std.mem.eql(u8, records[aside_index].value, aside_value))
+    {
+        if (records[aside_index].content) |content| {
+            var lines = std.mem.splitScalar(u8, content, '\n');
+            if (try api.callMetadataOn(arena, lines.next() orelse "")) |original| return original;
+        }
+    }
+    return try call_identity.providerId(arena, internal);
 }
 
 fn callName(value: []const u8) []const u8 {
@@ -371,7 +381,7 @@ fn callName(value: []const u8) []const u8 {
 /// object instead of a stream of events. Both are read here, told apart by
 /// what actually arrived — the same move `doc.detect` makes on stdin: decide
 /// from the first line, then commit.
-fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
+fn parse(arena: Allocator, io: std.Io, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
     // The first line that says anything decides.
     while (true) {
         const raw = (try api.nextLine(arena, r)) orelse return .{};
@@ -379,14 +389,14 @@ fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
         if (std.mem.trim(u8, line, " \t").len == 0) continue;
 
         if (std.mem.startsWith(u8, line, "data:") or std.mem.startsWith(u8, line, "event:"))
-            return events(arena, r, sink, line);
-        return whole(arena, r, sink, raw);
+            return events(arena, io, r, sink, line);
+        return whole(arena, io, r, sink, raw);
     }
 }
 
 /// Server-sent events: each `data:` line carries a whole JSON fragment whose
 /// delta is appended. The stream ends at `data: [DONE]`.
-fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
+fn events(arena: Allocator, io: std.Io, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
     var built: Run = .{ .arena = arena, .sink = sink };
     var building: std.ArrayList(Building) = .empty;
     var reason: []const u8 = "";
@@ -401,7 +411,7 @@ fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8
                 if (errorOf(v)) |e| {
                     try built.stop();
                     try api.failed(arena, sink, e);
-                    return built.reply(try finish(arena, building.items), "");
+                    return built.reply(try finish(arena, io, building.items), "");
                 }
                 // Reasoning before content: a server that puts both in one
                 // delta means the thinking came first.
@@ -420,11 +430,11 @@ fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8
         line = std.mem.trimEnd(u8, raw, "\r\n");
     }
     try built.stop();
-    return built.reply(try finish(arena, building.items), refusedOr(refused, reason));
+    return built.reply(try finish(arena, io, building.items), refusedOr(refused, reason));
 }
 
 /// One JSON object, from a provider that answered all at once.
-fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
+fn whole(arena: Allocator, io: std.Io, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
     var body: std.ArrayList(u8) = .empty;
     try body.appendSlice(arena, first);
     const rest = try r.allocRemaining(arena, .unlimited);
@@ -459,7 +469,7 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
     if (message.object.get("tool_calls")) |list| if (list == .array) {
         for (list.array.items) |item| try gatherOne(arena, &building, item, false);
     };
-    return built.reply(try finish(arena, building.items), refusedOr(refused, finishOf(v) orelse ""));
+    return built.reply(try finish(arena, io, building.items), refusedOr(refused, finishOf(v) orelse ""));
 }
 
 /// What an answer holds in place of choices when the api refused the request
@@ -553,14 +563,22 @@ const Building = struct {
     metadata: []const u8 = "",
 };
 
-fn finish(arena: Allocator, building: []const Building) ![]const api.Call {
+fn finish(arena: Allocator, io: std.Io, building: []const Building) ![]const api.Call {
+    const batch = try call_identity.newBatch(arena, io);
     var out: std.ArrayList(api.Call) = .empty;
-    for (building) |b| try out.append(arena, .{
-        .id = b.id orelse "",
-        .name = b.name.items,
-        .arguments = if (b.arguments.items.len == 0) "{}" else b.arguments.items,
-        .metadata = b.metadata,
-    });
+    var long_index: usize = 1;
+    for (building) |b| {
+        const assigned = try call_identity.make(arena, batch, b.id orelse "", long_index);
+        if (assigned.original != null) long_index += 1;
+        try out.append(arena, .{
+            .id = assigned.id,
+            .name = b.name.items,
+            .arguments = if (b.arguments.items.len == 0) "{}" else b.arguments.items,
+            .metadata = b.metadata,
+            .aside_value = if (assigned.original != null) try call_identity.asideValue(arena, assigned.id) else "",
+            .aside_content = if (assigned.original) |original| try api.sealedCall(arena, original) else "",
+        });
+    }
     return out.items;
 }
 
@@ -687,9 +705,9 @@ test "calls gather onto the turn that made them, ahead of their answers" {
         .{ .sigil = .agent, .value = "local/tiny" },
         .{ .sigil = .bot, .content = "Let me look." },
         .{ .sigil = .call, .value = "say,batch12345678:c1", .content = "* text `\"hi\"`" },
-        .{ .sigil = .result, .value = "c1", .content = "hi" },
+        .{ .sigil = .result, .value = "batch12345678:c1", .content = "hi" },
         .{ .sigil = .call, .value = "say,batch12345678:c2", .content = "* text `\"bye\"`" },
-        .{ .sigil = .failed, .value = "c2", .content = "nope" },
+        .{ .sigil = .failed, .value = "batch12345678:c2", .content = "nope" },
         .{ .sigil = .bot, .content = "Done." },
     };
     const body = try encode(arena, &records, .{ .model = "tiny" });
@@ -702,7 +720,7 @@ test "calls gather onto the turn that made them, ahead of their answers" {
 
     const calls = field(msgs[0], "tool_calls").array.items;
     try testing.expectEqual(@as(usize, 2), calls.len);
-    try testing.expectEqualStrings("c1", field(calls[0], "id").string);
+    try testing.expectEqualStrings("c1", try call_identity.providerId(arena, field(calls[0], "id").string));
     try testing.expectEqualStrings("say", field(field(calls[0], "function"), "name").string);
     try testing.expectEqualStrings(
         \\{"text":"hi"}
@@ -710,10 +728,39 @@ test "calls gather onto the turn that made them, ahead of their answers" {
 
     // Both answers follow, and a 🚫 is a tool message like any other.
     try testing.expectEqualStrings("tool", field(msgs[1], "role").string);
-    try testing.expectEqualStrings("c1", field(msgs[1], "tool_call_id").string);
-    try testing.expectEqualStrings("c2", field(msgs[2], "tool_call_id").string);
+    try testing.expectEqualStrings("c1", try call_identity.providerId(arena, field(msgs[1], "tool_call_id").string));
+    try testing.expectEqualStrings("c2", try call_identity.providerId(arena, field(msgs[2], "tool_call_id").string));
     try testing.expectEqualStrings("nope", field(msgs[2], "content").string);
     try testing.expectEqualStrings("assistant", field(msgs[3], "role").string);
+}
+
+test "a long provider call id survives its aside and tool answer round trip" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const original = try arena.alloc(u8, 81);
+    @memset(original, 'x');
+    var name: std.ArrayList(u8) = .empty;
+    try name.appendSlice(arena, "say");
+    var arguments: std.ArrayList(u8) = .empty;
+    try arguments.appendSlice(arena, "{}");
+    const building = [_]Building{.{ .id = original, .name = name, .arguments = arguments }};
+    const translated = try finish(arena, testing.io, &building);
+    const call = translated[0];
+    const records = [_]doc.Record{
+        .{ .sigil = .call, .value = try std.fmt.allocPrint(arena, "say,{s}", .{call.id}), .content = "{}" },
+        .{ .sigil = .thought, .value = call.aside_value, .content = call.aside_content },
+        .{ .sigil = .result, .value = call.id, .content = "done" },
+        .{ .sigil = .ok, .value = call.id },
+    };
+    const body = try encode(arena, &records, .{ .model = "tiny" });
+    const request = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
+    const messages = field(request, "messages").array.items;
+    const calls = field(messages[0], "tool_calls").array.items;
+
+    try testing.expectEqualStrings(original, field(calls[0], "id").string);
+    try testing.expectEqualStrings(original, field(messages[1], "tool_call_id").string);
 }
 
 test "textless sequential tool rounds stay separate and preserve earlier messages" {
@@ -723,17 +770,17 @@ test "textless sequential tool rounds stay separate and preserve earlier message
 
     const first_round = [_]doc.Record{
         .{ .sigil = .call, .value = "look,batchparallel1:c1", .content = "{}" },
-        .{ .sigil = .result, .value = "c1", .content = "one" },
-        .{ .sigil = .ok, .value = "c1" },
+        .{ .sigil = .result, .value = "batchparallel1:c1", .content = "one" },
+        .{ .sigil = .ok, .value = "batchparallel1:c1" },
         .{ .sigil = .call, .value = "look,batchparallel1:c2", .content = "{}" },
-        .{ .sigil = .result, .value = "c2", .content = "two" },
-        .{ .sigil = .ok, .value = "c2" },
+        .{ .sigil = .result, .value = "batchparallel1:c2", .content = "two" },
+        .{ .sigil = .ok, .value = "batchparallel1:c2" },
     };
     const prior = try encode(arena, &first_round, .{ .model = "tiny" });
     const records = first_round ++ [_]doc.Record{
-        .{ .sigil = .call, .value = "look,c3", .content = "{}" },
-        .{ .sigil = .result, .value = "c3", .content = "three" },
-        .{ .sigil = .ok, .value = "c3" },
+        .{ .sigil = .call, .value = "look,batchcurrent1:c3", .content = "{}" },
+        .{ .sigil = .result, .value = "batchcurrent1:c3", .content = "three" },
+        .{ .sigil = .ok, .value = "batchcurrent1:c3" },
     };
     const current = try encode(arena, &records, .{ .model = "tiny" });
     const before = field(try std.json.parseFromSliceLeaky(std.json.Value, arena, prior, .{}), "messages").array.items;
@@ -743,13 +790,13 @@ test "textless sequential tool rounds stay separate and preserve earlier message
     try testing.expectEqual(@as(usize, 5), after.len);
     try testing.expectEqualStrings("assistant", field(after[0], "role").string);
     try testing.expectEqual(@as(usize, 2), field(after[0], "tool_calls").array.items.len);
-    try testing.expectEqualStrings("c1", field(after[1], "tool_call_id").string);
-    try testing.expectEqualStrings("c2", field(after[2], "tool_call_id").string);
+    try testing.expectEqualStrings("c1", try call_identity.providerId(arena, field(after[1], "tool_call_id").string));
+    try testing.expectEqualStrings("c2", try call_identity.providerId(arena, field(after[2], "tool_call_id").string));
     try testing.expectEqualStrings("assistant", field(after[3], "role").string);
     const calls = field(after[3], "tool_calls").array.items;
     try testing.expectEqual(@as(usize, 1), calls.len);
-    try testing.expectEqualStrings("c3", field(calls[0], "id").string);
-    try testing.expectEqualStrings("c3", field(after[4], "tool_call_id").string);
+    try testing.expectEqualStrings("c3", try call_identity.providerId(arena, field(calls[0], "id").string));
+    try testing.expectEqualStrings("c3", try call_identity.providerId(arena, field(after[4], "tool_call_id").string));
 
     // Appending another round leaves every earlier message unchanged.
     for (before, 0..) |message, i| {
@@ -771,9 +818,9 @@ test "an answer that arrived late is still written beside its call" {
     // What a run that picked up an owed call leaves behind: the 📲 is history,
     // somebody said something, and only then was it answered.
     const records = [_]doc.Record{
-        .{ .sigil = .call, .value = "say,c2", .content = "* text `\"bye\"`" },
+        .{ .sigil = .call, .value = "say,batchlate1:c2", .content = "* text `\"bye\"`" },
         .{ .sigil = .user, .content = "Now say done." },
-        .{ .sigil = .result, .value = "c2", .content = "bye" },
+        .{ .sigil = .result, .value = "batchlate1:c2", .content = "bye" },
         .{ .sigil = .bot, .content = "Done." },
     };
     const body = try encode(arena, &records, .{ .model = "tiny" });
@@ -858,7 +905,7 @@ test "a streamed response and a whole one read the same" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
+        const reply = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqualStrings("Hello world", try collect.got.said(arena));
         // Streamed on the way past either way, so the reader sees the same.
         try testing.expectEqualStrings("Hello world", collect.seen.items);
@@ -890,9 +937,9 @@ test "a call is gathered whichever shape it came in" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
+        const reply = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 1), reply.calls.len);
-        try testing.expectEqualStrings("c1", reply.calls[0].id);
+        try testing.expectEqualStrings("c1", try call_identity.providerId(arena, reply.calls[0].id));
         try testing.expectEqualStrings("say", reply.calls[0].name);
         try testing.expectEqualStrings(
             \\{"text":"hi"}
@@ -906,7 +953,7 @@ fn toolStream(body: []const u8) !void {
     const arena = a.allocator();
     var r = readerOver(body);
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
 }
 
 test "streamed tool calls require stable index and id identity" {
@@ -923,12 +970,12 @@ test "streamed tool calls require stable index and id identity" {
     const arena = a.allocator();
     var r = readerOver(interleaved);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 2), reply.calls.len);
-    try testing.expectEqualStrings("a", reply.calls[0].id);
+    try testing.expectEqualStrings("a", try call_identity.providerId(arena, reply.calls[0].id));
     try testing.expectEqualStrings("one", reply.calls[0].name);
     try testing.expectEqualStrings("A1", reply.calls[0].arguments);
-    try testing.expectEqualStrings("b", reply.calls[1].id);
+    try testing.expectEqualStrings("b", try call_identity.providerId(arena, reply.calls[1].id));
     try testing.expectEqualStrings("two", reply.calls[1].name);
     try testing.expectEqualStrings("B2", reply.calls[1].arguments);
 
@@ -967,7 +1014,7 @@ test "an error is what the api said, and the reply says so" {
         \\{"error":{"message":"Incorrect API key provided.","type":"invalid_request_error","code":"invalid_api_key"}}
     );
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
     const said = collect.got.records.items;
     try testing.expectEqual(@as(usize, 1), said.len);
     try testing.expectEqualStrings("(Incorrect API key provided. - failed with invalid_request_error)", said[0].value);
@@ -993,7 +1040,7 @@ test "a reply cut off says so last, in this api's own word" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        _ = try parse(arena, &r, collect.sink());
+        _ = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
         const last = collect.got.records.items[1];
         try testing.expectEqual(sigil.Sigil.bot, last.sigil);
@@ -1010,7 +1057,7 @@ test "a reply cut off says so last, in this api's own word" {
         , .{why});
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        _ = try parse(arena, &r, collect.sink());
+        _ = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
     }
 }
@@ -1036,7 +1083,7 @@ test "a refusal is what the model said, and says it declined" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        _ = try parse(arena, &r, collect.sink());
+        _ = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
         try testing.expectEqualStrings("I can't help with that.", collect.got.records.items[0].content.?);
         try testing.expectEqualStrings("(declined with refusal)", collect.got.records.items[1].value);
@@ -1053,7 +1100,7 @@ test "a 🤖 with nothing under it never reaches the wire" {
         .{ .sigil = .bot, .content = "Let me look." },
         .{ .sigil = .bot, .value = "(cut off at length)" },
         .{ .sigil = .call, .value = "say,c1", .content = "* text `\"hi\"`" },
-        .{ .sigil = .result, .value = "c1", .content = "hi" },
+        .{ .sigil = .result, .value = "batch12345678:c1", .content = "hi" },
     };
     const body = try encode(arena, &records, .{ .model = "tiny" });
     const msgs = field(try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{}), "messages").array.items;
@@ -1071,7 +1118,7 @@ test "a response that says nothing is nothing, not a failure" {
 
     var empty = readerOver("");
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &empty, collect.sink());
+    const reply = try parse(arena, testing.io, &empty, collect.sink());
     try testing.expectEqualStrings("", try collect.got.said(arena));
     try testing.expectEqual(@as(usize, 0), reply.calls.len);
 }
@@ -1083,9 +1130,9 @@ test "files a 🔗 hands over go out beside the answer, uploaded or whole" {
 
     var records = [_]doc.Record{
         .{ .sigil = .call, .value = "see,c1", .content = "* file `\"a.jpeg\"`" },
-        .{ .sigil = .result, .value = "c1", .content = "here" },
+        .{ .sigil = .result, .value = "batch12345678:c1", .content = "here" },
         .{ .sigil = .link, .value = "c1", .content = ">image/jpeg data:image/jpeg;base64,YWJj a.jpeg\n>application/pdf data:application/pdf;base64,YWJj b.pdf" },
-        .{ .sigil = .ok, .value = "c1" },
+        .{ .sigil = .ok, .value = "batchparallel1:c1" },
     };
     const body = try encode(arena, &records, .{ .model = "m" });
     try testing.expect(std.mem.indexOf(u8, body,
@@ -1132,7 +1179,7 @@ test "a call that does not read goes out with no arguments" {
         .{ .sigil = .agent, .value = "local/tiny" },
         .{ .sigil = .bot },
         .{ .sigil = .call, .value = "edit,c1", .content = "* path `HAIKU.md`" },
-        .{ .sigil = .failed, .value = "c1", .content = "arguments could not be read" },
+        .{ .sigil = .failed, .value = "batch12345678:c1", .content = "arguments could not be read" },
     };
     const body = try encode(arena, &records, .{ .model = "tiny" });
     const request = try std.json.parseFromSliceLeaky(std.json.Value, arena, body, .{});
@@ -1158,7 +1205,7 @@ test "Google call signatures round-trip through Chat Completions" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r = readerOver(body);
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
+        const reply = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 1), reply.calls.len);
         const metadata = try std.json.parseFromSliceLeaky(std.json.Value, arena, reply.calls[0].metadata, .{});
         try testing.expectEqualStrings(signature, field(metadata, "thought_signature").string);

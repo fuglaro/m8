@@ -425,7 +425,7 @@ pub fn run(
         .err = err,
         .stages = stage_indices[0..count],
     };
-    const reply = codec.m8.codec.parse(arena, &r.interface, sink);
+    const reply = codec.m8.codec.parse(arena, io, &r.interface, sink);
     // Drain after an early parser return too: unread stdout must not keep a
     // stage blocked or accumulate while the remaining diagnostics arrive.
     _ = r.interface.discardRemaining() catch {};
@@ -874,16 +874,18 @@ test "provider diagnostics are forwarded and flushed while it is still running" 
     const reply = try run(
         arena,
         io,
-        .{ .cmd = &.{
-            "/bin/sh",
-            "-c",
-            // Give slow/loaded CI workers a generous window for the parent
-            // process to receive and flush the diagnostic. The success path
-            // still exits as soon as the live output is visible.
-            "printf 'waiting\\n' >&2; i=0; while [ \"$i\" -lt 2000 ]; do if grep -q waiting \"$1\"; then break; fi; i=$((i+1)); sleep .01; done; grep -q waiting \"$1\" || exit 7; printf '* :robot::\\n  > answer\\n'",
-            "provider-test",
-            path,
-        } },
+        .{
+            .cmd = &.{
+                "/bin/sh",
+                "-c",
+                // Give slow/loaded CI workers a generous window for the parent
+                // process to receive and flush the diagnostic. The success path
+                // still exits as soon as the live output is visible.
+                "printf 'waiting\\n' >&2; i=0; while [ \"$i\" -lt 2000 ]; do if grep -q waiting \"$1\"; then break; fi; i=$((i+1)); sleep .01; done; grep -q waiting \"$1\" || exit 7; printf '* :robot::\\n  > answer\\n'",
+                "provider-test",
+                path,
+            },
+        },
         null,
         "",
         collect.sink(),

@@ -151,14 +151,16 @@ pub const Sink = struct {
 /// A tool call, whether coming back from a model or going out again as part
 /// of the conversation so far.
 pub const Call = struct {
+    /// Opaque identity shared by this call and every answer to it.
     id: []const u8,
     name: []const u8,
-    /// The ledger's batch id, empty when the source has none.
-    batch_id: []const u8 = "",
     /// The arguments as the model wrote them, still JSON.
     arguments: []const u8,
     /// Opaque provider metadata attached to this call, as a JSON object.
     metadata: []const u8 = "",
+    /// Optional codec-owned kept-aside data, written immediately after the call.
+    aside_value: []const u8 = "",
+    aside_content: []const u8 = "",
 };
 
 /// Assemble model parameters into their request object. Paths may share
@@ -420,7 +422,7 @@ pub const Codec = struct {
     /// parsing this way is what makes streaming optional on their side rather
     /// than required. A format offering both a streamed and a whole shape is
     /// told apart by looking at what actually arrived.
-    parse: *const fn (Allocator, *std.Io.Reader, Sink) anyerror!Reply,
+    parse: *const fn (Allocator, std.Io, *std.Io.Reader, Sink) anyerror!Reply,
 };
 
 pub const m8 = @import("codec/m8.zig");

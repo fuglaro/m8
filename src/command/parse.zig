@@ -114,10 +114,10 @@ fn run(ctx: Ctx) !u8 {
     var live: Live = .{ .out = ctx.out, .mode = ctx.mode };
     const reply = if (limits.enabled()) blk: {
         var snipping: SnippingSink = .{ .arena = ctx.arena, .downstream = live.sink(), .limits = limits };
-        const reply = try c.parse(ctx.arena, input, snipping.sink());
+        const reply = try c.parse(ctx.arena, ctx.io, input, snipping.sink());
         try snipping.finish();
         break :blk reply;
-    } else try c.parse(ctx.arena, input, live.sink());
+    } else try c.parse(ctx.arena, ctx.io, input, live.sink());
     try live.finish();
     // What a format has to say beside the turn, such as what it cost, is for
     // whoever is watching the run, and only once they have asked to be told.
@@ -126,16 +126,23 @@ fn run(ctx: Ctx) !u8 {
         try ctx.err.flush();
     }
 
-    const batch_id = if (reply.calls.len > 0) try ledger.newCallBatchId(ctx.arena, ctx.io) else "";
     for (reply.calls) |call| {
         if (live.opened) try ctx.out.writeByte('\n');
         live.opened = true;
         try doc.write(ctx.out, ctx.mode, .{
             .sigil = .call,
-            .value = try ledger.callValue(ctx.arena, call.name, if (call.batch_id.len > 0) call.batch_id else batch_id, call.id),
+            .value = try ledger.callValue(ctx.arena, call.name, call.id),
             // Arguments that are not a JSON object are kept as they came.
             .content = toolbox.renderArgs(ctx.arena, ctx.mode, call.arguments) catch call.arguments,
         });
+        if (call.aside_value.len > 0) {
+            try ctx.out.writeByte('\n');
+            try doc.write(ctx.out, ctx.mode, .{
+                .sigil = .thought,
+                .value = call.aside_value,
+                .content = call.aside_content,
+            });
+        }
         if (call.metadata.len > 0) {
             try ctx.out.writeByte('\n');
             try doc.write(ctx.out, ctx.mode, .{
@@ -208,7 +215,7 @@ const SnippingSink = struct {
         const self: *SnippingSink = @ptrCast(@alignCast(ctx));
         if (!self.active) return self.downstream.text(bytes);
         if (!self.candidate and (std.mem.eql(u8, self.value, codec.signature_value) or
-            std.mem.eql(u8, self.value, codec.call_metadata_value) or
+            std.mem.startsWith(u8, self.value, ":call:") or
             std.mem.eql(u8, self.value, codec.extended_thought_value)))
         {
             // Existing kept-aside forms are codec payloads; preserve them
@@ -355,7 +362,7 @@ const Live = struct {
         // of it, because whatever is next may be keeping the turn.
         if (self.mode == .m8 and self.pending == .thought and
             (std.mem.eql(u8, self.value, codec.signature_value) or
-                std.mem.eql(u8, self.value, codec.call_metadata_value) or
+                std.mem.startsWith(u8, self.value, ":call:") or
                 std.mem.eql(u8, self.value, codec.extended_thought_value))) return;
         if (self.body == null) {
             if (self.opened) try self.out.writeByte('\n');
@@ -550,9 +557,14 @@ test "parse streamed tool arguments become one call without an empty assistant r
     try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"openai-completions"}, &input)));
     const output = invocation.out.written();
     try std.testing.expect(std.mem.startsWith(u8, output, "* :calling::say,"));
-    const batch_end = std.mem.indexOfScalarPos(u8, output, "* :calling::say,".len, ':').?;
-    try std.testing.expectEqual(@as(usize, 12), batch_end - "* :calling::say,".len);
-    try std.testing.expectEqualStrings(":c1\n  > * text `\"hi\"`\n", output[batch_end..]);
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(invocation.arena.allocator(), output, &diag);
+    try std.testing.expectEqual(@as(usize, 1), records.len);
+    try std.testing.expectEqualStrings("say", ledger.callName(records[0].value));
+    const call_id = ledger.callId(records[0].value);
+    try std.testing.expect(!std.mem.startsWith(u8, call_id, ":"));
+    try std.testing.expect(std.mem.indexOfScalar(u8, call_id, ':') != null);
+    try std.testing.expectEqualStrings("* text `\"hi\"`", records[0].content.?);
     try std.testing.expectEqualStrings("", invocation.err.written());
 }
 
@@ -566,11 +578,15 @@ test "parse preserves non-object tool arguments after assistant text" {
     try std.testing.expectEqual(@as(u8, 0), try command.run(invocation.ctx(&.{"openai-completions"}, &input)));
     const output = invocation.out.written();
     try std.testing.expect(std.mem.startsWith(u8, output, "* :robot::\n  > Calling now\n\n* :calling::say,"));
-    const call_start = std.mem.indexOf(u8, output, "* :calling::say,").?;
-    const batch_start = call_start + "* :calling::say,".len;
-    const batch_end = std.mem.indexOfScalarPos(u8, output, batch_start, ':').?;
-    try std.testing.expectEqual(@as(usize, 12), batch_end - batch_start);
-    try std.testing.expectEqualStrings(":c2\n  > not JSON\n", output[batch_end..]);
+    var diag: doc.Diagnostic = .{};
+    const records = try doc.parse(invocation.arena.allocator(), output, &diag);
+    try std.testing.expectEqual(@as(usize, 2), records.len);
+    try std.testing.expectEqualStrings("say", ledger.callName(records[1].value));
+    const call_id = ledger.callId(records[1].value);
+    try std.testing.expect(!std.mem.startsWith(u8, call_id, ":"));
+    try std.testing.expect(std.mem.indexOfScalar(u8, call_id, ':') != null);
+    try std.testing.expectEqualStrings("not JSON", records[1].content.?);
+
     try std.testing.expectEqualStrings("", invocation.err.written());
 }
 

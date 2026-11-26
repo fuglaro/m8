@@ -44,15 +44,26 @@ pub fn keepSnip(
     value: []const u8,
     content: []const u8,
 ) ![]const u8 {
+    return keepSnips(arena, io, dirs, folder, &.{.{ .sigil = .thought, .value = value, .content = content }});
+}
+
+/// Keep adjacent aside records together in one snip and return its reference.
+pub fn keepSnips(
+    arena: Allocator,
+    io: std.Io,
+    dirs: config.Dirs,
+    folder: []const u8,
+    records: []const doc.Record,
+) ![]const u8 {
     const name = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, try newSnip(arena, io) });
-    try writeFile(arena, io, dirs, name, &.{.{ .sigil = .thought, .value = value, .content = content }});
+    try writeFile(arena, io, dirs, name, records);
     return name;
 }
 
 /// A thought with a discriminator value and block is a kept-aside form.
 pub fn isSnipValue(value: []const u8) bool {
     return std.mem.eql(u8, value, signature) or
-        std.mem.eql(u8, value, call_metadata) or
+        std.mem.startsWith(u8, value, call_metadata) or
         std.mem.eql(u8, value, extended_thought);
 }
 
@@ -388,6 +399,7 @@ test "thought asides require a discriminator and block" {
     try testing.expect(!isSnip(.{ .sigil = .thought, .value = signature }));
     try testing.expect(isSnip(.{ .sigil = .thought, .value = signature, .content = "`hidden`" }));
     try testing.expect(isSnip(.{ .sigil = .thought, .value = call_metadata, .content = "`{}`" }));
+    try testing.expect(isSnip(.{ .sigil = .thought, .value = ":call:batch:1", .content = "`provider-id`" }));
     try testing.expect(isSnip(.{ .sigil = .thought, .value = extended_thought, .content = "hidden" }));
     try testing.expect(!isSnip(.{ .sigil = .thought, .value = snip, .content = "hidden" }));
     try testing.expect(!isSnip(.{ .sigil = .thought, .value = "summary", .content = "hidden" }));
@@ -520,4 +532,28 @@ test "stats log links saved stages without logging pointer changes" {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(f.io, try logPath(arena, f.io, dirs, chat), arena, .unlimited);
     try testing.expectEqualStrings("::stats::80::+/saved: 1200 in, 80 out\n::stats::80::+/saved:\n::stats::80::unlinked\n", bytes);
     try testing.expectEqual(@as(?[]const u8, null), try deref(arena, f.io, dirs, ptr));
+}
+test "adjacent call asides can share one snip file" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const f = try Fixture.init(arena, &threaded, "m8-session-call-asides");
+    defer f.deinit();
+    try f.write(arena, "mob/agent", "* :brain::/local/tiny\n");
+    const dirs: config.Dirs = .{ .roots = &.{f.dir}, .mob = "mob", .mob_root = f.dir };
+    const records = [_]doc.Record{
+        .{ .sigil = .thought, .value = ":call:batch:1", .content = "`provider-id`" },
+        .{ .sigil = .thought, .value = call_metadata, .content = "`provider metadata`" },
+    };
+
+    const name = try keepSnips(arena, f.io, dirs, "mob/agent/+", &records);
+    const path = try config.filePath(arena, f.io, dirs, name);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(f.io, path, arena, .unlimited);
+    var diag: doc.Diagnostic = .{};
+    const parsed = try doc.parse(arena, bytes, &diag);
+    try testing.expectEqual(@as(usize, 2), parsed.len);
+    try testing.expectEqualStrings(records[0].value, parsed[0].value);
+    try testing.expectEqualStrings(records[1].value, parsed[1].value);
 }

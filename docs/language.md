@@ -191,7 +191,9 @@ ledger. Authored-agent inclusions and model references are unchanged; snips
 A call is answered by what the tool said and then by
 how it went. 🧾 is the saying, and it is written while
 the tool is still speaking; 🟢 and 🚫 are the verdict,
-which nothing can know until it stops.
+which nothing can know until it stops. On a live display,
+an intervening 🧠 stays tight against the call and its answer:
+there is no blank line on either side of it.
 
 📜 is a 🧾 meant to be read as markdown. A 🧾 is literal,
 so its block is indented four spaces inside the quote, and
@@ -517,7 +519,13 @@ both, the value is a discriminator for a kept-aside form:
   signature.
 * `:call:` — the block contains a code span holding provider-specific JSON
   metadata for a tool call.
-* `:thought_balloon:` — the block is extended thought text.
+* `:call:<call-id>` — the block contains a code span holding the exact original
+  provider call ID, kept aside when the codec needs a short internal ID.
+* `:thought_balloon:` — the block contains extended thought text.
+
+The exact value `:call:` identifies metadata; `:call:<call-id>` identifies an
+original-call-ID aside. Both payloads are opaque to the language. Only the
+codec that wrote an aside interprets it.
 
 The kept-aside record is replaced in the visible ledger by a 🧠 reference to
 the file holding the original record. This keeps the record in the ledger by
@@ -525,9 +533,17 @@ reference while hiding its content from the TUI. Only the actual record sigil
 is rendered as an emoji: an extended-thought snip is headed
 `💭::thought_balloon:`.
 
-A signature snip follows the thought it belongs to. Call metadata follows the
-call it belongs to. In either case the snip is immediately after the record it
-qualifies. The plain value `snip` has no special meaning.
+A signature snip follows the thought it belongs to. Call metadata and an
+original-call-ID aside follow the call they belong to. In either case the
+snip is immediately after the record it qualifies. The plain value `snip` has
+no special meaning.
+
+```m8
+▐ 📲:say,isuIHy18_ELu:1
+│ * text `"hi"`
+▐ 💭::call:isuIHy18_ELu:1
+│ `provider-call-id-that-needed-a-short-ledger-id`
+```
 
 ```m8
 ▐ 💭:

@@ -47,6 +47,7 @@ const modelform = @import("../m8/model.zig");
 const toolbox = @import("../toolbox.zig");
 const api = @import("../codec.zig");
 const ledger_format = @import("../ledger.zig");
+const call_identity = @import("openai_call_id.zig");
 
 pub const codec_name = "openai-responses";
 
@@ -132,8 +133,11 @@ fn callMetadataAfter(
     records: []const doc.Record,
     at: usize,
 ) !?std.json.Value {
-    if (at + 1 >= records.len) return null;
-    const r = records[at + 1];
+    var next = at + 1;
+    if (next < records.len and records[next].sigil == .thought and std.mem.startsWith(u8, records[next].value, ":call:") and
+        !std.mem.eql(u8, records[next].value, api.call_metadata_value)) next += 1;
+    if (next >= records.len) return null;
+    const r = records[next];
     if (r.sigil != .thought or !std.mem.eql(u8, r.value, api.call_metadata_value)) return null;
     const content = r.content orelse return null;
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -161,22 +165,34 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
             .thought => if (try signed(arena, r)) |thought|
                 try reasoning(s, try owedTo(arena, records, i, thought)),
             .call => {
-                const batch_id = ledger_format.callBatchId(r.value);
-                if (batch_id.len == 0) {
-                    try writeFunctionCall(arena, s, records, i);
-                    continue;
-                }
                 var end = i;
-                while (end < records.len) : (end += 1) {
-                    switch (records[end].sigil) {
-                        .call => if (!std.mem.eql(u8, ledger_format.callBatchId(records[end].value), batch_id)) break,
-                        .result, .scroll, .link, .ok, .failed => {},
-                        .thought => if (std.mem.eql(u8, records[end].value, api.call_metadata_value)) {},
-                        else => break,
+                const group = call_identity.batchId(callId(r.value));
+                if (group) |batch| {
+                    while (end < records.len) : (end += 1) {
+                        switch (records[end].sigil) {
+                            .call => {
+                                const other = call_identity.batchId(callId(records[end].value));
+                                if (other == null or !std.mem.eql(u8, other.?, batch)) break;
+                            },
+                            .result, .scroll, .link, .ok, .failed => {},
+                            .thought => if (!std.mem.eql(u8, records[end].value, api.call_metadata_value) and
+                                !std.mem.startsWith(u8, records[end].value, ":call:")) break,
+                            else => break,
+                        }
+                    }
+                } else {
+                    var answered = false;
+                    while (end < records.len) : (end += 1) {
+                        switch (records[end].sigil) {
+                            .call => if (answered) break,
+                            .result, .scroll, .link, .ok, .failed => answered = true,
+                            .thought => if (!std.mem.eql(u8, records[end].value, api.call_metadata_value)) break,
+                            else => break,
+                        }
                     }
                 }
                 // Responses has a flat item list rather than tool_calls[], but
-                // keep the batch shape: all calls first, then their outputs.
+                // consecutive calls before their answers preserve the batch shape.
                 for (records[i..end], i..) |item, at| {
                     if (item.sigil == .call) try writeFunctionCall(arena, s, records, at);
                 }
@@ -185,7 +201,7 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                     const id = callId(item.value);
                     if (!hasAnswer(records, claimed, i, id)) continue;
                     const answer = try answerTo(arena, records, claimed, i, id);
-                    try writeFunctionOutput(s, id, answer);
+                    try writeFunctionOutput(s, try providerCallId(arena, records, findCall(records, i, id) orelse i), answer);
                 }
                 for (records[i..end], i..) |item, at| {
                     switch (item.sigil) {
@@ -195,7 +211,7 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
                     if (claimed[at]) continue;
                     const id = std.mem.trim(u8, item.value, " \t");
                     const answer = try answerTo(arena, records, claimed, at, id);
-                    try writeFunctionOutput(s, id, answer);
+                    try writeFunctionOutput(s, try call_identity.providerId(arena, id), answer);
                 }
                 i = end - 1;
             },
@@ -210,13 +226,30 @@ fn writeInput(arena: Allocator, s: *std.json.Stringify, records: []const doc.Rec
     }
 }
 
+fn findCall(records: []const doc.Record, from: usize, id: []const u8) ?usize {
+    for (records[from..], from..) |r, at| if (r.sigil == .call and std.mem.eql(u8, callId(r.value), id)) return at;
+    return null;
+}
+
+fn providerCallId(arena: Allocator, records: []const doc.Record, at: usize) ![]const u8 {
+    const id = callId(records[at].value);
+    if (at + 1 < records.len and records[at + 1].sigil == .thought and
+        std.mem.eql(u8, records[at + 1].value, try call_identity.asideValue(arena, id)))
+    {
+        const content = records[at + 1].content orelse return try call_identity.providerId(arena, id);
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        if (try api.callMetadataOn(arena, lines.next() orelse "")) |original| return original;
+    }
+    return try call_identity.providerId(arena, id);
+}
+
 fn writeFunctionCall(arena: Allocator, s: *std.json.Stringify, records: []const doc.Record, at: usize) !void {
     const r = records[at];
     try s.beginObject();
     try s.objectField("type");
     try s.write("function_call");
     try s.objectField("call_id");
-    try s.write(callId(r.value));
+    try s.write(try providerCallId(arena, records, at));
     try s.objectField("name");
     try s.write(callName(r.value));
     try s.objectField("arguments");
@@ -431,10 +464,7 @@ fn sealed(arena: Allocator, id: []const u8, enc: []const u8) ![]const u8 {
 }
 
 fn callId(value: []const u8) []const u8 {
-    const cut = std.mem.indexOfScalar(u8, value, ',') orelse return "";
-    const rest = std.mem.trim(u8, value[cut + 1 ..], " \t");
-    const batch = std.mem.indexOfScalar(u8, rest, ':') orelse return rest;
-    return std.mem.trim(u8, rest[batch + 1 ..], " \t");
+    return ledger_format.callId(value);
 }
 
 fn callName(value: []const u8) []const u8 {
@@ -451,23 +481,23 @@ fn callName(value: []const u8) []const u8 {
 /// object instead of a stream of events. Both are read here, told apart by
 /// what actually arrived — the same move `doc.detect` makes on stdin: decide
 /// from the first line, then commit.
-fn parse(arena: Allocator, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
+fn parse(arena: Allocator, io: std.Io, r: *std.Io.Reader, sink: api.Sink) !api.Reply {
     while (true) {
         const raw = (try api.nextLine(arena, r)) orelse return .{};
         const line = std.mem.trimEnd(u8, raw, "\r\n");
         if (std.mem.trim(u8, line, " \t").len == 0) continue;
 
         if (std.mem.startsWith(u8, line, "data:") or std.mem.startsWith(u8, line, "event:"))
-            return events(arena, r, sink, line);
-        return whole(arena, r, sink, raw);
+            return events(arena, io, r, sink, line);
+        return whole(arena, io, r, sink, raw);
     }
 }
 
 /// Server-sent events may interleave output items. Only the earliest item
 /// streams to the sink; later items wait until it closes, keeping both tool
 /// arguments and the sink's single open record attached to their own item.
-fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
-    var stream: Stream = .{ .arena = arena, .sink = sink };
+fn events(arena: Allocator, io: std.Io, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
+    var stream: Stream = .{ .arena = arena, .sink = sink, .io = io };
 
     var line = first;
     while (true) {
@@ -490,6 +520,7 @@ fn events(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8
 const Stream = struct {
     arena: Allocator,
     sink: api.Sink,
+    io: std.Io,
     items: std.ArrayList(Item) = .empty,
     calls: std.ArrayList(api.Call) = .empty,
     next: i64 = 0,
@@ -548,6 +579,7 @@ const Stream = struct {
                 };
                 var built: Building = .{
                     .arena = s.arena,
+                    .io = s.io,
                     .sink = if (waiting) |g| g.sink() else s.sink,
                 };
                 try built.start(item.?);
@@ -643,7 +675,7 @@ const Stream = struct {
         const reason = if (s.refused and s.reason.len == 0) "refusal" else s.reason;
         try api.stopped(s.arena, s.sink, stops, reason);
         if (s.incomplete) return error.IncompleteResponse;
-        return .{ .calls = s.calls.items };
+        return .{ .calls = try translatedCalls(s.arena, s.io, s.calls.items) };
     }
 };
 
@@ -681,7 +713,7 @@ fn delta(built: *Building, v: std.json.Value) !void {
 }
 
 /// One JSON object, from a provider that answered all at once.
-fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
+fn whole(arena: Allocator, io: std.Io, r: *std.Io.Reader, sink: api.Sink, first: []const u8) !api.Reply {
     var body: std.ArrayList(u8) = .empty;
     try body.appendSlice(arena, first);
     try body.appendSlice(arena, try r.allocRemaining(arena, .unlimited));
@@ -698,7 +730,7 @@ fn whole(arena: Allocator, r: *std.Io.Reader, sink: api.Sink, first: []const u8)
         return .{};
     };
 
-    var built: Building = .{ .arena = arena, .sink = sink };
+    var built: Building = .{ .arena = arena, .sink = sink, .io = io };
     if (str(v.object.get("status"))) |status| if (std.mem.eql(u8, status, "incomplete")) {
         built.incomplete = true;
         built.reason = incompleteOf(v);
@@ -816,6 +848,7 @@ fn incompleteOf(response: std.json.Value) []const u8 {
 const Building = struct {
     arena: Allocator,
     sink: api.Sink,
+    io: std.Io,
     calls: std.ArrayList(api.Call) = .empty,
 
     kind: Kind = .none,
@@ -987,9 +1020,29 @@ const Building = struct {
         const reason = if (b.refused and b.reason.len == 0) "refusal" else b.reason;
         try api.stopped(b.arena, b.sink, stops, reason);
         if (b.incomplete) return error.IncompleteResponse;
-        return .{ .calls = b.calls.items };
+        return .{ .calls = try translatedCalls(b.arena, b.io, b.calls.items) };
     }
 };
+
+fn translatedCalls(arena: Allocator, io: std.Io, calls: []const api.Call) ![]const api.Call {
+    if (calls.len == 0) return calls;
+    const batch = try call_identity.newBatch(arena, io);
+    var out: std.ArrayList(api.Call) = .empty;
+    var long_index: usize = 1;
+    for (calls) |call| {
+        const assigned = try call_identity.make(arena, batch, call.id, long_index);
+        if (assigned.original != null) long_index += 1;
+        try out.append(arena, .{
+            .id = assigned.id,
+            .name = call.name,
+            .arguments = call.arguments,
+            .metadata = call.metadata,
+            .aside_value = if (assigned.original != null) try call_identity.asideValue(arena, assigned.id) else "",
+            .aside_content = if (assigned.original) |original| try api.sealedCall(arena, original) else "",
+        });
+    }
+    return out.items;
+}
 
 fn jsonText(arena: Allocator, value: std.json.Value) ![]const u8 {
     var buf: std.Io.Writer.Allocating = .init(arena);
@@ -1050,9 +1103,9 @@ test "the system prompt is a field, and the rest is the ledger in its own order"
     try testing.expectEqualStrings("user", field(input[0], "role").string);
     try testing.expectEqualStrings("assistant", field(input[1], "role").string);
     try testing.expectEqualStrings("function_call", field(input[2], "type").string);
-    try testing.expectEqualStrings("fc_1", field(input[2], "call_id").string);
+    try testing.expectEqualStrings("fc_1", try call_identity.providerId(arena, field(input[2], "call_id").string));
     try testing.expectEqualStrings("function_call", field(input[3], "type").string);
-    try testing.expectEqualStrings("fc_2", field(input[3], "call_id").string);
+    try testing.expectEqualStrings("fc_2", try call_identity.providerId(arena, field(input[3], "call_id").string));
     // Arguments are a JSON string here, as they are in chat completions.
     try testing.expectEqualStrings(
         \\{"text":"hi"}
@@ -1062,6 +1115,29 @@ test "the system prompt is a field, and the rest is the ledger in its own order"
     try testing.expectEqualStrings("function_call_output", field(input[5], "type").string);
     try testing.expectEqualStrings("bye", field(input[5], "output").string);
     try testing.expectEqualStrings("assistant", field(input[6], "role").string);
+}
+
+test "a long provider call id survives its aside and tool answer round trip" {
+    var a: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+
+    const original = try arena.alloc(u8, 81);
+    @memset(original, 'x');
+    const raw_calls = [_]api.Call{.{ .id = original, .name = "say", .arguments = "{}" }};
+    const calls = try translatedCalls(arena, testing.io, &raw_calls);
+    const call = calls[0];
+    const records = [_]doc.Record{
+        .{ .sigil = .call, .value = try std.fmt.allocPrint(arena, "say,{s}", .{call.id}), .content = "{}" },
+        .{ .sigil = .thought, .value = call.aside_value, .content = call.aside_content },
+        .{ .sigil = .result, .value = call.id, .content = "done" },
+        .{ .sigil = .ok, .value = call.id },
+    };
+    const input = field(try requestOf(arena, &records, .{ .model = "gpt-5.5" }), "input").array.items;
+
+    try testing.expectEqual(@as(usize, 2), input.len);
+    try testing.expectEqualStrings(original, field(input[0], "call_id").string);
+    try testing.expectEqualStrings(original, field(input[1], "call_id").string);
 }
 
 test "call-scoped metadata round-trips separately from call identity and arguments" {
@@ -1225,7 +1301,7 @@ test "a streamed reply reads as the items it was made of" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqual(sigil.Sigil.thought, collect.got.records.items[0].sigil);
@@ -1247,7 +1323,7 @@ test "a streamed reply reads as the items it was made of" {
     );
 
     try testing.expectEqual(@as(usize, 1), reply.calls.len);
-    try testing.expectEqualStrings("call_1", reply.calls[0].id);
+    try testing.expectEqualStrings("call_1", try call_identity.providerId(arena, reply.calls[0].id));
     try testing.expectEqualStrings(
         \\{"text":"hi"}
     , reply.calls[0].arguments);
@@ -1264,7 +1340,7 @@ test "a finished response parses without built-in aside stats" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqualStrings("", reply.aside);
     try testing.expectEqualStrings("hello", collect.got.records.items[0].content.?);
 }
@@ -1302,7 +1378,7 @@ test "a summary part that says it ended is said once" {
     ;
     var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ body, "\n", rest }));
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("**Verifying**", collect.got.records.items[0].value);
     try testing.expectEqualStrings("**Refining**", collect.got.records.items[1].value);
@@ -1339,7 +1415,7 @@ test "each summary part is a 💭, and they go back as one item" {
     for ([_][]const u8{ body, at_once }) |got| {
         var r: std.Io.Reader = .fixed(got);
         var collect: Collect = .{ .arena = arena };
-        _ = try parse(arena, &r, collect.sink());
+        _ = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
         try testing.expectEqualStrings("**Verifying**", collect.got.records.items[0].value);
         try testing.expectEqualStrings("**Refining**", collect.got.records.items[1].value);
@@ -1369,7 +1445,7 @@ test "a whole reply reads the same as a streamed one" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
 
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("weighing it", collect.got.records.items[0].value);
@@ -1393,7 +1469,7 @@ test "an error is what the api said, and the reply says so" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
     const said = collect.got.records.items;
     try testing.expectEqual(@as(usize, 1), said.len);
     try testing.expectEqualStrings("(oops - failed with server_error)", said[0].value);
@@ -1435,7 +1511,7 @@ test "failed events find details in alternate response shapes" {
     for (fixtures) |fixture| {
         var r: std.Io.Reader = .fixed(fixture.body);
         var collect: Collect = .{ .arena = arena };
-        _ = try parse(arena, &r, collect.sink());
+        _ = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
         try testing.expectEqualStrings(fixture.want, collect.got.records.items[0].value);
     }
@@ -1471,7 +1547,7 @@ test "a failure nobody has met still says what arrived" {
     for (fixtures) |fixture| {
         var r: std.Io.Reader = .fixed(fixture.body);
         var collect: Collect = .{ .arena = arena };
-        _ = try parse(arena, &r, collect.sink());
+        _ = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
         try testing.expectEqualStrings(fixture.want, collect.got.records.items[0].value);
     }
@@ -1487,7 +1563,7 @@ test "a whole failed response reports status details" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
     try testing.expectEqualStrings(
         "(The backend closed the stream. - failed with server_error)",
@@ -1521,7 +1597,7 @@ test "an incomplete response says why last, in this api's own word" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
+    try testing.expectError(error.IncompleteResponse, parse(arena, testing.io, &r, collect.sink()));
     try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
     try testing.expectEqualStrings("Moon", collect.got.records.items[0].content.?);
     try testing.expectEqualStrings("(cut off at max_output_tokens)", collect.got.records.items[1].value);
@@ -1553,7 +1629,7 @@ test "a refusal is what the model said, and says it declined" {
     for ([_][]const u8{ streamed, at_once }) |body| {
         var r: std.Io.Reader = .fixed(body);
         var collect: Collect = .{ .arena = arena };
-        _ = try parse(arena, &r, collect.sink());
+        _ = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
         try testing.expectEqualStrings("I can't help with that.", collect.got.records.items[0].content.?);
         try testing.expectEqualStrings("(declined with refusal)", collect.got.records.items[1].value);
@@ -1583,7 +1659,7 @@ test "a model that shows its thinking and one that summarises it are both 💭" 
     var collect: Collect = .{ .arena = arena };
     // Received thoughts and their signature survive an incomplete response,
     // but the parser fails so no tool round can start from it.
-    try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
+    try testing.expectError(error.IncompleteResponse, parse(arena, testing.io, &r, collect.sink()));
     try testing.expectEqual(@as(usize, 3), collect.got.records.items.len);
     try testing.expectEqualStrings("working it through", collect.got.records.items[0].value);
     try testing.expect(collect.got.records.items[0].content == null);
@@ -1648,9 +1724,9 @@ test "completed function arguments replace partial deltas" {
     for (endings) |ending| {
         var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", ending }));
         var collect: Collect = .{ .arena = arena };
-        const reply = try parse(arena, &r, collect.sink());
+        const reply = try parse(arena, testing.io, &r, collect.sink());
         try testing.expectEqual(@as(usize, 1), reply.calls.len);
-        try testing.expectEqualStrings("call_1", reply.calls[0].id);
+        try testing.expectEqualStrings("call_1", try call_identity.providerId(arena, reply.calls[0].id));
         try testing.expectEqualStrings("{\"command\":\"pwd\"}", reply.calls[0].arguments);
     }
 }
@@ -1674,13 +1750,13 @@ test "interleaved tool calls keep their names ids and arguments" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 2), reply.calls.len);
     try testing.expectEqualStrings("grep", reply.calls[0].name);
-    try testing.expectEqualStrings("call_g", reply.calls[0].id);
+    try testing.expectEqualStrings("call_g", try call_identity.providerId(arena, reply.calls[0].id));
     try testing.expectEqualStrings("{\"glob\":\"*.svg\"}", reply.calls[0].arguments);
     try testing.expectEqualStrings("bash", reply.calls[1].name);
-    try testing.expectEqualStrings("call_b", reply.calls[1].id);
+    try testing.expectEqualStrings("call_b", try call_identity.providerId(arena, reply.calls[1].id));
     try testing.expectEqualStrings("{\"command\":\"pwd\"}", reply.calls[1].arguments);
 }
 
@@ -1701,7 +1777,7 @@ test "interleaved messages stream separately in output order" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 2), collect.got.records.items.len);
     try testing.expectEqualStrings("first message", collect.got.records.items[0].content.?);
     try testing.expectEqualStrings("second", collect.got.records.items[1].content.?);
@@ -1774,7 +1850,7 @@ test "item identity errors cannot mutate another item" {
     for (bad, expected) |ending, err| {
         var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", ending }));
         var collect: Collect = .{ .arena = arena };
-        try testing.expectError(err, parse(arena, &r, collect.sink()));
+        try testing.expectError(err, parse(arena, testing.io, &r, collect.sink()));
         try testing.expectEqual(@as(usize, 0), collect.seen.items.len);
     }
 }
@@ -1802,8 +1878,8 @@ test "interleaved items drain separately on EOF and response termination" {
         var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", ending }));
         var collect: Collect = .{ .arena = arena };
         if (i == 3) {
-            try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
-        } else _ = try parse(arena, &r, collect.sink());
+            try testing.expectError(error.IncompleteResponse, parse(arena, testing.io, &r, collect.sink()));
+        } else _ = try parse(arena, testing.io, &r, collect.sink());
         const records = collect.got.records.items;
         // The interrupted reasoning item keeps its summary and opaque id.
         try testing.expectEqualStrings("thinking", records[0].value);
@@ -1818,7 +1894,7 @@ test "earliest item streams while later output waits" {
     defer a.deinit();
     const arena = a.allocator();
     var collect: Collect = .{ .arena = arena };
-    var stream: Stream = .{ .arena = arena, .sink = collect.sink() };
+    var stream: Stream = .{ .arena = arena, .sink = collect.sink(), .io = testing.io };
     const events_in = [_][]const u8{
         \\{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m0"}}
         ,
@@ -1871,7 +1947,7 @@ test "gateway tool calls precede a completed-only empty message" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 0), collect.got.records.items.len);
     try testing.expectEqual(@as(usize, 3), reply.calls.len);
     const names = [_][]const u8{ "list", "grep", "bash" };
@@ -1879,7 +1955,7 @@ test "gateway tool calls precede a completed-only empty message" {
     const args = [_][]const u8{ "{\"path\":\"./scratch/\"}", "{\"glob\":\"./scratch/**\"}", "{\"command\":\"pwd\"}" };
     for (reply.calls, names, ids, args) |call, name, id, arguments| {
         try testing.expectEqualStrings(name, call.name);
-        try testing.expectEqualStrings(id, call.id);
+        try testing.expectEqualStrings(id, try call_identity.providerId(arena, call.id));
         try testing.expectEqualStrings(arguments, call.arguments);
     }
 }
@@ -1898,12 +1974,12 @@ test "completed-only output items preserve their content and call identity" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    const reply = try parse(arena, &r, collect.sink());
+    const reply = try parse(arena, testing.io, &r, collect.sink());
     try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
     try testing.expectEqualStrings("hello", collect.got.records.items[0].content.?);
     try testing.expectEqual(@as(usize, 1), reply.calls.len);
     try testing.expectEqualStrings("bash", reply.calls[0].name);
-    try testing.expectEqualStrings("c1", reply.calls[0].id);
+    try testing.expectEqualStrings("c1", try call_identity.providerId(arena, reply.calls[0].id));
     try testing.expectEqualStrings("{\"command\":\"pwd\"}", reply.calls[0].arguments);
 }
 
@@ -1931,7 +2007,7 @@ test "completed event with incomplete status stops before returning tool calls" 
     for (cases) |case| {
         var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", case.ending }));
         var collect: Collect = .{ .arena = arena };
-        try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
+        try testing.expectError(error.IncompleteResponse, parse(arena, testing.io, &r, collect.sink()));
         try testing.expectEqual(@as(usize, 1), collect.got.records.items.len);
         try testing.expectEqualStrings(case.diagnostic, collect.got.records.items[0].value);
     }
@@ -1942,7 +2018,7 @@ test "a waiting message becomes live without splitting its record" {
     defer a.deinit();
     const arena = a.allocator();
     var collect: Collect = .{ .arena = arena };
-    var stream: Stream = .{ .arena = arena, .sink = collect.sink() };
+    var stream: Stream = .{ .arena = arena, .sink = collect.sink(), .io = testing.io };
     const incoming = [_][]const u8{
         \\{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"m0"}}
         ,
@@ -1989,7 +2065,7 @@ test "waiting reasoning preserves completed and open summary parts" {
     ;
     var r: std.Io.Reader = .fixed(body);
     var collect: Collect = .{ .arena = arena };
-    _ = try parse(arena, &r, collect.sink());
+    _ = try parse(arena, testing.io, &r, collect.sink());
     const records = collect.got.records.items;
     try testing.expectEqual(@as(usize, 4), records.len);
     try testing.expectEqualStrings("first", records[0].content.?);
@@ -2004,7 +2080,7 @@ test "invalid Responses event JSON is an error rather than a lost fragment" {
     const arena = a.allocator();
     var r: std.Io.Reader = .fixed("data: {broken}\n\n");
     var collect: Collect = .{ .arena = arena };
-    try testing.expectError(error.InvalidResponseJson, parse(arena, &r, collect.sink()));
+    try testing.expectError(error.InvalidResponseJson, parse(arena, testing.io, &r, collect.sink()));
 }
 
 test "only closed calls from a finished Responses stream are returned" {
@@ -2040,10 +2116,10 @@ test "only closed calls from a finished Responses stream are returned" {
         var r: std.Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ head, "\n", case.ending }));
         var collect: Collect = .{ .arena = arena };
         if (case.incomplete) {
-            try testing.expectError(error.IncompleteResponse, parse(arena, &r, collect.sink()));
+            try testing.expectError(error.IncompleteResponse, parse(arena, testing.io, &r, collect.sink()));
             try testing.expectEqualStrings("(stopped at incomplete)", collect.got.records.items[0].value);
         } else {
-            const reply = try parse(arena, &r, collect.sink());
+            const reply = try parse(arena, testing.io, &r, collect.sink());
             try testing.expectEqual(case.calls, reply.calls.len);
         }
     }

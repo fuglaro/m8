@@ -336,6 +336,29 @@ parameter spelling.
   * The embedded status is honored even in a `response.completed` event.
 * If the stream ends early, received content is preserved separately per item.
 
+## OpenAI tool-call identity
+
+The Completions and Responses codecs carry batch identity inside each opaque
+ledger call ID; the framework matches calls and answers by the complete ID and
+does not interpret batches. This keeps calls from one provider response grouped
+when their tool answers are interleaved, and keeps identical provider call IDs
+from different batches distinct.
+
+For provider call IDs up to 80 characters, the codec keeps the ID as the
+call-ID portion. Longer IDs use a short local number within the batch, and the
+exact original ID is kept in a code-span aside immediately after the call:
+
+```m8
+▐ 📲:say,isuIHy18_ELu:1
+│ * text `"hi"`
+▐ 💭::call:isuIHy18_ELu:1
+│ `the-exact-original-provider-call-id`
+```
+
+When encoding again, the codec restores the original provider ID from that
+aside. This aside is distinct from provider-specific JSON call metadata, whose
+value is exactly `:call:`. See [kept-aside forms](language.md#kept-aside).
+
 ## Finding the command
 
 The first word of `cmd` is looked for in order:
