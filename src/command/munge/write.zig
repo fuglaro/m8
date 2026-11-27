@@ -55,6 +55,7 @@ const options = [_]opts.Option{
     .{ .name = "page-lines", .kind = .number },
     .{ .name = "page-bytes", .kind = .number },
     .{ .name = "diff-pad", .kind = .number },
+    .{ .name = "trim", .kind = .flag },
 };
 
 fn run(ctx: Ctx) !u8 {
@@ -66,6 +67,7 @@ fn run(ctx: Ctx) !u8 {
     const allowed = given.number("tolerance") orelse default_tolerance;
     const dry_run = given.flag("dry-run");
     const diff_pad = given.number("diff-pad") orelse 3;
+    const trim = given.flag("trim");
 
     // Pages are what this tool scopes by and answers in, so it cuts the file
     // the way the `read` that handed the model its page did.
@@ -73,10 +75,10 @@ fn run(ctx: Ctx) !u8 {
 
     const had = Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(max_file)) catch null;
 
-    if (old_string.len == 0) return append(ctx, path, had, new_string, config, dry_run, diff_pad);
+    if (old_string.len == 0) return append(ctx, path, had, new_string, config, dry_run, diff_pad, trim);
 
     const bytes = had orelse return failure(ctx, "there is no {s} to edit", .{path});
-    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), allowed, config, dry_run, diff_pad);
+    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), allowed, config, dry_run, diff_pad, trim);
 }
 
 // ------------------------------------------------------------------- adding
@@ -94,6 +96,7 @@ fn append(
     config: read.PageConfig,
     dry_run: bool,
     diff_pad: usize,
+    trim: bool,
 ) !u8 {
     var out: std.ArrayList(u8) = .empty;
     if (had) |bytes| {
@@ -127,11 +130,18 @@ fn append(
             try line.print(ctx.arena, "Appended to pages {d}-{d}", .{ first + 1, last + 1 });
     }
 
-    const old_bytes = if (had) |bytes| bytes else "";
-    const first_line = lineNumber(old_bytes, if (had == null) 0 else from);
+    const first_line = lineNumber(if (had) |bytes| bytes else "", if (had == null) 0 else from);
     const last_line = lineNumber(out.items, out.items.len -| 1);
     try line.print(ctx.arena, ", changing lines {d}-{d}", .{ first_line, last_line });
-    return finish(ctx, path, dry_run, line.items, old_bytes, out.items, diff_pad);
+
+    if (had == null) {
+        if (dry_run) try ctx.out.writeAll("Proposed changes would result in:\n");
+        try ctx.out.print("[{s}: {s}.]\n", .{ path, line.items });
+        try ctx.out.flush();
+        return 0;
+    }
+    const old_bytes = had.?;
+    return finish(ctx, path, dry_run, line.items, old_bytes, out.items, diff_pad, trim);
 }
 
 // ---------------------------------------------------------------- replacing
@@ -147,6 +157,7 @@ fn replace(
     config: read.PageConfig,
     dry_run: bool,
     diff_pad: usize,
+    trim: bool,
 ) !u8 {
     const pages = try read.paginateConfig(ctx.arena, bytes, config);
 
@@ -278,7 +289,7 @@ fn replace(
             return failure(ctx, "cannot write {s}", .{path});
     }
 
-    return receipt(ctx, path, pages, found, put.len == 0, bytes, out.items, dry_run, diff_pad);
+    return receipt(ctx, path, pages, found, put.len == 0, bytes, out.items, dry_run, diff_pad, trim);
 }
 
 /// What happened, in pages, and how honestly it matched.
@@ -292,6 +303,7 @@ fn receipt(
     new_text: []const u8,
     dry_run: bool,
     diff_pad: usize,
+    trim: bool,
 ) !u8 {
     const verb = if (removed) "Removed" else "Replaced";
     const first = read.pageOf(pages, found.at[0].at);
@@ -313,7 +325,7 @@ fn receipt(
     try line.print(ctx.arena, ", changing lines {d}-{d}", .{ changed.first, changed.last });
     if (found.how.len > 0) try line.print(ctx.arena, ". Matched {s}", .{found.how});
 
-    return finish(ctx, path, dry_run, line.items, old_text, new_text, diff_pad);
+    return finish(ctx, path, dry_run, line.items, old_text, new_text, diff_pad, trim);
 }
 
 const DiffLine = struct {
@@ -345,9 +357,13 @@ fn finish(
     old_text: []const u8,
     new_text: []const u8,
     diff_pad: usize,
+    trim: bool,
 ) !u8 {
     if (dry_run) try ctx.out.writeAll("Proposed changes would result in:\n");
-    const diff = try makeDiffWithPad(ctx.arena, old_text, new_text, diff_pad);
+    const diff = if (trim)
+        try makeDiffWithPadAndTrim(ctx.arena, old_text, new_text, diff_pad)
+    else
+        try makeDiffWithPad(ctx.arena, old_text, new_text, diff_pad);
     if (diff.len > 0) try markdown.writeFence(ctx.out, "", "diff", std.mem.trimEnd(u8, diff, "\n"));
     try ctx.out.print("[{s}: {s}.]\n", .{ path, receipt_text });
     try ctx.out.flush();
@@ -448,7 +464,54 @@ pub fn makeDiffWithPad(
     return out.toOwnedSlice(allocator);
 }
 
-/// The lines of a text, where a newline ends a line rather than starting one:
+/// In trim mode, shorten long contiguous insertions while keeping `pad` lines
+/// from each end. A zero pad selects the default trim pad rather than hiding
+/// the entire insertion.
+pub fn makeDiffWithPadAndTrim(
+    allocator: Allocator,
+    old_text: []const u8,
+    new_text: []const u8,
+    pad: usize,
+) ![]u8 {
+    const diff = try makeDiffWithPad(allocator, old_text, new_text, pad);
+    const keep = if (pad == 0) 3 else pad;
+    var diff_rows: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, std.mem.trimEnd(u8, diff, "\n"), '\n');
+    while (it.next()) |line| try diff_rows.append(allocator, line);
+
+    var out: std.ArrayList(u8) = .empty;
+    var at: usize = 0;
+    while (at < diff_rows.items.len) {
+        if (!std.mem.startsWith(u8, diff_rows.items[at], "+")) {
+            try out.appendSlice(allocator, diff_rows.items[at]);
+            try out.append(allocator, '\n');
+            at += 1;
+            continue;
+        }
+        const start = at;
+        while (at < diff_rows.items.len and std.mem.startsWith(u8, diff_rows.items[at], "+")) : (at += 1) {}
+        const count = at - start;
+        if (count <= keep * 2) {
+            for (diff_rows.items[start..at]) |line| {
+                try out.appendSlice(allocator, line);
+                try out.append(allocator, '\n');
+            }
+            continue;
+        }
+        for (diff_rows.items[start .. start + keep]) |line| {
+            try out.appendSlice(allocator, line);
+            try out.append(allocator, '\n');
+        }
+        try out.print(allocator, "+(... {d} lines omitted from diff ...)\n", .{count - keep * 2});
+        for (diff_rows.items[at - keep .. at]) |line| {
+            try out.appendSlice(allocator, line);
+            try out.append(allocator, '\n');
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+
 /// an empty text has no lines, and a final newline adds no empty one after it.
 fn splitLines(allocator: Allocator, text: []const u8) !std.ArrayList([]const u8) {
     var found: std.ArrayList([]const u8) = .empty;
@@ -1199,6 +1262,21 @@ test "diff padding controls context lines, including zero" {
         \\@@ 1 unchanged lines @@
         \\
     , try makeDiffWithPad(arena, old_text, new_text, 1));
+}
+
+test "trim collapses long clean insertions and reports the omitted count" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try testing.expectEqualStrings(
+        \\+line 1
+        \\+line 2
+        \\+(... 6 lines omitted from diff ...)
+        \\+line 9
+        \\+line 10
+        \\
+    , try makeDiffWithPadAndTrim(arena, "", try numberedLines(arena, 10, 0), 2));
 }
 
 test "a diff short enough to print whole keeps every line" {

@@ -119,10 +119,11 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\  read [--byte-cap N] PATH
         \\    --byte-cap N  Maximum answer size (default: 20000 bytes).
         \\
-        \\  write [--old TEXT] [--tolerance N] [--diff-pad N] [--dry-run] PATH [TEXT]
+        \\  write [--old TEXT] [--tolerance N] [--diff-pad N] [--trim] [--dry-run] PATH [TEXT]
         \\    --old TEXT       Replace matching text; without it, append TEXT.
         \\    --tolerance N    Allowed differing anchored lines (default: 25%).
-        \\    --diff-pad N     Diff context lines (default: 3).
+        \\    --diff-pad N     Diff context / trim padding (default: 3).
+        \\    --trim           Collapse long pure insertions; zero pad uses default.
         \\    --dry-run        Show the diff without writing changes.
         \\
         \\    Replacement matching tolerates indentation, whitespace,
