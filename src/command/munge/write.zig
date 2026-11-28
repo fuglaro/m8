@@ -50,6 +50,8 @@ const default_tolerance = 25;
 const options = [_]opts.Option{
     .{ .name = "old" },
     .{ .name = "pages" },
+    .{ .name = "offset", .kind = .number },
+    .{ .name = "limit", .kind = .number },
     .{ .name = "tolerance", .kind = .number },
     .{ .name = "dry-run", .kind = .flag },
     .{ .name = "page-lines", .kind = .number },
@@ -78,7 +80,7 @@ fn run(ctx: Ctx) !u8 {
     if (old_string.len == 0) return append(ctx, path, had, new_string, config, dry_run, diff_pad, trim);
 
     const bytes = had orelse return failure(ctx, "there is no {s} to edit", .{path});
-    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), allowed, config, dry_run, diff_pad, trim);
+    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), given.number("offset"), given.number("limit"), allowed, config, dry_run, diff_pad, trim);
 }
 
 // ------------------------------------------------------------------- adding
@@ -117,7 +119,10 @@ fn append(
     const pages = try read.paginateConfig(ctx.arena, out.items, config);
     var line: std.ArrayList(u8) = .empty;
     if (had == null) {
-        try line.print(ctx.arena, "Created a new file with {d} page{s}", .{
+        try line.print(ctx.arena, "{s} new file with {d} line{s} across {d} page{s}", .{
+            if (dry_run) "Would create" else "Created",
+            lineNumber(out.items, out.items.len -| 1),
+            if (lineNumber(out.items, out.items.len -| 1) == 1) "" else "s",
             pages.len,
             if (pages.len == 1) "" else "s",
         });
@@ -130,9 +135,11 @@ fn append(
             try line.print(ctx.arena, "Appended to pages {d}-{d}", .{ first + 1, last + 1 });
     }
 
-    const first_line = lineNumber(if (had) |bytes| bytes else "", if (had == null) 0 else from);
-    const last_line = lineNumber(out.items, out.items.len -| 1);
-    try line.print(ctx.arena, ", changing lines {d}-{d}", .{ first_line, last_line });
+    if (had != null) {
+        const first_line = lineNumber(had.?, from);
+        const last_line = lineNumber(out.items, out.items.len -| 1);
+        try line.print(ctx.arena, ", changing lines {d}-{d}", .{ first_line, last_line });
+    }
 
     if (had == null) {
         if (dry_run) try ctx.out.writeAll("Proposed changes would result in:\n");
@@ -153,6 +160,8 @@ fn replace(
     old: []const u8,
     new: []const u8,
     asked: ?[]const u8,
+    offset: ?usize,
+    limit: ?usize,
     tolerance: usize,
     config: read.PageConfig,
     dry_run: bool,
@@ -166,7 +175,7 @@ fn replace(
     // block on, rather than pasting more of the file around it.
     var scope = Range{ .at = 0, .end = bytes.len };
     var scoped: ?read.Span = null;
-    if (asked) |spec| switch (read.select(spec, pages, bytes)) {
+    if (asked != null or offset != null or limit != null) switch (read.selectCombined(asked, offset, limit, pages, bytes)) {
         .span => |s| {
             scope = .{ .at = pages[s.from].at, .end = pages[s.to].end };
             scoped = s;
@@ -510,7 +519,6 @@ pub fn makeDiffWithPadAndTrim(
     }
     return out.toOwnedSlice(allocator);
 }
-
 
 /// an empty text has no lines, and a final newline adds no empty one after it.
 fn splitLines(allocator: Allocator, text: []const u8) !std.ArrayList([]const u8) {

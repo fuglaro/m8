@@ -116,11 +116,16 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\
         \\COMMAND OPTIONS:
         \\
-        \\  read [--byte-cap N] PATH
-        \\    --byte-cap N  Maximum answer size (default: 20000 bytes).
+        \\  read [--byte-cap N] [--pages RANGE] [--offset N] [--limit N] PATH
+        \\    --byte-cap N     Maximum answer size (default: 20000 bytes).
+        \\    --offset N      Zero-based line offset; with no pages, starts there.
+        \\    --limit N       Maximum line count; rounded to whole pages.
         \\
-        \\  write [--old TEXT] [--tolerance N] [--diff-pad N] [--trim] [--dry-run] PATH [TEXT]
+        \\  write [--old TEXT] [--pages RANGE] [--offset N] [--limit N]
+        \\          [--tolerance N] [--diff-pad N] [--trim] [--dry-run] PATH [TEXT]
         \\    --old TEXT       Replace matching text; without it, append TEXT.
+        \\    --offset N      Zero-based line offset; with --pages, only moves start earlier.
+        \\    --limit N       Maximum line count; with --pages, only moves end earlier.
         \\    --tolerance N    Allowed differing anchored lines (default: 25%).
         \\    --diff-pad N     Diff context / trim padding (default: 3).
         \\    --trim           Collapse long pure insertions; zero pad uses default.

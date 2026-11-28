@@ -42,6 +42,8 @@ const default_byte_cap = 20000;
 
 const options = [_]opts.Option{
     .{ .name = "pages" },
+    .{ .name = "offset", .kind = .number },
+    .{ .name = "limit", .kind = .number },
     .{ .name = "page-lines", .kind = .number },
     .{ .name = "page-bytes", .kind = .number },
     .{ .name = "byte-cap", .kind = .number },
@@ -85,13 +87,18 @@ fn run(ctx: Ctx) !u8 {
     const cap = given.number("byte-cap") orelse default_byte_cap;
     const config = pageConfig(given);
     const asked = given.text("pages");
+    const offset = given.number("offset");
+    const limit = given.number("limit");
+    const line_limit = if (limit) |n| if (n == 0) null else n else null;
+    const selected = asked != null or offset != null or line_limit != null;
+    const line_advice = lineContinuation(asked, offset, limit);
 
     // A symlink at the path itself is followed: somebody naming it means the
     // thing it points at.
     const st = Dir.cwd().statFile(ctx.io, path, .{}) catch
         return refuse(ctx, "cannot read {s}", .{path});
 
-    if (st.kind == .directory) return list(ctx, path, cap, config, asked);
+    if (st.kind == .directory) return list(ctx, path, cap, config, asked, offset, line_limit, line_advice);
 
     const bytes = Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(max_file)) catch
         return refuse(ctx, "cannot read {s}", .{path});
@@ -99,7 +106,7 @@ fn run(ctx: Ctx) !u8 {
     const pages = try paginateConfig(ctx.arena, bytes, config);
 
     const whole = Span{ .from = 0, .to = pages.len - 1 };
-    const want = switch (if (asked) |spec| select(spec, pages, bytes) else Ask.whole) {
+    const want = switch (selectCombined(asked, offset, limit, pages, bytes)) {
         .span => |s| s,
         .whole => whole,
         // Out of scope is answered in the shape of an answer, because a model
@@ -111,7 +118,7 @@ fn run(ctx: Ctx) !u8 {
         },
     };
 
-    return write(ctx, path, bytes, pages, want, cap, asked != null);
+    return write(ctx, path, bytes, pages, want, cap, selected, line_advice, line_limit);
 }
 
 // -------------------------------------------------------------------- pages
@@ -324,10 +331,76 @@ fn clamp(s: Span, len: usize) Span {
     return .{ .from = @min(s.from, len - 1), .to = @min(s.to, len - 1) };
 }
 
-// ------------------------------------------------------------------ writing
+/// Select pages from page and line coordinates. With no page range, an offset
+/// starts at its page and continues to EOF; a limit supplies an end. With a
+/// page range, offset may move the start earlier, while limit can only move the
+/// end earlier. Every line coordinate rounds outward to whole pages.
+pub fn selectCombined(
+    page_spec: ?[]const u8,
+    offset: ?usize,
+    limit: ?usize,
+    pages: []const Page,
+    bytes: []const u8,
+) Ask {
+    const requested = if (page_spec) |spec| select(spec, pages, bytes) else null;
+    var base: ?Span = null;
+    if (requested) |selection| switch (selection) {
+        .span => |s| base = s,
+        // An unparseable pages hint is the whole file; line coordinates still
+        // get to do useful work rather than being masked by that fallback.
+        .whole, .beyond => {},
+    };
+
+    // Zero means no limit. A zero offset beside a real page range is the
+    // default line origin, not a request to pull the range back to page one.
+    const line_limit = if (limit == 0) null else limit;
+    const has_page_spec = if (page_spec) |spec| std.mem.trim(u8, spec, " \t").len > 0 else false;
+    const line_offset = if (offset == 0 and has_page_spec) null else offset;
+    const has_lines = line_offset != null or line_limit != null;
+    if (!has_lines) return requested orelse .whole;
+
+    const base_from = if (base) |s| s.from else 0;
+    const from = if (line_offset) |n| blk: {
+        const offset_page = lineSpan(n, 1, pages).from;
+        break :blk if (base) |s| @min(s.from, offset_page) else offset_page;
+    } else base_from;
+    const base_to = if (base) |s| s.to else pages.len - 1;
+    const to = if (line_limit) |n| blk: {
+        const first_line_offset = if (line_offset) |start|
+            start
+        else if (base) |s|
+            pages[s.from].first_line - 1
+        else
+            0;
+        const limited_to = lineSpan(first_line_offset, n, pages).to;
+        break :blk @max(from, @min(base_to, limited_to));
+    } else base_to;
+
+    return .{ .span = .{ .from = from, .to = to } };
+}
+
+/// Map a zero-based line offset and line count to the whole pages they touch.
+/// Out-of-range offsets land on the last page; a zero limit still identifies
+/// the offset's page, since an empty page selection is not useful here.
+fn lineSpan(offset: usize, limit: usize, pages: []const Page) Span {
+    const last_line = @max(pages[pages.len - 1].last_line, 1);
+    const first_line = @min(offset, last_line - 1) + 1;
+    const count = @max(limit, 1);
+    const end_line = @min(last_line, first_line +| (count - 1));
+    var first: ?usize = null;
+    var last: usize = 0;
+    for (pages, 0..) |page, i| {
+        if (page.last_line >= first_line and page.first_line <= end_line) {
+            if (first == null) first = i;
+            last = i;
+        }
+    }
+    const from = first orelse pages.len - 1;
+    return .{ .from = from, .to = last };
+}
 
 /// The content, and then what a model needs to ask for the next of it.
-fn write(ctx: Ctx, path: []const u8, bytes: []const u8, pages: []const Page, want: Span, cap: usize, asked: bool) !u8 {
+fn write(ctx: Ctx, path: []const u8, bytes: []const u8, pages: []const Page, want: Span, cap: usize, asked: bool, line_advice: bool, line_limit: ?usize) !u8 {
     // Whole pages go, or they do not. A page cut to fit would be a page whose
     // number no longer means what every other answer means by it.
     var to = want.from;
@@ -374,7 +447,12 @@ fn write(ctx: Ctx, path: []const u8, bytes: []const u8, pages: []const Page, wan
         if (last.ends_mid) try ctx.out.print(" Ends mid-line {d}.", .{last.last_line});
         if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
         try ctx.out.writeAll("]\n");
-        if (to + 1 < pages.len) try pageAdvice(ctx, want.from, to, pages.len);
+        if (to + 1 < pages.len) {
+            if (line_advice)
+                try lineAdvice(ctx, last.last_line, line_limit)
+            else
+                try pageAdvice(ctx, want.from, to, pages.len);
+        }
     }
 
     try ctx.out.flush();
@@ -391,10 +469,23 @@ fn endMarker(ctx: Ctx, last_page: usize, total: usize) !void {
     }
 }
 
-/// Suggest both the usual next window and wider or shifted windows. The
-/// overlapping first example is useful when the interesting construct straddles
-/// the page boundary; the others let a caller widen or refocus without having
-/// to infer the page arithmetic from the trailer.
+/// A non-empty page range speaks the page coordinate even when line selectors
+/// came with it. Otherwise continue in the line coordinate the call chose.
+fn lineContinuation(page_spec: ?[]const u8, offset: ?usize, limit: ?usize) bool {
+    if (page_spec) |spec| if (std.mem.trim(u8, spec, " \t").len > 0) return false;
+    return offset != null or limit != null;
+}
+
+/// Line-based continuation is deliberately only the next request, not a menu
+/// of alternate windows. `last_line` is one-based in the receipt and becomes
+/// the zero-based offset of the following line.
+fn lineAdvice(ctx: Ctx, last_line: usize, limit: ?usize) !void {
+    try ctx.out.print("(Use offset={d}", .{last_line});
+    if (limit) |n| try ctx.out.print(", limit={d}", .{n});
+    try ctx.out.writeAll(" to continue.)\n");
+}
+
+/// Offer alternative windows when the model is using page coordinates.
 fn pageAdvice(ctx: Ctx, from: usize, to: usize, total: usize) !void {
     const width = to - from + 1;
     const right = @min(total, to + width);
@@ -412,7 +503,7 @@ fn pageAdvice(ctx: Ctx, from: usize, to: usize, total: usize) !void {
 /// Every line is something to call `read` with, spelled the way it would have
 /// to be spelled, and a file says how many pages it holds so that a model can
 /// choose a range before it has opened anything.
-fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig, asked: ?[]const u8) !u8 {
+fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig, asked: ?[]const u8, offset: ?usize, limit: ?usize, line_advice: bool) !u8 {
     var dir = Dir.cwd().openDir(ctx.io, path, .{ .iterate = true }) catch
         return refuse(ctx, "cannot read {s}", .{path});
     defer dir.close(ctx.io);
@@ -439,9 +530,16 @@ fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig, asked: ?[]co
     }
     const count = if (rows.items.len == 0) 1 else page + 1;
     const markers = try ctx.arena.alloc(Page, count);
-    for (markers, 0..) |*marker, i| marker.* = .{ .at = i, .end = i, .first_line = i + 1, .last_line = i + 1 };
-    const selected = if (asked) |spec| select(spec, markers, "") else Ask.whole;
-    const span = switch (selected) {
+    var listing_line: usize = 1;
+    for (markers, 0..) |*marker, i| {
+        const first_line = listing_line;
+        for (rows.items) |row| if (row.page == i) {
+            listing_line += 1;
+        };
+        marker.* = .{ .at = i, .end = i, .first_line = first_line, .last_line = @max(first_line, listing_line - 1) };
+    }
+    const selection = selectCombined(asked, offset, limit, markers, "");
+    const span = switch (selection) {
         .span => |s| s,
         .whole => Span{ .from = 0, .to = count - 1 },
         .beyond => |s| {
@@ -489,7 +587,10 @@ fn list(ctx: Ctx, path: []const u8, cap: usize, config: PageConfig, asked: ?[]co
     if (capped) try ctx.out.print(" Returning fewer pages due to a {d} byte cap.", .{cap});
     try ctx.out.writeAll("]\n");
     if (last_page + 1 < count) {
-        try pageAdvice(ctx, span.from, last_page, count);
+        if (line_advice)
+            try lineAdvice(ctx, markers[last_page].last_line, limit)
+        else
+            try pageAdvice(ctx, span.from, last_page, count);
     } else if (rows.items.len == 0) {
         try ctx.out.writeAll("(Empty directory.)\n");
     }
@@ -787,4 +888,32 @@ test "an empty file is one page" {
 
     const pages = try paginate(arena, "");
     try testing.expectEqual(@as(usize, 1), pages.len);
+}
+
+test "line offsets start at their page and limits only cap the end" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const bytes = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
+    const pages = try paginateConfig(arena, bytes, .{ .lines = 3, .bytes = 100 });
+
+    try testing.expectEqual(Ask{ .span = .{ .from = 1, .to = 2 } }, selectCombined(null, 4, null, pages, bytes));
+    try testing.expectEqual(Ask{ .span = .{ .from = 1, .to = 1 } }, selectCombined(null, 4, 1, pages, bytes));
+    try testing.expectEqual(Ask{ .span = .{ .from = 0, .to = 1 } }, selectCombined(null, null, 4, pages, bytes));
+
+    try testing.expectEqual(Ask.whole, selectCombined(null, null, 0, pages, bytes));
+    try testing.expectEqual(Ask{ .span = .{ .from = 1, .to = 2 } }, selectCombined(null, 4, 0, pages, bytes));
+
+    // A non-zero offset can pull a page range earlier, but cannot extend its end.
+    try testing.expectEqual(Ask{ .span = .{ .from = 0, .to = 2 } }, selectCombined("2-3", 1, null, pages, bytes));
+    // Zero offset is the default origin when an explicit page range exists.
+    try testing.expectEqual(Ask{ .span = .{ .from = 1, .to = 2 } }, selectCombined("2-3", 0, null, pages, bytes));
+    try testing.expectEqual(Ask{ .span = .{ .from = 1, .to = 2 } }, selectCombined("2-3", 0, 0, pages, bytes));
+    // A limit counts from the selected pages' start when there is no offset.
+    try testing.expectEqual(Ask{ .span = .{ .from = 1, .to = 1 } }, selectCombined("2-3", null, 1, pages, bytes));
+    // A limit can only reduce the requested page range.
+    try testing.expectEqual(Ask{ .span = .{ .from = 0, .to = 0 } }, selectCombined("1", 6, 1, pages, bytes));
+    try testing.expect(lineContinuation(null, 10, null));
+    try testing.expect(lineContinuation("", 10, null));
+    try testing.expect(!lineContinuation("2-3", 10, 5));
 }

@@ -9,7 +9,7 @@
   >
   > :shield:workbench
   > :shield:secure contain-reads
-  > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `--trim` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
+  > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `--trim` `{{offset}}` `{{limit}}` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
   > * `path` **string**
   >   Path of the file to edit or create (relative, absolute, or ~)
   > * `new_string` **string**
@@ -20,4 +20,8 @@
   >   Page range to scope the matches during replace e.g.
   >   10-10 or 11-20 or 21-100 or 2@string_match to
   >   scope within 2 pages starting at string match
+  > * `offset?` **integer**
+  >   Alternative starting page indexed by line number.
+  > * `limit?` **integer**
+  >   Line-count-based scope limit.
 

@@ -516,14 +516,20 @@ A 🛡 expands into a command such as `m8 secure-shield`. See [Shields](shields.
 `write` and `scan`.
 
 ```bash
-m8 munge read [--pages RANGE] PATH
-m8 munge write [--old TEXT] [--new TEXT] [--pages RANGE] PATH
+m8 munge read [--pages RANGE] [--offset N] [--limit N] PATH
+m8 munge write [--old TEXT] [--new TEXT] [--pages RANGE] [--offset N] [--limit N] PATH
 m8 munge scan [--regex PATTERN] [--pages RANGE] [GLOB]
 ```
 
 It is an ordinary command line: options, a word, and `--`
 to end the options. A 🧰 reaches it through `m8 call`,
 which is what turns a call's values into those flags.
+
+For `read` and `write`, `--offset N` uses a zero-based line offset and
+`--limit N` counts lines. They select whole pages. Without `--pages`, an
+offset starts at its page and continues to EOF; a limit sets the ending page.
+With `--pages`, offset can only move the start earlier, and limit can only
+move the end earlier. Read's byte cap still bounds what is returned.
 
 A page is about 100 lines, every answer
 says which pages it gave and how to ask for the next, and
