@@ -121,11 +121,12 @@ fn help(ctx: Ctx, w: *std.Io.Writer) !void {
         \\    --offset N      Zero-based line offset; with no pages, starts there.
         \\    --limit N       Maximum line count; rounded to whole pages.
         \\
-        \\  write [--old TEXT] [--pages RANGE] [--offset N] [--limit N]
+        \\  write [--old TEXT] [--pages RANGE] [--offset N] [--limit N] [--near N]
         \\          [--tolerance N] [--diff-pad N] [--trim] [--dry-run] PATH [TEXT]
         \\    --old TEXT       Replace matching text; without it, append TEXT.
         \\    --offset N      Zero-based line offset; with --pages, only moves start earlier.
         \\    --limit N       Maximum line count; with --pages, only moves end earlier.
+        \\    --near N        Neighbor pages allowed for a scoped match (default: 0).
         \\    --tolerance N    Allowed differing anchored lines (default: 25%).
         \\    --diff-pad N     Diff context / trim padding (default: 3).
         \\    --trim           Collapse long pure insertions; zero pad uses default.

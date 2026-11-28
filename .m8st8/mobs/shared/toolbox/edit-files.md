@@ -9,7 +9,7 @@
   >
   > :shield:workbench
   > :shield:secure contain-reads
-  > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `--trim` `{{offset}}` `{{limit}}` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
+  > `m8` `call` `--md` `m8` `munge` `{{pages}}` `write` `--near` `1` `--trim` `{{offset}}` `{{limit}}` `{{old_string|--old}}` `--` `{{path|}}` `{{new_string|}}`
   > * `path` **string**
   >   Path of the file to edit or create (relative, absolute, or ~)
   > * `new_string` **string**

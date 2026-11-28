@@ -25,7 +25,7 @@
   >   Glob match for files with ** and * expansion (relative,
   >   absolute, or ~) e.g: src/**/*.js
   > * `pages?` **string**
-  >   Paginate results to browse through many matches e.g: 11-20
+  >   Paginate output to browse through many matches e.g: 11-20
 
 * :toolbox::glob
 * :toolbox::glob
@@ -34,4 +34,4 @@
   > `m8` `call` `m8` `munge` `{{pages}}` `scan` `{{pattern|--glob}}`
   > * `pattern` **string**
   > * `pages?` **string**
-  >   Paginate results to browse through many matches e.g: 11-20
+  >   Paginate output to browse through many matches e.g: 11-20

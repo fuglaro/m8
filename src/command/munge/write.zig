@@ -52,6 +52,7 @@ const options = [_]opts.Option{
     .{ .name = "pages" },
     .{ .name = "offset", .kind = .number },
     .{ .name = "limit", .kind = .number },
+    .{ .name = "near", .kind = .number },
     .{ .name = "tolerance", .kind = .number },
     .{ .name = "dry-run", .kind = .flag },
     .{ .name = "page-lines", .kind = .number },
@@ -80,7 +81,7 @@ fn run(ctx: Ctx) !u8 {
     if (old_string.len == 0) return append(ctx, path, had, new_string, config, dry_run, diff_pad, trim);
 
     const bytes = had orelse return failure(ctx, "there is no {s} to edit", .{path});
-    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), given.number("offset"), given.number("limit"), allowed, config, dry_run, diff_pad, trim);
+    return replace(ctx, path, bytes, old_string, new_string, given.text("pages"), given.number("offset"), given.number("limit"), given.number("near") orelse 0, allowed, config, dry_run, diff_pad, trim);
 }
 
 // ------------------------------------------------------------------- adding
@@ -151,7 +152,13 @@ fn append(
     return finish(ctx, path, dry_run, line.items, old_bytes, out.items, diff_pad, trim);
 }
 
-// ---------------------------------------------------------------- replacing
+/// Extend an explicit page scope by whole neighboring pages, clamped to file.
+fn widen(scope: read.Span, near: usize, page_count: usize) read.Span {
+    return .{
+        .from = scope.from -| near,
+        .to = @min(page_count - 1, scope.to +| near),
+    };
+}
 
 fn replace(
     ctx: Ctx,
@@ -162,6 +169,7 @@ fn replace(
     asked: ?[]const u8,
     offset: ?usize,
     limit: ?usize,
+    near: usize,
     tolerance: usize,
     config: read.PageConfig,
     dry_run: bool,
@@ -174,11 +182,14 @@ fn replace(
     // second occurrence cheap to rule out: a model says which page it read the
     // block on, rather than pasting more of the file around it.
     var scope = Range{ .at = 0, .end = bytes.len };
+    var requested_scope: ?read.Span = null;
     var scoped: ?read.Span = null;
     if (asked != null or offset != null or limit != null) switch (read.selectCombined(asked, offset, limit, pages, bytes)) {
         .span => |s| {
-            scope = .{ .at = pages[s.from].at, .end = pages[s.to].end };
-            scoped = s;
+            requested_scope = s;
+            const wider = widen(s, near, pages.len);
+            scoped = wider;
+            scope = .{ .at = pages[wider.from].at, .end = pages[wider.to].end };
         },
         .beyond => |s| return failure(
             ctx,
@@ -284,6 +295,7 @@ fn replace(
         .{ found.at.len, if (sought) "old_string" else "new_string" },
     );
 
+    const near_matches = if (requested_scope) |s| if (near > 0) startsOutside(pages, found, s) else 0 else 0;
     var out: std.ArrayList(u8) = .empty;
     var at: usize = 0;
     for (found.at) |m| {
@@ -298,7 +310,7 @@ fn replace(
             return failure(ctx, "cannot write {s}", .{path});
     }
 
-    return receipt(ctx, path, pages, found, put.len == 0, bytes, out.items, dry_run, diff_pad, trim);
+    return receipt(ctx, path, pages, found, put.len == 0, bytes, out.items, dry_run, diff_pad, trim, near_matches);
 }
 
 /// What happened, in pages, and how honestly it matched.
@@ -313,6 +325,7 @@ fn receipt(
     dry_run: bool,
     diff_pad: usize,
     trim: bool,
+    near_matches: usize,
 ) !u8 {
     const verb = if (removed) "Removed" else "Replaced";
     const first = read.pageOf(pages, found.at[0].at);
@@ -323,10 +336,14 @@ fn receipt(
         try line.print(ctx.arena, "{s} 1 match", .{verb})
     else
         try line.print(ctx.arena, "{s} {d} matches", .{ verb, found.at.len });
-    if (first == last)
+    if (near_matches > 0 and found.at.len == 1)
+        try line.print(ctx.arena, " on near page {d}", .{first + 1})
+    else if (first == last)
         try line.print(ctx.arena, " on page {d}", .{first + 1})
     else
         try line.print(ctx.arena, " across pages {d}-{d}", .{ first + 1, last + 1 });
+    if (near_matches > 0 and found.at.len > 1)
+        try line.print(ctx.arena, ", including {d} on a near page{s}", .{ near_matches, if (near_matches == 1) "" else "s" });
     const changed = .{
         .first = lineNumber(old_text, found.at[0].at),
         .last = lineNumber(old_text, found.at[found.at.len - 1].end -| 1),
@@ -531,6 +548,17 @@ fn splitLines(allocator: Allocator, text: []const u8) !std.ArrayList([]const u8)
 }
 
 // --------------------------------------------------------------- page markers
+
+/// Whether a successful hit needed the neighbor margin rather than the asked
+/// page scope. Test start pages: a block may naturally cross a page edge.
+fn startsOutside(pages: []const read.Page, found: Found, scope: read.Span) usize {
+    var count: usize = 0;
+    for (found.at) |hit| {
+        const page = read.pageOf(pages, hit.at);
+        if (page < scope.from or page > scope.to) count += 1;
+    }
+    return count;
+}
 
 /// The page range covered by a successful match.
 fn matchPages(pages: []const read.Page, found: Found) read.Span {
@@ -1181,6 +1209,24 @@ test "a scope keeps a match to the pages it was read on" {
     const half = try match(arena, body, "usize", .{ .at = 0, .end = 64 }, default_tolerance, read.default_page_lines);
     try testing.expect(half.at.len < all.at.len);
     try testing.expect(half.at.len > 0);
+}
+
+test "near widens an explicit page scope by neighboring pages" {
+    const scope = read.Span{ .from = 4, .to = 6 };
+    try testing.expectEqual(read.Span{ .from = 3, .to = 7 }, widen(scope, 1, 10));
+    try testing.expectEqual(read.Span{ .from = 0, .to = 7 }, widen(scope, 8, 8));
+    try testing.expectEqual(scope, widen(scope, 0, 10));
+}
+
+test "near reports a match whose start is outside the requested pages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const bytes = "a\nb\nc\nd\ne\nf\n";
+    const pages = try read.paginateConfig(arena, bytes, .{ .lines = 3, .bytes = 100 });
+    const found = Found{ .at = &.{.{ .at = 6, .end = 7 }} };
+    try testing.expectEqual(@as(usize, 1), startsOutside(pages, found, .{ .from = 0, .to = 0 }));
+    try testing.expectEqual(@as(usize, 0), startsOutside(pages, found, .{ .from = 0, .to = 1 }));
 }
 
 test "a new file's diff marks every line added, blank ones too" {
